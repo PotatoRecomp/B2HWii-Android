@@ -254,11 +254,16 @@ PPC_NATIVE_OVERRIDE_VOID(80382084, GX__SetPointSize_8016f348, (uint32_t pointSiz
 namespace {
 thread_local bool g_inGxBeginOrFifo = false;
 thread_local std::chrono::steady_clock::time_point g_nextDeferredTimingPoll{};
+thread_local uint32_t g_deferredTimingCalls = 0;
 
 void ServiceDeferredTimingDuringGxWork() {
     // Wall-clock driven, so where it lands in the guest's execution depends on host speed; the
     // deterministic mode (det_clock.h) delivers these events only at their virtual time.
     if (g_inGxBeginOrFifo || DetClock::Enabled()) {
+        return;
+    }
+    // A clock read per GXBegin adds up over thousands of draws; the 1 ms cadence below holds anyway.
+    if ((++g_deferredTimingCalls & 15u) != 0) {
         return;
     }
 
@@ -282,7 +287,7 @@ void ServiceDeferredTimingDuringGxWork() {
             // is mid-execution of a translated function, so the retrace
             // callbacks must not publish their registers into its context.
             GuestInterruptCallbackContext interrupt;
-            VI_HLE_PollRetrace(interrupt.get());
+            VI_HLE_PollRetraceBusy(interrupt.get());
         }
     } catch (...) {
         g_inGxBeginOrFifo = false;

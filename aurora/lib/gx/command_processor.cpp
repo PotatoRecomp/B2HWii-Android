@@ -519,17 +519,35 @@ static bool StatTiming() {
   return on || g_statTimingForced.load(std::memory_order_relaxed);
 #endif
 }
+// The stat clock: thousands of process() calls a frame each read it, and on a phone a steady_clock
+// read (vdso clock_gettime) cost about 1% of the game thread. The ARM generic timer is one register read.
+static inline uint64_t stat_now_ns() {
+#if defined(__aarch64__)
+  static const uint64_t freq = [] {
+    uint64_t f;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
+    return f != 0 ? f : 1;
+  }();
+  uint64_t ticks;
+  asm volatile("mrs %0, cntvct_el0" : "=r"(ticks));
+  return static_cast<uint64_t>(static_cast<unsigned __int128>(ticks) * 1000000000u / freq);
+#else
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+#endif
+}
+
 struct ProcessTimer {
-  std::chrono::steady_clock::time_point start{};
+  uint64_t start = 0;
   ProcessTimer() {
     if (StatTiming() && t_statDepth++ == 0) {
-      start = std::chrono::steady_clock::now();
+      start = stat_now_ns();
     }
   }
   ~ProcessTimer() {
     if (StatTiming() && --t_statDepth == 0) {
-      const auto elapsed =
-          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+      const uint64_t elapsed = stat_now_ns() - start;
       g_statProcessTotalNanos.fetch_add(elapsed, std::memory_order_relaxed);
       g_statProcessNanos.fetch_add(elapsed,
                                    std::memory_order_relaxed);
@@ -560,12 +578,10 @@ uint32_t process(const u8* data, u32 size, bool bigEndian) {
   ZoneScoped;
   ProcessTimer timer;
   // Everything decoded here mutates renderer state (GX state, the recorded command lists and the mapped staging buffers), so take the renderer GPU mutex once for the whole drain rather than once per draw command.
-  const auto lockStart = StatTiming() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+  const uint64_t lockStart = StatTiming() ? stat_now_ns() : 0;
   std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
   if (StatTiming()) {
-    g_statLockNanos.fetch_add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - lockStart).count(),
-        std::memory_order_relaxed);
+    g_statLockNanos.fetch_add(stat_now_ns() - lockStart, std::memory_order_relaxed);
   }
   u32 pos = 0;
 

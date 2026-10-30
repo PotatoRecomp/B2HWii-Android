@@ -320,6 +320,13 @@ endfunction()
 
 if(MKW_PLATFORM_ANDROID)
     add_library(WiiCompiled SHARED "${MKW_BASE_PRODUCT_SOURCE}" ${MKW_BASE_REGISTRATION_SOURCES})
+    # The launcher's disc import: loaded in the launcher's process, without the game.
+    add_library(basara_disc SHARED
+        "${MKW_RUNTIME_SOURCE_DIR}/disc/disc_extract.cpp"
+        "${MKW_RUNTIME_SOURCE_DIR}/disc/disc_import_jni.cpp")
+    target_compile_options(basara_disc PRIVATE -fexceptions)
+    target_link_libraries(basara_disc PRIVATE libzstd_static)
+    add_dependencies(WiiCompiled basara_disc)
 else()
     add_executable(WiiCompiled "${MKW_BASE_PRODUCT_SOURCE}" ${MKW_BASE_REGISTRATION_SOURCES})
 endif()

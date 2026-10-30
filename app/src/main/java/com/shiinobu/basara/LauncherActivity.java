@@ -3,78 +3,70 @@ package com.shiinobu.basara;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
-import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.GradientDrawable;
-import android.content.res.ColorStateList;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.DocumentsContract;
-import android.provider.OpenableColumns;
+import android.os.ParcelFileDescriptor;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.io.BufferedInputStream;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.FilterInputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Start screen: play, or import the player's own game the way Dolphin extracts it (the folder, or
- * a zip of it). Until a game is imported the Dolphin steps are shown here; Help repeats them.
+ * Start screen, one landscape page: the game and Play on the left, everything else as tiles beside
+ * them. The game comes from the player's own ISO or RVZ, which is unpacked once when chosen.
  */
 public final class LauncherActivity extends Activity {
-    private static final int REQUEST_IMPORT = 1;
-    private static final int REQUEST_ZIP = 2;
+    private static final int REQUEST_DISC = 1;
     /** Set by GameActivity.restartForSession: open the game again once its old process is gone. */
     static final String EXTRA_RESTART_GAME = "restartGame";
     /** Set by the game's "Start Menu": show this screen even with Skip Start Menu on. */
     static final String EXTRA_SHOW_START_MENU = "showStartMenu";
 
-    private static final String DOLPHIN_STEPS =
-            "Use your own Sengoku Basara 2 Heroes (Japan, RBSJ08). Easiest: in Dolphin on a "
-            + "computer, right-click the game, choose Properties, Filesystem, then right-click the disc and "
-            + "choose Extract Entire Disc. Copy that folder (or a zip of it) to this phone and tap Import.";
-
     static final String PROJECT_URL = "https://github.com/shiinobu/basara2heroes-android";
 
     private AppSettings settings;
-    /** The On/Off pills of the Skip Start Menu and Auto Update rows. */
-    private TextView skip;
-    private Button updateCheck;
-    private TextView autoUpdate;
+    private Tile skip;
+    private Tile updateCheck;
+    private Tile autoUpdate;
+    private Tile gameFile;
     /** Skip Start Menu with Auto Update on: open the game once the update check finds nothing. */
     private boolean skipAfterCheck;
     private boolean updating;
     /** An update waiting for the player to allow installs from this app. */
     private Updater.Release waitingUpdate;
+    private static final String STATE_WAITING_UPDATE = "waiting_update";
+    private static final String STATE_SKIP_AFTER_CHECK = "skip_after_check";
+    /** Gone to allow "All files access" for the file browser: open it on the way back. */
+    private boolean waitingFileAccess;
+    private static final String STATE_WAITING_FILE_ACCESS = "waiting_file_access";
 
     private TextView status;
     private Button play;
-    private View steps;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     @Override
@@ -87,155 +79,125 @@ public final class LauncherActivity extends Activity {
         final boolean asked = launch != null && (launch.getBooleanExtra(EXTRA_SHOW_START_MENU, false)
                 || launch.getBooleanExtra(EXTRA_RESTART_GAME, false));
         final boolean opened = savedInstanceState == null && !asked;
-        if (opened && settings.skipStartMenu() && AppFiles.gameReady(this)) {
-            if (!settings.autoUpdate()) {
+        if (opened && settings.skipStartMenu() && AppFiles.gameReady(this) && settings.betaEnded() == null) {
+            if (!settings.autoUpdate() && !BuildConfig.BETA) {
                 startActivity(new Intent(this, GameActivity.class));
                 overridePendingTransition(0, 0);
                 finish();
                 return;
             }
-            skipAfterCheck = true;  // Auto Update first; the game opens once there's nothing to install
+            // Auto Update (or the Beta's check) first; the game opens once there's nothing to install.
+            skipAfterCheck = true;
         }
-        final int pad = dp(20);
-        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        // Landscape (or a tablet): title, status and Play on the left, the rest beside them.
-        final boolean twoPanes = screenWidth >= dp(720);
 
-        final LinearLayout intro = new LinearLayout(this);
-        intro.setOrientation(LinearLayout.VERTICAL);
+        gameFile = tile("Game File", "", v -> pickDisc());
+        final Tile settingsTile = tile("Settings", "Display and controls", v -> SettingsMenu.show(this));
+        final Tile devices = tile("Tailscale & LAN Devices", "Find other players", v -> DevicesDialog.show(this));
+        autoUpdate = tile("Auto Update", "Update on launch", v -> {
+            settings.setAutoUpdate(!settings.autoUpdate());
+            updateAutoUpdateButton();
+        });
+        updateAutoUpdateButton();
+        skip = tile("Skip Start Menu", "Go straight to the game", v -> {
+            settings.setSkipStartMenu(!settings.skipStartMenu());
+            updateSkipButton();
+        });
+        updateSkipButton();
+        updateCheck = tile("Check for Updates", "Installed: " + Updater.installedVersion(this),
+                v -> checkForUpdates(false));
+        final Tile help = tile("Help", "Getting started", v -> showHelp());
+
+        final LinearLayout tiles = new LinearLayout(this);
+        tiles.setOrientation(LinearLayout.VERTICAL);
+        tiles.addView(tileRow(gameFile), tileRowParams(0));
+        tiles.addView(tileRow(settingsTile, devices), tileRowParams(GAP));
+        tiles.addView(tileRow(autoUpdate, skip), tileRowParams(GAP));
+        tiles.addView(tileRow(updateCheck, help), tileRowParams(GAP));
+        // Fills the height where there's room, and scrolls on a short screen or with a large font.
+        final ScrollView tilesScroll = new ScrollView(this);
+        tilesScroll.setFillViewport(true);
+        tilesScroll.setVerticalScrollBarEnabled(false);
+        tilesScroll.addView(tiles);
+
+        final LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.HORIZONTAL);
+        page.setPadding(dp(GAP), dp(GAP), dp(GAP), dp(GAP));
+        page.addView(hero(), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.42f));
+        final LinearLayout.LayoutParams tilesParams =
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.58f);
+        tilesParams.leftMargin = dp(GAP);
+        page.addView(tilesScroll, tilesParams);
+        setContentView(page);
+        hideSystemBars();
+
+        restartGameIfAsked(getIntent());
+        if (savedInstanceState != null) {
+            // Android 11 ends this process when "Allow from this source" changes.
+            waitingUpdate = Updater.Release.from(savedInstanceState.getBundle(STATE_WAITING_UPDATE));
+            skipAfterCheck = savedInstanceState.getBoolean(STATE_SKIP_AFTER_CHECK, false);
+            waitingFileAccess = savedInstanceState.getBoolean(STATE_WAITING_FILE_ACCESS, false);
+        }
+        if (opened && (settings.autoUpdate() || BuildConfig.BETA)) {
+            checkForUpdates(true);
+        }
+    }
+
+    /** The left side: which game this is, whether it's ready, and the one big button. */
+    private View hero() {
+        final LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setPadding(dp(20), dp(20), dp(20), dp(16));
+        final GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[] {HERO_GLOW, SURFACE});
+        background.setCornerRadius(dp(24));
+        hero.setBackground(background);
+
         final LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView title = text("Basara 2 Heroes", 34);
+        final ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        header.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        final LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        final TextView title = text("Basara 2 Heroes", 24);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.START);
-        header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        final TextView help = text("Help", 15);
-        help.setTypeface(MEDIUM);
-        help.setPadding(dp(18), dp(8), dp(18), dp(8));
-        help.setBackground(rounded(Color.TRANSPARENT, Color.TRANSPARENT, dp(18), STROKE));
-        help.setOnClickListener(v -> showHelp());
-        header.addView(help);
-        intro.addView(header, matchWidth(0));
-        final TextView subtitle = text("Basara 2 Heroes Wii, recompiled to run natively", 15);
+        names.addView(title);
+        final TextView subtitle = text("Wii, recompiled to run natively", 13);
         subtitle.setGravity(Gravity.START);
         subtitle.setTextColor(MUTED);
-        intro.addView(subtitle, matchWidth(dp(2)));
+        names.addView(subtitle);
+        final LinearLayout.LayoutParams namesParams =
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        namesParams.leftMargin = dp(12);
+        header.addView(names, namesParams);
+        hero.addView(header, matchWidth(0));
 
-        status = text("", 15);
+        final View space = new View(this);
+        hero.addView(space, new LinearLayout.LayoutParams(0, 0, 1f));
+
+        status = text("", 14);
         status.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         status.setCompoundDrawablePadding(dp(10));
-        status.setPadding(dp(16), dp(12), dp(16), dp(12));
-        status.setBackground(rounded(SURFACE, SURFACE, dp(16), 0));
-        intro.addView(status, matchWidth(dp(20)));
+        hero.addView(status, matchWidth(0));
 
-        play = button("Play", true);
-        play.setOnClickListener(v -> startActivity(new Intent(this, GameActivity.class)));
-        intro.addView(play, matchWidth(dp(14)));
+        play = button("Play");
+        play.setOnClickListener(v -> {
+            if (settings.betaEnded() != null) {
+                showBetaEnded();
+            } else if (AppFiles.gameReady(this)) {
+                startActivity(new Intent(this, GameActivity.class));
+            } else {
+                pickDisc();
+            }
+        });
+        hero.addView(play, matchWidth(dp(12)));
 
-        final LinearLayout updates = card("Updates");
-        updateCheck = button("Check for Updates", false);
-        updateCheck.setOnClickListener(v -> checkForUpdates(false));
-        updates.addView(updateCheck, matchWidth(dp(10)));
-        autoUpdate = toggle(updates, "Auto Update", "On: opening the app installs the latest release from "
-                + "GitHub when there is one. Your saves, settings and game files are kept.", v -> {
-                    settings.setAutoUpdate(!settings.autoUpdate());
-                    updateAutoUpdateButton();
-                });
-        updateAutoUpdateButton();
-
-        final LinearLayout options = card("Options");
-        final Button settingsButton = button("Settings", false);
-        settingsButton.setOnClickListener(v -> SettingsMenu.show(this));
-        options.addView(settingsButton, matchWidth(dp(10)));
-        final Button devices = button("Tailscale & LAN Devices", false);
-        devices.setOnClickListener(v -> DevicesDialog.show(this));
-        options.addView(devices, matchWidth(dp(10)));
-        skip = toggle(options, "Skip Start Menu", "On: opening the app goes straight into the game. "
-                + "In the game, the phone's Back gesture and Start Menu bring you back here.", v -> {
-                    settings.setSkipStartMenu(!settings.skipStartMenu());
-                    updateSkipButton();
-                });
-        updateSkipButton();
-
-        final LinearLayout gameData = card("Game Data");
-        // How to get the game files, the same steps KartPad gives, until a game is imported.
-        final LinearLayout stepsBox = new LinearLayout(this);
-        stepsBox.setOrientation(LinearLayout.VERTICAL);
-        final TextView stepsTitle = text("Get the game files (once)", 18);
-        stepsTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        stepsTitle.setGravity(Gravity.START);
-        stepsBox.addView(stepsTitle);
-        final TextView stepsText = text(
-                "1. In Dolphin on a computer, right-click Sengoku Basara 2 Heroes and choose Properties.\n"
-                + "2. Open Filesystem, right-click the disc at the top and choose Extract Entire Disc.\n"
-                + "3. Copy that folder (or a zip of it) to this phone.\n"
-                + "4. Tap Import from Extracted Game Data Folder\u2026 or Import Game Data Zip\u2026 below and choose it.\n\n"
-                + "Use the Japanese disc (RBSJ08).", 15);
-        stepsText.setGravity(Gravity.START);
-        stepsText.setPadding(0, dp(6), 0, dp(14));
-        stepsText.setLineSpacing(dp(3), 1f);
-        stepsBox.addView(stepsText);
-        steps = stepsBox;
-        gameData.addView(stepsBox, matchWidth(dp(10)));
-        final TextView importHelp = text("Import your own Sengoku Basara 2 Heroes (Japan, RBSJ08) once. "
-                + "Easiest: the folder Dolphin's Extract Entire Disc makes (DATA, or the folder that holds it), "
-                + "or a zip of that folder. Your saves are kept.", 13);
-        importHelp.setGravity(Gravity.START);
-        importHelp.setTextColor(MUTED);
-        gameData.addView(importHelp, matchWidth(dp(8)));
-        final Button importFolder = button("Import from Extracted Game Data Folder\u2026", false);
-        importFolder.setOnClickListener(v -> startActivityForResult(
-                new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_IMPORT));
-        gameData.addView(importFolder, matchWidth(dp(12)));
-        final Button importZip = button("Import Game Data Zip\u2026", false);
-        importZip.setOnClickListener(v -> pickZip());
-        gameData.addView(importZip, matchWidth(dp(10)));
-
-        final TextView version = text("Basara " + versionText(), 13);
+        final TextView version = text("Basara " + versionText(), 12);
         version.setTextColor(FAINT);
-
-        final LinearLayout page = new LinearLayout(this);
-        page.setPadding(pad, dp(16), pad, pad);
-        if (twoPanes) {
-            page.setOrientation(LinearLayout.HORIZONTAL);
-            page.setGravity(Gravity.CENTER_HORIZONTAL);
-            final int left = dp(340);
-            final int right = Math.min(dp(500), screenWidth - 2 * pad - left - dp(24));
-            version.setGravity(Gravity.START);
-            intro.addView(version, matchWidth(dp(16)));
-            page.addView(intro, new LinearLayout.LayoutParams(left, LinearLayout.LayoutParams.WRAP_CONTENT));
-            final LinearLayout cards = new LinearLayout(this);
-            cards.setOrientation(LinearLayout.VERTICAL);
-            cards.addView(updates, matchWidth(0));
-            cards.addView(options, matchWidth(dp(14)));
-            cards.addView(gameData, matchWidth(dp(14)));
-            final LinearLayout.LayoutParams cardsParams =
-                    new LinearLayout.LayoutParams(right, LinearLayout.LayoutParams.WRAP_CONTENT);
-            cardsParams.leftMargin = dp(24);
-            page.addView(cards, cardsParams);
-        } else {
-            page.setOrientation(LinearLayout.VERTICAL);
-            page.setGravity(Gravity.CENTER_HORIZONTAL);
-            final int width = Math.min(dp(520), screenWidth - 2 * pad);
-            final LinearLayout column = new LinearLayout(this);
-            column.setOrientation(LinearLayout.VERTICAL);
-            column.addView(intro, matchWidth(0));
-            column.addView(updates, matchWidth(dp(20)));
-            column.addView(options, matchWidth(dp(14)));
-            column.addView(gameData, matchWidth(dp(14)));
-            column.addView(version, matchWidth(dp(18)));
-            page.addView(column, new LinearLayout.LayoutParams(width, LinearLayout.LayoutParams.WRAP_CONTENT));
-        }
-
-        final ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.addView(page);
-        setContentView(scroll);
-        restartGameIfAsked(getIntent());
-        if (opened && settings.autoUpdate()) {
-            checkForUpdates(true);
-        }
+        hero.addView(version, matchWidth(dp(10)));
+        return hero;
     }
 
     @Override
@@ -255,31 +217,70 @@ public final class LauncherActivity extends Activity {
     }
 
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (waitingUpdate != null) {
+            outState.putBundle(STATE_WAITING_UPDATE, waitingUpdate.toBundle());
+            outState.putBoolean(STATE_SKIP_AFTER_CHECK, skipAfterCheck);
+        }
+        outState.putBoolean(STATE_WAITING_FILE_ACCESS, waitingFileAccess);
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         refresh();
+        showBetaEnded();
         // Back from "Allow from this source": carry on with the update that was waiting for it.
         if (waitingUpdate != null && Updater.canInstall(this)) {
             final Updater.Release release = waitingUpdate;
             waitingUpdate = null;
             startUpdate(release);
         }
+        // Back from "All files access".
+        if (waitingFileAccess) {
+            waitingFileAccess = false;
+            if (Environment.isExternalStorageManager()) {
+                browseDisc();
+            }
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            hideSystemBars();
+        }
+    }
+
+    private void hideSystemBars() {
+        getWindow().setDecorFitsSystemWindows(false);
+        final WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller != null) {
+            controller.hide(WindowInsets.Type.systemBars());
+            controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        }
     }
 
     // --- updates -------------------------------------------------------------------------------
 
     private void updateAutoUpdateButton() {
-        showToggle(autoUpdate, settings.autoUpdate());
+        showToggle(autoUpdate.pill, settings.autoUpdate());
     }
 
     /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
     private void checkForUpdates(boolean automatic) {
+        if (BuildConfig.BETA) {
+            checkBeta(automatic);  // the Beta isn't updated: it ends, and testers move to the release
+            return;
+        }
         if (updating) {
             return;
         }
         updating = true;
-        updateCheck.setEnabled(false);
-        updateCheck.setText("Checking for updates\u2026");
+        updateCheck.view.setEnabled(false);
+        updateCheck.name.setText("Checking…");
         new Thread(() -> {
             Updater.Release found = null;
             String failure = null;
@@ -292,14 +293,14 @@ public final class LauncherActivity extends Activity {
             final String error = failure;
             main.post(() -> {
                 updating = false;
-                updateCheck.setEnabled(true);
-                updateCheck.setText("Check for Updates");
+                updateCheck.view.setEnabled(true);
+                updateCheck.name.setText("Check for Updates");
                 final String installed = Updater.installedVersion(this);
-                if (release != null && Updater.isNewer(release.version, installed)) {
+                if (release != null && release.apkUrl != null && Updater.isNewer(release.version, installed)) {
                     startUpdate(release);
                 } else if (!automatic) {
                     final String message = error != null ? "Couldn't check for updates: " + error
-                            : release == null ? "The latest release has no Android download."
+                            : release == null || release.apkUrl == null ? "The latest release has no Android download."
                             : "You have the latest version (" + installed + ").";
                     new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
                 } else if (skipAfterCheck) {
@@ -329,7 +330,7 @@ public final class LauncherActivity extends Activity {
             return;
         }
         final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        final TextView label = text("Downloading\u2026", 14);
+        final TextView label = text("Downloading…", 14);
         final LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(24), dp(16), dp(24), dp(8));
@@ -345,7 +346,7 @@ public final class LauncherActivity extends Activity {
                     if (total > 0) {
                         bar.setMax(1000);
                         bar.setProgress((int) (done * 1000 / total));
-                        label.setText(String.format(Locale.US, "Downloading\u2026 %d of %d MB",
+                        label.setText(String.format(Locale.US, "Downloading… %d of %d MB",
                                 done >> 20, total >> 20));
                     }
                 }));
@@ -363,10 +364,70 @@ public final class LauncherActivity extends Activity {
                                 }
                             }).show();
                 } else {
-                    status.setText("Installing Basara " + release.version + "\u2026");
+                    status.setText("Installing Basara " + release.version + "…");
                 }
             });
         }, "update-download").start();
+    }
+
+    // --- Beta ----------------------------------------------------------------------------------
+
+    /** Beta: may it still run (BetaGate)? `automatic`: at app start, quiet unless it has ended. */
+    private void checkBeta(boolean automatic) {
+        if (updating) {
+            return;
+        }
+        updating = true;
+        updateCheck.view.setEnabled(false);
+        updateCheck.name.setText("Checking…");
+        new Thread(() -> {
+            String ended = null;
+            String failure = null;
+            try {
+                ended = BetaGate.check();
+            } catch (Exception e) {
+                failure = e.getMessage();
+            }
+            final String reason = ended;
+            final String error = failure;
+            main.post(() -> {
+                updating = false;
+                updateCheck.view.setEnabled(true);
+                updateCheck.name.setText("Check for Updates");
+                if (reason != null) {
+                    skipAfterCheck = false;
+                    settings.setBetaEnded(reason);
+                    showBetaEnded();
+                } else if (!automatic) {
+                    final String message = error != null ? "Couldn't check for updates: " + error
+                            : "This Beta is still open. Thanks for testing!";
+                    new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
+                } else if (skipAfterCheck) {
+                    openGame();
+                }
+            });
+        }, "beta-check").start();
+    }
+
+    private AlertDialog betaEndedDialog;
+
+    /** Beta, once it has ended: the only way on is the release. Shown again each time the app returns. */
+    private void showBetaEnded() {
+        final String reason = settings.betaEnded();
+        if (reason == null || (betaEndedDialog != null && betaEndedDialog.isShowing())) {
+            return;
+        }
+        betaEndedDialog = new AlertDialog.Builder(this)
+                .setTitle("The Beta has ended")
+                .setMessage(reason + "\n\nThanks for testing! Download Basara " + BetaGate.RELEASE_VERSION
+                        + " or later from the project's Releases page. It installs as its own app: load your "
+                        + "disc there again, then uninstall this Beta.")
+                .setCancelable(false)
+                .setPositiveButton("Download", (d, w) -> openWeb(PROJECT_URL + "/releases/latest"))
+                .setNegativeButton("Uninstall Beta", (d, w) -> startActivity(new Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))))
+                .setNeutralButton("Close", (d, w) -> finish())
+                .show();
     }
 
     private void openGame() {
@@ -380,34 +441,39 @@ public final class LauncherActivity extends Activity {
     }
 
     private void updateSkipButton() {
-        showToggle(skip, settings.skipStartMenu());
+        showToggle(skip.pill, settings.skipStartMenu());
     }
 
     private void refresh() {
         final boolean present = AppFiles.hasGameData(this);
         final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
+        final boolean ready = present && problem == null;
         if (!present) {
-            showStatus("No game data yet. Import the folder Dolphin made, or a zip of it.", AMBER);
+            showStatus("No game loaded yet", AMBER);
         } else if (problem != null) {
-            showStatus("The imported game can't be played. " + problem, ACCENT);
+            showStatus("The game can't be played. " + problem, ACCENT);
         } else {
-            showStatus("Game data is installed and checked.", GREEN);
+            showStatus("Ready to play", GREEN);
         }
-        play.setEnabled(present && problem == null);
-        steps.setVisibility(present && problem == null ? View.GONE : View.VISIBLE);
+        play.setText(ready ? "Play" : "Choose Game File");
+        gameFile.about.setText(ready ? "Loaded (RBSJ08)"
+                : "Your ISO or RVZ (RBSJ08)");
+        showAction(gameFile.pill, ready ? "Change" : "Choose");
     }
 
-    /** Getting Started, laid out like KartPad's. */
+    /** Getting Started. */
     private void showHelp() {
         final LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
         column.setPadding(dp(24), dp(16), dp(24), dp(16));
-        section(column, "1. Import Sengoku Basara 2 Heroes", DOLPHIN_STEPS);
+        section(column, "1. Choose your game file", "Copy an ISO or RVZ of your own Sengoku Basara 2 Heroes "
+                + "(Japan, RBSJ08) to this phone, then choose it here. It is unpacked once, which needs about "
+                + "4 GB free. After that you can delete the ISO or RVZ.");
         section(column, "2. Play", "Tap Play.");
         column.addView(link("Project page on GitHub", v -> openWeb(PROJECT_URL)));
         final TextView version = text("Basara " + versionText(), 13);
         version.setGravity(Gravity.START);
-        version.setTextColor(Color.rgb(170, 178, 186));
+        version.setTextColor(MUTED);
         version.setPadding(0, dp(16), 0, 0);
         column.addView(version);
         final ScrollView scroll = new ScrollView(this);
@@ -445,280 +511,142 @@ public final class LauncherActivity extends Activity {
         }
     }
 
-    private void pickZip() {
+    // --- the game file -------------------------------------------------------------------------
+
+    /**
+     * The app's own file browser (FileBrowser), opening on Download. It needs "All files access";
+     * without it the player can allow it, or use the system's picker instead.
+     */
+    private void pickDisc() {
+        if (Environment.isExternalStorageManager()) {
+            browseDisc();
+            return;
+        }
+        new AlertDialog.Builder(this).setTitle("Allow file access")
+                .setMessage("To list the folders on this phone and find your ISO or RVZ, turn on "
+                        + "\"Allow access to manage all files\" for this app, then come back.")
+                .setPositiveButton("Open Settings", (d, w) -> {
+                    waitingFileAccess = true;
+                    try {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (ActivityNotFoundException e) {
+                        waitingFileAccess = false;
+                        pickWithSystem();
+                    }
+                })
+                .setNeutralButton("Use System Picker", (d, w) -> pickWithSystem())
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    private void browseDisc() {
+        FileBrowser.show(this, FileBrowser.downloads(), file -> loadGame(Uri.fromFile(file)));
+    }
+
+    /**
+     * Any file: the system has no type for .rvz, so the file itself is what gets checked. Opens on
+     * the phone's Download folder rather than the picker's Recent view, where dumps usually are.
+     */
+    private void pickWithSystem() {
         final Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                new String[] {"application/zip", "application/x-zip-compressed", "application/x-zip"});
-        startActivityForResult(intent, REQUEST_ZIP);
+        intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, android.provider.DocumentsContract
+                .buildDocumentUri("com.android.externalstorage.documents", "primary:Download"));
+        intent.putExtra("android.content.extra.SHOW_ADVANCED", true);  // list the phone's own storage
+        startActivityForResult(intent, REQUEST_DISC);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
-            return;
-        }
-        final Uri uri = data.getData();
-        if (requestCode == REQUEST_IMPORT) {
-            runImport(progress -> copyGame(uri, progress));
-        } else if (requestCode == REQUEST_ZIP) {
-            runImport(progress -> copyZip(uri, progress));
+        if (requestCode == REQUEST_DISC && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            loadGame(data.getData());
         }
     }
 
-    // --- import --------------------------------------------------------------------------------
-
-    private interface Progress { void update(int done, int total, String text); }
-
-    private interface ImportJob { String run(Progress progress) throws IOException; }
-
-    private static final class Entry {
-        final String id, name;
-        final boolean directory;
-        Entry(String id, String name, boolean directory) { this.id = id; this.name = name; this.directory = directory; }
-    }
-
-    private void runImport(ImportJob job) {
+    private void loadGame(Uri disc) {
         final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        final TextView label = text("Looking at the game files…", 14);
+        bar.setIndeterminate(true);
+        final TextView label = text("Looking at the game file…", 14);
         final LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(24), dp(16), dp(24), dp(8));
         box.addView(bar);
         box.addView(label);
         final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Importing game data").setView(box).setCancelable(false).show();
+                .setTitle("Loading your game").setView(box).setCancelable(false)
+                .setNegativeButton("Cancel", null).show();
+        final AtomicBoolean cancel = new AtomicBoolean();
+        // Set here rather than in the builder, or the button would close the dialog while the work goes on.
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+            cancel.set(true);
+            v.setEnabled(false);
+            label.setText("Stopping…");
+        });
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         new Thread(() -> {
             String result;
             try {
-                result = job.run((done, total, text) -> main.post(() -> {
-                    bar.setIndeterminate(total <= 0);
-                    if (total > 0) {
-                        bar.setMax(total);
-                        bar.setProgress(done);
-                    }
-                    label.setText(text);
-                }));
+                result = unpack(disc, (done, total) -> {
+                    main.post(() -> {
+                        if (cancel.get()) {
+                            return;
+                        }
+                        bar.setIndeterminate(false);
+                        bar.setMax(1000);
+                        bar.setProgress((int) (done * 1000 / Math.max(total, 1)));
+                        label.setText(String.format(Locale.ROOT, "%.1f of %.1f GB",
+                                done / (double) (1 << 30), total / (double) (1 << 30)));
+                    });
+                    return !cancel.get();
+                });
             } catch (Exception e) {
                 AppFiles.deleteRecursively(stagingDir());
-                result = "Import failed: " + e.getMessage() + "\n\nNothing was changed.";
+                result = e.getMessage();
             }
-            final String message = result;
+            final String failure = result;
             main.post(() -> {
                 dialog.dismiss();
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 refresh();
-                new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
+                if (failure != null && !failure.equals(DiscImport.CANCELLED)) {
+                    new AlertDialog.Builder(this).setTitle("Couldn't load the game")
+                            .setMessage(failure + "\n\nNothing was changed.")
+                            .setPositiveButton("OK", null).show();
+                }
             });
         }, "game-import").start();
     }
 
     private File stagingDir() { return new File(AppFiles.dataDir(this), "game.importing"); }
 
-    /** The checked game at `root` (inside the staging folder) becomes the game; saves stay. */
-    private String install(File root, int fileCount) throws IOException {
-        final File staging = stagingDir();
-        final String problem = AppFiles.gameProblem(root);
-        if (problem != null) {
+    /** Into the staging folder, checked, then swapped in; saves stay. Null, or what went wrong. */
+    private String unpack(Uri disc, DiscImport.Listener listener) throws IOException {
+        try (ParcelFileDescriptor file = getContentResolver().openFileDescriptor(disc, "r")) {
+            if (file == null) throw new IOException("Couldn't open that file.");
+            final String problem = AppFiles.headerProblem(DiscImport.readHeader(file.getFd()));
+            if (problem != null) return problem;
+            final File staging = stagingDir();
             AppFiles.deleteRecursively(staging);
-            return problem + "\n\nNothing was changed.";
+            if (!staging.mkdirs()) throw new IOException("Couldn't create " + staging);
+            final String failure = DiscImport.extract(file.getFd(), staging.getPath(),
+                    AppFiles.dataDir(this).getUsableSpace(), listener);
+            final String result = failure != null ? failure : install(staging);
+            AppFiles.deleteRecursively(staging);
+            return result;
         }
+    }
+
+    /** The checked game at `root` becomes the game. Null, or why it can't. */
+    private String install(File root) throws IOException {
+        final String problem = AppFiles.gameProblem(root);
+        if (problem != null) return problem;
         final File game = AppFiles.gameDir(this);
         AppFiles.deleteRecursively(game);
-        if (!root.renameTo(game)) throw new IOException("cannot move the imported data into place");
-        AppFiles.deleteRecursively(staging);
-        return "Imported " + fileCount + " files. Tap Play to start.";
-    }
-
-    /** A folder from the document picker: copied into the staging folder, checked, then swapped in. */
-    private String copyGame(Uri tree, Progress progress) throws IOException {
-        final ContentResolver resolver = getContentResolver();
-        String rootId = DocumentsContract.getTreeDocumentId(tree);
-        if (!looksLikeGame(resolver, tree, rootId)) {
-            String nested = null;
-            for (Entry e : list(resolver, tree, rootId)) {
-                if (e.directory && e.name.equalsIgnoreCase("DATA") && looksLikeGame(resolver, tree, e.id)) nested = e.id;
-            }
-            if (nested == null) {
-                return "That folder is not an extracted game: it needs files/ and sys/ (or a DATA folder holding "
-                        + "them), as Dolphin's Extract Entire Disc makes.";
-            }
-            rootId = nested;
-        }
-        // Which game and revision, before copying anything.
-        final String problem = treeProblem(resolver, tree, rootId);
-        if (problem != null) {
-            return problem + "\n\nNothing was changed.";
-        }
-        final List<String[]> files = new ArrayList<>();  // {documentId, relative path}
-        collect(resolver, tree, rootId, "", files);
-
-        final File staging = stagingDir();
-        AppFiles.deleteRecursively(staging);
-        for (int i = 0; i < files.size(); ++i) {
-            final File target = new File(staging, files.get(i)[1]);
-            final File parent = target.getParentFile();
-            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) throw new IOException("cannot create " + parent);
-            final Uri document = DocumentsContract.buildDocumentUriUsingTree(tree, files.get(i)[0]);
-            try (InputStream in = resolver.openInputStream(document); OutputStream out = new FileOutputStream(target)) {
-                if (in == null) throw new IOException("cannot read " + files.get(i)[1]);
-                AppFiles.copy(in, out);
-            }
-            progress.update(i + 1, files.size(), (i + 1) + " of " + files.size() + " files");
-        }
-        return install(staging, files.size());
-    }
-
-    /** sys/boot.bin of the picked folder names the game and its revision. */
-    private String treeProblem(ContentResolver resolver, Uri tree, String rootId) throws IOException {
-        String sysId = null;
-        for (Entry e : list(resolver, tree, rootId)) {
-            if (e.directory && e.name.equals("sys")) sysId = e.id;
-        }
-        String bootId = null;
-        if (sysId != null) {
-            for (Entry e : list(resolver, tree, sysId)) {
-                if (!e.directory && e.name.equals("boot.bin")) bootId = e.id;
-            }
-        }
-        if (bootId == null) {
-            return "That folder has no sys/boot.bin, so the game can't be identified.";
-        }
-        final byte[] header = new byte[8];
-        try (InputStream in = resolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, bootId))) {
-            if (in == null || AppFiles.readFully(in, header) < header.length) {
-                return "That folder's sys/boot.bin is too short, so the game can't be identified.";
-            }
-        }
-        return AppFiles.headerProblem(header);
-    }
-
-    /** A zip of the folder Dolphin extracted: unpacked into the staging folder, checked, swapped in. */
-    private String copyZip(Uri zip, Progress progress) throws IOException {
-        final long size = documentSize(zip);
-        final File staging = stagingDir();
-        AppFiles.deleteRecursively(staging);
-        if (!staging.mkdirs()) throw new IOException("cannot create " + staging);
-        final String stagingPath = staging.getCanonicalPath() + File.separator;
-        int count = 0;
-        try (InputStream raw = getContentResolver().openInputStream(zip)) {
-            if (raw == null) throw new IOException("cannot read the zip");
-            final CountingInputStream counted = new CountingInputStream(new BufferedInputStream(raw, 1 << 16));
-            try (ZipInputStream in = new ZipInputStream(counted)) {
-                ZipEntry entry;
-                while ((entry = in.getNextEntry()) != null) {
-                    // Windows PowerShell's zips separate (and end folder entries) with backslashes.
-                    final String name = entry.getName().replace('\\', '/');
-                    final File target = new File(staging, name);
-                    if (!target.getCanonicalPath().startsWith(stagingPath)) {
-                        throw new IOException("the zip holds a path outside its folder: " + name);
-                    }
-                    if (entry.isDirectory() || name.endsWith("/")) {
-                        if (!target.isDirectory() && !target.mkdirs()) throw new IOException("cannot create " + target);
-                        continue;
-                    }
-                    final File parent = target.getParentFile();
-                    if (parent != null && !parent.isDirectory() && !parent.mkdirs()) throw new IOException("cannot create " + parent);
-                    try (OutputStream out = new FileOutputStream(target)) {
-                        AppFiles.copy(in, out);
-                    }
-                    ++count;
-                    if (size > 0) {
-                        final int permille = (int) Math.min(1000, counted.count * 1000 / size);
-                        progress.update(permille, 1000, String.format(Locale.ROOT, "%d of %d MB",
-                                counted.count >> 20, size >> 20));
-                    } else {
-                        progress.update(0, 0, count + " files");
-                    }
-                }
-            }
-        }
-        final File root = findGameRoot(staging, 3);
-        if (root == null) {
-            AppFiles.deleteRecursively(staging);
-            return "That zip doesn't hold an extracted game: zip the folder Dolphin's Extract Entire Disc made "
-                    + "(the one with files and sys in it).\n\nNothing was changed.";
-        }
-        return install(root, count);
-    }
-
-    /** The extracted game inside an unpacked zip: its top, DATA, or a folder holding either. */
-    private static File findGameRoot(File dir, int depth) {
-        if (AppFiles.isGameRoot(dir)) return dir;
-        if (depth == 0) return null;
-        final File[] children = dir.listFiles(File::isDirectory);
-        if (children == null) return null;
-        for (File child : children) {
-            if (child.getName().equals("__MACOSX")) continue;
-            final File found = findGameRoot(child, depth - 1);
-            if (found != null) return found;
-        }
+        if (!root.renameTo(game)) throw new IOException("Couldn't move the game into place.");
         return null;
-    }
-
-    private long documentSize(Uri uri) {
-        try (Cursor c = getContentResolver().query(uri, new String[] {OpenableColumns.SIZE}, null, null, null)) {
-            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
-        } catch (RuntimeException ignored) {
-            // no size: progress counts files instead
-        }
-        return -1;
-    }
-
-    private static final class CountingInputStream extends FilterInputStream {
-        long count;
-        CountingInputStream(InputStream in) { super(in); }
-        @Override public int read() throws IOException {
-            final int b = super.read();
-            if (b >= 0) ++count;
-            return b;
-        }
-        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
-            final int read = super.read(buffer, offset, length);
-            if (read > 0) count += read;
-            return read;
-        }
-        @Override public long skip(long n) throws IOException {
-            final long skipped = super.skip(n);
-            count += skipped;
-            return skipped;
-        }
-    }
-
-    private boolean looksLikeGame(ContentResolver resolver, Uri tree, String id) {
-        boolean sys = false, filesDir = false;
-        for (Entry e : list(resolver, tree, id)) {
-            if (e.directory && e.name.equals("sys")) sys = true;
-            if (e.directory && e.name.equals("files")) filesDir = true;
-        }
-        return sys && filesDir;
-    }
-
-    private void collect(ContentResolver resolver, Uri tree, String id, String prefix, List<String[]> out) {
-        for (Entry e : list(resolver, tree, id)) {
-            final String path = prefix.isEmpty() ? e.name : prefix + "/" + e.name;
-            if (e.directory) collect(resolver, tree, e.id, path, out);
-            else out.add(new String[] {e.id, path});
-        }
-    }
-
-    private List<Entry> list(ContentResolver resolver, Uri tree, String id) {
-        final List<Entry> entries = new ArrayList<>();
-        final Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id);
-        final String[] columns = {
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-        };
-        try (Cursor c = resolver.query(children, columns, null, null, null)) {
-            while (c != null && c.moveToNext()) {
-                entries.add(new Entry(c.getString(0), c.getString(1),
-                        DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))));
-            }
-        }
-        return entries;
     }
 
     // --- views ---------------------------------------------------------------------------------
@@ -744,103 +672,128 @@ public final class LauncherActivity extends Activity {
 
     // The start menu's colors, on the theme's #101418 background.
     private static final int ACCENT = Color.rgb(229, 57, 53);
+    private static final int HERO_GLOW = Color.rgb(84, 24, 26);
     private static final int SURFACE = Color.rgb(24, 31, 38);
     private static final int RAISED = Color.rgb(38, 48, 58);
-    private static final int STROKE = Color.rgb(48, 60, 72);
     private static final int MUTED = Color.rgb(170, 178, 186);
     private static final int FAINT = Color.rgb(120, 128, 136);
     private static final int GREEN = Color.rgb(102, 187, 106);
     private static final int AMBER = Color.rgb(255, 183, 77);
     private static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    /** Between the screen's edge, its two sides and the tiles, in dp. */
+    private static final int GAP = 10;
 
     /** A rounded shape that ripples when touched; `disabled` is its color while disabled. */
-    private RippleDrawable rounded(int color, int disabled, int radius, int stroke) {
+    private RippleDrawable rounded(int color, int disabled, int radius) {
         final GradientDrawable shape = new GradientDrawable();
         shape.setCornerRadius(radius);
         shape.setColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
                 new int[] {disabled, color}));
-        if (stroke != 0) {
-            shape.setStroke(dp(1), stroke);
-        }
         final GradientDrawable mask = new GradientDrawable();
         mask.setCornerRadius(radius);
         mask.setColor(Color.WHITE);
         return new RippleDrawable(ColorStateList.valueOf(Color.argb(56, 255, 255, 255)), shape, mask);
     }
 
-    /** A pill button: `primary` is the big red Play. */
-    private Button button(String label, boolean primary) {
+    /** The big red pill. */
+    private Button button(String label) {
         final Button view = new Button(this);
         view.setText(label);
         view.setAllCaps(false);
         view.setStateListAnimator(null);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, primary ? 20 : 16);
-        view.setTypeface(primary ? Typeface.DEFAULT_BOLD : MEDIUM);
-        view.setTextColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
-                new int[] {FAINT, Color.WHITE}));
-        final int height = dp(primary ? 60 : 50);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setTextColor(Color.WHITE);
+        final int height = dp(56);
         view.setMinHeight(height);
         view.setMinimumHeight(height);
         view.setPadding(dp(20), 0, dp(20), 0);
-        view.setBackground(primary ? rounded(ACCENT, RAISED, height / 2, 0)
-                : rounded(RAISED, SURFACE, height / 2, 0));
+        view.setBackground(rounded(ACCENT, RAISED, height / 2));
         return view;
     }
 
-    /** A rounded section of the start menu, with a small heading. */
-    private LinearLayout card(String heading) {
-        final LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(14), dp(16), dp(16));
-        final GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(22));
-        shape.setColor(SURFACE);
-        shape.setStroke(dp(1), Color.rgb(34, 44, 53));
-        card.setBackground(shape);
-        final TextView title = text(heading.toUpperCase(Locale.ROOT), 12);
-        title.setGravity(Gravity.START);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setLetterSpacing(0.12f);
-        title.setTextColor(MUTED);
-        card.addView(title, matchWidth(0));
-        return card;
+    /** A tappable tile: a name, a line about it, and on the right a pill for its state or action. */
+    private static final class Tile {
+        final View view;
+        final TextView name, about, pill;
+        Tile(View view, TextView name, TextView about, TextView pill) {
+            this.view = view;
+            this.name = name;
+            this.about = about;
+            this.pill = pill;
+        }
     }
 
-    /** A setting row in `card`: its label, an On/Off pill (returned) and what On does underneath. */
-    private TextView toggle(LinearLayout card, String label, String help, View.OnClickListener onClick) {
+    private Tile tile(String label, String help, View.OnClickListener onClick) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(50));
-        row.setPadding(dp(20), dp(6), dp(8), dp(6));
-        row.setBackground(rounded(RAISED, RAISED, dp(25), 0));
+        row.setPadding(dp(16), dp(6), dp(12), dp(6));
+        row.setBackground(rounded(SURFACE, SURFACE, dp(18)));
         row.setClickable(true);
         row.setOnClickListener(onClick);
-        final TextView name = text(label, 16);
+        final LinearLayout words = new LinearLayout(this);
+        words.setOrientation(LinearLayout.VERTICAL);
+        final TextView name = text(label, 15);
         name.setTypeface(MEDIUM);
         name.setGravity(Gravity.START);
-        row.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        final TextView pill = text("", 14);
-        pill.setTypeface(Typeface.DEFAULT_BOLD);
-        pill.setGravity(Gravity.CENTER);
-        pill.setMinWidth(dp(64));
-        pill.setPadding(dp(14), dp(7), dp(14), dp(7));
-        row.addView(pill);
-        card.addView(row, matchWidth(dp(10)));
-        final TextView about = text(help, 13);
+        words.addView(name);
+        final TextView about = text(help, 12);
         about.setGravity(Gravity.START);
         about.setTextColor(MUTED);
-        about.setPadding(dp(4), dp(6), dp(4), 0);
-        card.addView(about, matchWidth(0));
-        return pill;
+        words.addView(about);
+        row.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        final TextView pill = text("", 13);
+        pill.setTypeface(Typeface.DEFAULT_BOLD);
+        pill.setGravity(Gravity.CENTER);
+        pill.setPadding(dp(14), dp(6), dp(14), dp(6));
+        pill.setVisibility(View.GONE);
+        final LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pillParams.leftMargin = dp(8);
+        row.addView(pill, pillParams);
+        return new Tile(row, name, about, pill);
+    }
+
+    /** Tiles side by side, sharing the width. */
+    private LinearLayout tileRow(Tile... tiles) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < tiles.length; ++i) {
+            final LinearLayout.LayoutParams params =
+                    new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+            params.leftMargin = i == 0 ? 0 : dp(GAP);
+            row.addView(tiles[i].view, params);
+        }
+        return row;
+    }
+
+    /** A row takes its share of the side's height, and never less than a comfortable tap. */
+    private LinearLayout.LayoutParams tileRowParams(int topMarginDp) {
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(56), 1f);
+        params.topMargin = dp(topMarginDp);
+        return params;
     }
 
     private void showToggle(TextView pill, boolean on) {
+        pill.setVisibility(View.VISIBLE);
         pill.setText(on ? "On" : "Off");
         pill.setTextColor(on ? Color.WHITE : MUTED);
+        showPill(pill, on ? ACCENT : RAISED);
+    }
+
+    private void showAction(TextView pill, String label) {
+        pill.setVisibility(View.VISIBLE);
+        pill.setText(label);
+        pill.setTextColor(Color.WHITE);
+        showPill(pill, RAISED);
+    }
+
+    private void showPill(TextView pill, int color) {
         final GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(17));
-        shape.setColor(on ? ACCENT : SURFACE);
+        shape.setCornerRadius(dp(16));
+        shape.setColor(color);
         pill.setBackground(shape);
     }
 

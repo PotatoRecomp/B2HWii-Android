@@ -297,12 +297,11 @@ extern "C" int32_t NANDRead_HLE(uint32_t fileInfoPtr, uint32_t bufferPtr, uint32
         return NAND_RESULT_INVALID;
     }
 
+    std::fseek(handle->file, 0, SEEK_CUR);  // required between a write and a read on one stream
     size_t bytesRead = std::fread(buffer, 1, length, handle->file);
     return static_cast<int32_t>(bytesRead);
 }
-#if 0
-PPC_NATIVE_OVERRIDE(801D89F0, NANDRead_HLE, int32_t, (uint32_t fileInfoPtr, uint32_t bufferPtr, uint32_t length), (fileInfoPtr, bufferPtr, length));
-#endif
+PPC_NATIVE_OVERRIDE(803A3254, NANDRead_HLE, int32_t, (uint32_t fileInfoPtr, uint32_t bufferPtr, uint32_t length), (fileInfoPtr, bufferPtr, length));
 
 extern "C" int32_t NANDWrite_HLE(uint32_t fileInfoPtr, uint32_t bufferPtr, uint32_t length) {
     BASARA_NAND_TRACE("NANDWrite fileInfo=0x%08X fd=%d len=%u\n", fileInfoPtr,
@@ -321,11 +320,12 @@ extern "C" int32_t NANDWrite_HLE(uint32_t fileInfoPtr, uint32_t bufferPtr, uint3
         return NAND_RESULT_INVALID;
     }
 
+    std::fseek(handle->file, 0, SEEK_CUR);  // required between a read and a write on one stream
     size_t bytesWritten = std::fwrite(buffer, 1, length, handle->file);
     std::fflush(handle->file);
     return static_cast<int32_t>(bytesWritten);
 }
-PPC_NATIVE_OVERRIDE(803A3254, NANDWrite_HLE, int32_t, (uint32_t fileInfoPtr, uint32_t bufferPtr, uint32_t length), (fileInfoPtr, bufferPtr, length));
+PPC_NATIVE_OVERRIDE(803A3334, NANDWrite_HLE, int32_t, (uint32_t fileInfoPtr, uint32_t bufferPtr, uint32_t length), (fileInfoPtr, bufferPtr, length));
 
 extern "C" int32_t NANDSeek_HLE(uint32_t fileInfoPtr, int32_t offset, int32_t whence) {
     if (!fileInfoPtr) {

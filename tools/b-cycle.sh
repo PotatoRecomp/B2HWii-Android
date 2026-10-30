@@ -15,6 +15,10 @@ adb -s $S install -r app/build/outputs/apk/release/app-release.apk 2>&1 | tail -
 adb -s $S shell am force-stop com.shiinobu.basara; adb -s $S logcat -c; adb -s $S shell "rm -rf /sdcard/Android/data/com.shiinobu.basara/files/Logs/*"
 # stream the log live to a file
 pkill -f "adb.*logcat -v time" 2>/dev/null; pkill -f "adb.*tail -F" 2>/dev/null
+# Keep the live log bounded across runs.
+if [ "$(stat -c %s generated/b/console-live.txt 2>/dev/null || echo 0)" -gt 33554432 ]; then
+  mv -f generated/b/console-live.txt generated/b/console-live.prev.txt
+fi
 echo "===== RUN $(date +%T) =====" >> generated/b/console-live.txt
 (adb -s $S logcat -v time >> generated/b/logcat-live.txt 2>&1 &)
 adb -s $S shell am start -n com.shiinobu.basara/.LauncherActivity >/dev/null; sleep 3

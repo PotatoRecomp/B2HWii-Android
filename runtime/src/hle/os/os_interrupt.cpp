@@ -58,11 +58,17 @@ inline void UpdateCurrentContextInterruptFlag(bool enabled)
 // wait for the guest's next reschedule.
 thread_local bool g_inEnablePump = false;
 thread_local std::chrono::steady_clock::time_point g_nextEnablePump{};
+thread_local uint32_t g_enablePumpCalls = 0;
 
 void ServicePendingInterruptsOnEnable()
 {
     if (g_inEnablePump || DetClock::Enabled() || !Fiber::GuestFiberManager::IsInitialized() ||
         ::Memory::Read32(kSchedulerIdleFlagAddr) != 0) {
+        return;
+    }
+    // Battles call OSRestoreInterrupts tens of thousands of times a frame; a clock read on each was
+    // several percent of the frame on a phone. A polling loop still reaches the clock within 16 calls.
+    if ((++g_enablePumpCalls & 15u) != 0) {
         return;
     }
     const auto now = std::chrono::steady_clock::now();

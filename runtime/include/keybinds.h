@@ -3,9 +3,9 @@
 #include <cstddef>
 #include <string>
 
-// NSMBW: the keyboard's sideways Wii Remote, one or two keys per control, changeable from the
-// game's settings window (Keybinds tab) and saved to Config.toml's [keyboard] table as SDL
-// scancode names ("jump = \"X,Space\"").
+// The keyboard's Classic Controller, one or two keys per control, changeable from the F10 bar
+// (Controller settings) and saved to Config.toml's [keyboard] table as SDL scancode names
+// ("classic_a = \"X,Space\"", "None" when unbound).
 namespace Keybinds {
 
 enum Action : int {
@@ -13,14 +13,25 @@ enum Action : int {
     kDown,
     kLeft,
     kRight,
-    kJump,      // 2
-    kRun,       // 1
     kA,
-    kShake,
-    kTiltLeft,
-    kTiltRight,
+    kB,
+    kX,
+    kY,
+    kL,
+    kR,
+    kZL,
+    kZR,
     kPlus,
     kMinus,
+    kHome,
+    kLStickUp,
+    kLStickDown,
+    kLStickLeft,
+    kLStickRight,
+    kRStickUp,
+    kRStickDown,
+    kRStickLeft,
+    kRStickRight,
     kActionCount,
 };
 
@@ -29,15 +40,13 @@ const char* ActionName(int action);
 std::string KeyLabel(int action);
 // Any of the action's keys held (false while a key is being captured, or until it is let go).
 bool Held(int action);
-// Held, leaving one key (an SDL scancode) out; and whether that key is one of the action's.
-bool HeldIgnoring(int action, int scancode);
-bool Bound(int action, int scancode);
 
-// Space Smart Spin QoL (on by default): Space, when it is a Jump key, pressed while the player is
-// in the air shakes the remote (a spin) instead of pressing 2. Saved as [keyboard] smart_spin.
-bool SmartSpin();
-void SetSmartSpin(bool on);
-
+constexpr int kKeysPerAction = 2;
+// The key in `slot` (0 or 1), "None" when empty.
+std::string KeyName(int action, int slot);
+// Puts `scancode` in the action's `slot`, or empties the slot for 0. A key belongs to one action,
+// so it leaves any other action holding it; returns that action, or -1.
+int Bind(int action, int slot, int scancode);
 // Waits for the next key pressed and binds it to `action` alone; Escape cancels.
 void BeginCapture(int action);
 // The action waiting for a key, or -1.
@@ -46,6 +55,8 @@ int Capturing();
 bool PollCapture();
 // Keys held from a capture are ignored until they are released.
 bool Suppressed();
+// The same for keys held now: the key that closes the F10 bar must not reach the game as well.
+void SuppressUntilReleased();
 void ResetDefaults();
 
 } // namespace Keybinds

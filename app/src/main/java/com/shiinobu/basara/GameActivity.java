@@ -28,6 +28,7 @@ public final class GameActivity extends SDLActivity
 
     /** Player 1's on-screen remote and motion (runtime/src/android/android_bridge.cpp). */
     static native void nativeSetTouchState(int buttons, boolean shake, float tilt);
+    static native void nativeSetTouchSticks(float leftX, float leftY, float rightX, float rightY);
 
     /** The Display menu: aspect, render scale (480 lines per 1x), FPS counter (DisplaySettings). */
     static native void nativeApplyDisplaySettings(int aspect, float renderScale, boolean showFps);
@@ -67,7 +68,7 @@ public final class GameActivity extends SDLActivity
     private MotionInput motion;
     private boolean nativeReady;
     private int touchButtons;
-    private boolean touchShake, motionShake;
+    private boolean motionShake;
     private float motionTilt;
 
     @Override
@@ -271,10 +272,20 @@ public final class GameActivity extends SDLActivity
     // --- input ---------------------------------------------------------------------------------
 
     @Override
-    public void onTouchInput(int buttons, boolean shake) {
+    public void onTouchInput(int buttons) {
         touchButtons = buttons;
-        touchShake = shake;
         pushInput();
+    }
+
+    @Override
+    public void onTouchSticks(float leftX, float leftY, float rightX, float rightY) {
+        if (!nativeReady) return;
+        try {
+            nativeSetTouchSticks(leftX, leftY, rightX, rightY);
+        } catch (UnsatisfiedLinkError e) {
+            nativeReady = false;
+            Log.e(TAG, "touch input bridge missing from libmain.so", e);
+        }
     }
 
     @Override
@@ -287,7 +298,7 @@ public final class GameActivity extends SDLActivity
     private void pushInput() {
         if (!nativeReady) return;
         try {
-            nativeSetTouchState(touchButtons, touchShake || motionShake, motionTilt);
+            nativeSetTouchState(touchButtons, motionShake, motionTilt);
         } catch (UnsatisfiedLinkError e) {
             nativeReady = false;
             Log.e(TAG, "touch input bridge missing from libmain.so", e);

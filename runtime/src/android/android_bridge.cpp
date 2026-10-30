@@ -56,6 +56,13 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetTouchState
     VirtualRemote::SetTouchState(static_cast<uint32_t>(buttons), shake == JNI_TRUE, tilt);
 }
 
+// GameActivity.nativeSetTouchSticks: the on-screen sticks, -1..1 with +y up.
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetTouchSticks(
+    JNIEnv*, jclass, jfloat leftX, jfloat leftY, jfloat rightX, jfloat rightY)
+{
+    VirtualRemote::SetTouchSticks(leftX, leftY, rightX, rightY);
+}
+
 // GameActivity.nativeApplyDisplaySettings: the Display menu. The aspect (0 original 4:3, 1 16:9,
 // 2 fill the screen) and the render scale (480 lines per 1x) apply at the next frame; 4:3 versus a
 // widescreen mode only at the next start, since the game reads it at boot.

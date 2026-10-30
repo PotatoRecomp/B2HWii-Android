@@ -761,8 +761,8 @@ PPC_NATIVE_OVERRIDE_VOID(801c7260, GX__GetTexObjLODAll_80170cbc, (uint32_t oa, u
 // ============================================================================
 
 extern "C" void GX__InitTlutObj_80170f80(uint32_t oa, uint32_t da, uint32_t f, uint32_t e) {
-    std::lock_guard<std::mutex> guard(g_tlutObjMutex); GXTlutObj* obj = CreateHostTlutObj(oa); TlutObjMeta& meta = GetTlutObjMeta(oa);
-    meta.dataAddr=CanonicalizeGxMainRamAddress(da); meta.format=f; meta.entries=(u16)e; meta.dirty=false;
+    std::lock_guard<std::mutex> guard(g_tlutObjMutex); GXTlutObj* obj = CreateHostTlutObj(oa);
+    TlutObjMeta& meta = SetTlutObjMeta(oa, da, f, (u16)e);
     // Leave the object unconstructed on a bad descriptor. A later GXLoadTlut
     // then takes GetHostTlutObj's soft-fail path and gets a fresh empty object
     // instead of aurora reading entries*2 bytes off an unvalidated pointer.

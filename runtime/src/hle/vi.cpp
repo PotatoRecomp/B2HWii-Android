@@ -2,6 +2,7 @@
 #ifdef __ANDROID__
 #include <csignal>
 #include <dlfcn.h>
+#include <sched.h>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <unwind.h>
@@ -22,12 +23,17 @@
 #include "runtime_log.h"
 #include "host_suspend.h"
 #include "guest_profiler.h"
+#include "cpu_boost.h"
+#include "audio_backend.h"
+#include "system_stats.h"
 
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/vi.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <cstring>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -52,6 +58,7 @@
 #endif
 
 #include <aurora/aurora.h>
+#include <aurora/gfx.h>
 
 // Forward declaration for OSWakeupThread - used to wake threads on VI retrace queue
 extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
@@ -722,7 +729,19 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
     s_inAdvanceRetrace.store(false);
 }
 
-bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora)
+// Elastic retrace (BASARA_ELASTIC_VSYNC=0 turns it off). The game steps once per retrace, so on a
+// fixed 60 Hz grid a frame that needs 20 ms waits for the 33 ms boundary: 30 fps, half speed. While
+// the game is still busy a due retrace is held back for up to one more interval; once it goes idle
+// the held retrace fires at once and the grid moves to that instant, so the same frame runs at 50.
+bool ElasticVsync() {
+    static const bool on = [] {
+        const char* v = std::getenv("BASARA_ELASTIC_VSYNC");
+        return v == nullptr || std::strcmp(v, "0") != 0;
+    }();
+    return on;
+}
+
+bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora, bool guestIdle = true)
 {
     bool advancedAny = false;
 
@@ -760,12 +779,21 @@ bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora)
             if (!g_vi.initialized) {
                 return advancedAny;
             }
-            target = g_vi.lastRetrace + ActiveIntervalLocked();
+            const auto interval = ActiveIntervalLocked();
+            target = g_vi.lastRetrace + interval;
             if (now < target) {
                 return advancedAny;
             }
+            if (ElasticVsync()) {
+                if (!guestIdle && now < target + interval) {
+                    return advancedAny;
+                }
+                // Late by more than a couple of ms: re-phase the grid instead of catching up.
+                if (now - target > std::chrono::milliseconds(2)) {
+                    target = now;
+                }
+            }
         }
-
 
         AdvanceRetrace(ctx, target, serviceAurora);
         advancedAny = true;
@@ -799,6 +827,11 @@ void VI_HLE_PollRetrace(CpuContext* ctx) {
     AdvanceDueRetraces(ctx, 8, true);
 }
 
+// From the middle of guest work (a GX call): an elastic retrace may still wait for the idle loop.
+void VI_HLE_PollRetraceBusy(CpuContext* ctx) {
+    AdvanceDueRetraces(ctx, 8, true, false);
+}
+
 void VI_HLE_ProcessRetracesDeferred(int maxToProcess) {
     // A wall-clock pump (GX work, host frame waits); deterministic mode delivers retraces only from
     // the scheduler and the guest's own VI calls.
@@ -818,7 +851,7 @@ void VI_HLE_ProcessRetracesDeferred(int maxToProcess) {
     // all recursive Aurora/event work until the native GX call has unwound.
     OS_HLE_BeginDeferredGuestCallbacks();
     try {
-        AdvanceDueRetraces(cpu, maxToProcess, false);
+        AdvanceDueRetraces(cpu, maxToProcess, false, false);
     } catch (...) {
         OS_HLE_EndDeferredGuestCallbacks();
         throw;
@@ -953,6 +986,12 @@ std::atomic<uint64_t> g_idleNanosTotal{0};
 
 uint64_t VI_HLE_IdleNanosTotal() {
     return g_idleNanosTotal.load(std::memory_order_relaxed);
+}
+
+static std::atomic<uint64_t> g_schedulerIdleNanos{0};
+
+void VI_HLE_AddSchedulerIdle(uint64_t nanos) {
+    g_schedulerIdleNanos.fetch_add(nanos, std::memory_order_relaxed);
 }
 
 uint32_t VI_HLE_PresentedFramesTotal() {
@@ -1092,6 +1131,21 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         PaceToRetraceBoundary(paceDeadline);
         std::lock_guard<std::mutex> lock(g_viMutex);
         s_lastPacedRetraceCount = g_vi.retraceCount;
+    }
+    // The work this frame took: from the previous frame's end to this present, minus the scheduler's
+    // idle waits (the game waiting for the retrace or a sleep).
+    if (presentedXfb) {
+        static Clock::time_point s_boostLastEnd{};
+        static uint64_t s_boostLastIdle = 0;
+        const uint64_t idle = g_schedulerIdleNanos.load(std::memory_order_relaxed);
+        if (s_boostLastEnd != Clock::time_point{}) {
+            const int64_t span =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(paceStart - s_boostLastEnd).count();
+            const int64_t work = span - static_cast<int64_t>(idle - s_boostLastIdle);
+            CpuBoost::ReportFrameWork(work > 0 ? static_cast<uint64_t>(work) : 0);
+        }
+        s_boostLastEnd = Clock::now();
+        s_boostLastIdle = idle;
     }
     // Always on: a frame that took over 20 ms (a dropped frame at 60) goes to the log with where the
     // time went, so a report of drops on someone's machine comes with its cause. At most 30 a minute.
@@ -1233,6 +1287,57 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                 RT_LOGF(RT_TAG_VI, "audio blocks: %.1f a frame, speaker push %.2f ms, AI callback %.2f ms (%.3f ms each)\n",
                         blocks / n, pushNanos / 1e6 / n, callbackNanos / 1e6 / n,
                         blocks ? callbackNanos / 1e6 / blocks : 0.0);
+                // The speaker: audio pushed against the window's length (less means the game runs
+                // slower than real time), and pushes that found the output already empty (crackle).
+                const AudioBackend::Stats out = AudioBackend::Instance().TakeStats();
+                if (out.stretching) {
+                    // Stretched: played vs pushed is the tempo at work; gaps are silences (input ran
+                    // out), skips jumps over a backlog too long to catch up on.
+                    RT_LOGF(RT_TAG_VI, "audio out: %.0f ms pushed, %.0f ms played in %.0f ms, tempo %.2f-%.2f, "
+                            "%u gaps, %u skips, lowest backlog %.1f ms, %u reopens\n", out.pushedMs, out.playedMs,
+                            window, out.minTempo, out.maxTempo, out.empty, out.dropped, out.minQueuedMs,
+                            out.reopens);
+                } else {
+                    RT_LOGF(RT_TAG_VI, "audio out: %.0f ms pushed in %.0f ms, %u pushes, %u found it empty, %u "
+                            "dropped full, lowest queue %.1f ms\n", out.pushedMs, window, out.pushes, out.empty,
+                            out.dropped, out.minQueuedMs);
+                }
+            }
+            {
+                // The renderer: the frame worker's time a cycle, of which preparing the next frame (where a
+                // GPU that is behind holds it), and the game thread's wait for it.
+                static AuroraFrameWorkerTotals s_lastWorker{};
+                AuroraFrameWorkerTotals worker{};
+                aurora_get_frame_worker_totals(&worker);
+                const uint64_t cycles = worker.cycles - s_lastWorker.cycles;
+                RT_LOGF(RT_TAG_VI, "render: worker %.2f ms a cycle (prepare %.2f) in %llu cycles, game waited %.2f ms "
+                        "a frame, %u shaders queued\n",
+                        cycles ? (worker.busyNanos - s_lastWorker.busyNanos) / 1e6 / cycles : 0.0,
+                        cycles ? (worker.prepareNanos - s_lastWorker.prepareNanos) / 1e6 / cycles : 0.0,
+                        static_cast<unsigned long long>(cycles),
+                        (worker.producerWaitNanos - s_lastWorker.producerWaitNanos) / 1e6 / n,
+                        aurora_get_queued_pipeline_count());
+                s_lastWorker = worker;
+                {
+                    char texReport[256];
+                    aurora_texture_memory_report(texReport, sizeof(texReport));
+                    RT_LOGF(RT_TAG_VI, "textures: %s\n", texReport);
+                }
+                const SystemStats sys = SampleSystemStats();
+                std::string clusters;
+                for (const int mhz : sys.clusterMHz) {
+                    clusters += clusters.empty() ? "" : "/";
+                    clusters += std::to_string(mhz);
+                }
+#if defined(__ANDROID__)
+                const int cpu = sched_getcpu();
+#else
+                const int cpu = -1;
+#endif
+                RT_LOGF(RT_TAG_VI, "system: game thread on cpu %d, process cpu %.0f%% of %d cores, clusters %s MHz, "
+                        "cpu %.0f C, gpu %d%% %d MHz %.0f C, ram free %.2f GB, battery %.0f C\n",
+                        cpu, sys.processCpuPercent, sys.cores, clusters.c_str(), sys.cpuTempC, sys.gpuBusyPercent,
+                        sys.gpuMHz, sys.gpuTempC, sys.ramAvailableBytes / 1073741824.0, sys.batteryTempC);
             }
             g_mainWaits.clear();
             g_idleByEnder.fill(0);

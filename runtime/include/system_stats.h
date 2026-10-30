@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <vector>
 
-// Device readings for the performance overlay (settings_overlay.cpp), refreshed at most once a
-// second. A value the system does not expose to apps (most of sysfs on some phones) stays unknown:
+// Device readings for the performance overlay (settings_overlay.cpp) and the fps log (vi.cpp),
+// refreshed at most once a second; callable from any thread. A value the system does not expose to apps (most of sysfs on some phones) stays unknown:
 // -1 for numbers, 0 for byte counts.
 struct SystemStats {
     float processCpuPercent = -1.0f;  // this process, of all cores together
@@ -21,4 +21,4 @@ struct SystemStats {
     float batteryTempC = -1.0f;
 };
 
-const SystemStats& SampleSystemStats();
+SystemStats SampleSystemStats();

@@ -3,14 +3,15 @@
 Prints instructions with SDA (r13/r2) references and lis/addi/ori resolved."""
 import sys
 from pathlib import Path
-from capstone import Cs, CS_ARCH_PPC, CS_MODE_32, CS_MODE_BIG_ENDIAN
+from capstone import Cs, CS_ARCH_PPC, CS_MODE_32, CS_MODE_BIG_ENDIAN, CS_MODE_PS
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import w1
 d = Path(__file__).resolve().parent.parent.joinpath('assets/basara-heroes/sys/main.dol').read_bytes()
 secs, _, _, _ = w1.parse_dol(d)
 a0 = int(sys.argv[1], 16)
 a1 = int(sys.argv[2], 16) if len(sys.argv) > 2 else a0 + 0x200
-cs = Cs(CS_ARCH_PPC, CS_MODE_32 | CS_MODE_BIG_ENDIAN)
+# Gekko paired singles (ps_*, psq_*), otherwise decoded as AltiVec.
+cs = Cs(CS_ARCH_PPC, CS_MODE_32 | CS_MODE_BIG_ENDIAN | CS_MODE_PS)
 R13, R2 = 0x80667C80, 0x8066B100
 hi = {}
 for a in range(a0, a1, 4):

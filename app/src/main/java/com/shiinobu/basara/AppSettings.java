@@ -24,6 +24,11 @@ final class AppSettings {
         // Both processes (launcher and :game) read it. Writes use commit(): the game process is
         // ended right after its menu closes, which would drop a pending apply().
         prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE);
+        // Once: the FPS / performance overlay costs frame time on slow phones, so installs that had
+        // it on start with it off again (it can still be turned back on in Display settings).
+        if (!prefs.getBoolean("show_fps_reset_1", false)) {
+            prefs.edit().putBoolean("show_fps", false).putBoolean("show_fps_reset_1", true).commit();
+        }
     }
 
     int aspectMode() { return prefs.getInt("aspect_mode", ASPECT_FILL); }
@@ -69,6 +74,10 @@ final class AppSettings {
     /** Open the game straight away when the app starts; the in-game menu leads back here. */
     boolean skipStartMenu() { return prefs.getBoolean("skip_start_menu", false); }
     void setSkipStartMenu(boolean on) { prefs.edit().putBoolean("skip_start_menu", on).commit(); }
+
+    /** Beta only: why the Beta ended, once BetaGate has seen it end (kept, so going offline won't reopen it). */
+    String betaEnded() { return prefs.getString("beta_ended", null); }
+    void setBetaEnded(String reason) { prefs.edit().putString("beta_ended", reason).commit(); }
 
     /** "2× (960p)": the scale and the number of lines it renders, as the menu shows it. */
     static String resolutionLabel(float scale) {

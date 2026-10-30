@@ -1,6 +1,7 @@
 #pragma once
 #include <dolphin/gx.h>
 
+#include <atomic>
 #include <utility>
 
 #include "common.hpp"
@@ -55,7 +56,27 @@ struct TextureRef {
   , size(size)
   , format(format)
   , mipCount(mipCount)
-  , gxFormat(gxFormat) {}
+  , gxFormat(gxFormat) {
+    s_liveCount.fetch_add(1, std::memory_order_relaxed);
+    s_liveBytes.fetch_add(live_bytes(), std::memory_order_relaxed);
+  }
+  ~TextureRef() {
+    s_liveCount.fetch_sub(1, std::memory_order_relaxed);
+    s_liveBytes.fetch_sub(live_bytes(), std::memory_order_relaxed);
+  }
+  TextureRef(const TextureRef&) = delete;
+  TextureRef& operator=(const TextureRef&) = delete;
+
+  // Basara diagnostics: textures alive on the host side (what the GPU driver can't free yet).
+  static inline std::atomic<int64_t> s_liveCount{0};
+  static inline std::atomic<int64_t> s_liveBytes{0};
+
+private:
+  int64_t live_bytes() const noexcept {
+    // Estimate at 4 bytes a texel (format_info is fatal on depth formats).
+    const int64_t base = int64_t{size.width} * size.height * std::max<uint32_t>(size.depthOrArrayLayers, 1) * 4;
+    return mipCount > 1 ? base * 4 / 3 : base;
+  }
 };
 
 TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat,

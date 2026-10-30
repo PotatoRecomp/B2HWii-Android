@@ -74,7 +74,10 @@ void InvalidateEfbCopyDestinationsForRange(uint32_t addr, uint32_t size) {
 // ============================================================================
 
 extern "C" void GX__SetDispCopySrc_8016f438(uint32_t l, uint32_t t, uint32_t w, uint32_t h) {
-    GXSetDispCopySrc((u16)l, (u16)t, (u16)w, (u16)h);
+    // Basara's 448x392 frame ends in a dark column, hidden by overscan on a TV; in a window it shows
+    // as a dark line on the right, so the picture is taken without it.
+    const bool fullFrame = l == 0 && t == 0 && w == 448 && h == 392;
+    GXSetDispCopySrc((u16)l, (u16)t, (u16)(fullFrame ? 447 : w), (u16)h);
 }
 // Basara: 0x80382150 writes gxData+0x230/0x234 (display copy), 0x80382190 writes +0x240/0x244 (texture copy).
 PPC_NATIVE_OVERRIDE_VOID(80382150, GX__SetDispCopySrc_8016f438, (uint32_t l, uint32_t t, uint32_t w, uint32_t h), (l, t, w, h));

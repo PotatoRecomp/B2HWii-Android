@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -180,7 +181,9 @@ void Sample(SystemStats& stats, double wallSeconds) {
 
 } // namespace
 
-const SystemStats& SampleSystemStats() {
+SystemStats SampleSystemStats() {
+    static std::mutex s_mutex;
+    std::lock_guard<std::mutex> lock(s_mutex);
     static SystemStats s_stats;
     static Clock::time_point s_last{};
     const Clock::time_point now = Clock::now();

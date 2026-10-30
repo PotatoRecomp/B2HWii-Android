@@ -68,7 +68,7 @@ from October 2026 to run *Sengoku Basara 2 Heroes*.
 - **[Dawn](https://dawn.googlesource.com/dawn)**: Google's WebGPU implementation, used by aurora for Vulkan and
   Direct3D.
 - **[Dolphin Emulator](https://github.com/dolphin-emu/dolphin)**: the reference for Wii hardware behavior, the free DSP
-  coefficient ROM and the default WiiConnect24 tree in the runtime, and the tool you extract your game with.
+  coefficient ROM and the default WiiConnect24 tree in the runtime, and the RVZ format the launcher reads.
 - **The NSMBW reverse-engineering community**: RootCubed's
   [NSMBW symbols](https://github.com/RootCubed/nsmbw-symbols), the NSMBW decompilation and the NSMBW address maps. The
   NSMBW function map was the starting point for this game's map.

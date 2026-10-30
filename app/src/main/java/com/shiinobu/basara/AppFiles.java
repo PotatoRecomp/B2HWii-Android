@@ -56,8 +56,7 @@ final class AppFiles {
     /** Why the extracted game at `root` can't be played, or null when it can. */
     static String gameProblem(File root) {
         if (!isGameRoot(root)) {
-            return "That isn't an extracted game: it needs the files and sys folders Dolphin's "
-                    + "Extract Entire Disc makes.";
+            return "Its files are incomplete. Choose your ISO or RVZ again.";
         }
         final byte[] header = new byte[8];
         try (InputStream in = new FileInputStream(new File(root, "sys/boot.bin"))) {

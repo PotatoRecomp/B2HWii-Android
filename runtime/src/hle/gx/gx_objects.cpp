@@ -99,12 +99,13 @@ bool g_texObjIntervalsRebuildAll = true;
 // lengthens the walk, so the patch path only ever raises it and rebuild recomputes it exactly.
 uint32_t g_texObjIntervalMaxSize = 0;
 
-// Address bounds of every registered TLUT payload, so a DCStoreRange over an
-// unrelated buffer can skip the g_TlutObjMeta scan entirely. Recomputed lazily
-// because TLUT registration is far rarer than cache flushes.
-uint64_t g_tlutObjBoundsStart = 0;
-uint64_t g_tlutObjBoundsEnd = 0;
-bool g_tlutObjBoundsDirty = true;
+// TLUT objects by payload address (canonical data address -> object address), so a DCStoreRange
+// only visits the palettes near the flushed range. Basara inits TLUT objects every frame and its
+// palettes are spread over the heap: a whole-map walk (and a bounds recompute after each init) on
+// every flush cost a third of a battle frame on a phone. Kept in step by SetTlutObjMeta.
+std::multimap<uint32_t, uint32_t> g_tlutObjsByData;
+// Largest payload in the index, in bytes: the range query starts this far left of a flush.
+uint32_t g_tlutObjMaxBytes = 0;
 
 // Guest GXTexObj is 32 bytes: word0 wrap/filter bits, word1 LOD bits, word2 width/height/format,
 // word3 data address (<<5), word4 user data, word5 texFmt, word6 tlut, byte 0x1F flags. Exact
@@ -380,31 +381,21 @@ void EnsureTexObjIntervalsLocked() {
     g_texObjIntervalsPending.clear();
 }
 
-void EnsureTlutObjBoundsLocked() {
-    if (!g_tlutObjBoundsDirty) {
+static bool TlutObjIndexed(const TlutObjMeta& meta) {
+    return meta.dataAddr != 0 && meta.entries != 0 && IsKnownTlutFormat(meta.format);
+}
+
+static void UnindexTlutObjLocked(uint32_t objAddr, const TlutObjMeta& meta) {
+    if (!TlutObjIndexed(meta)) {
         return;
     }
-
-    uint64_t boundsStart = std::numeric_limits<uint64_t>::max();
-    uint64_t boundsEnd = 0;
-    for (const auto& [objAddr, meta] : g_TlutObjMeta) {
-        (void)objAddr;
-        if (meta.dataAddr == 0 || meta.entries == 0 || !IsKnownTlutFormat(meta.format)) {
-            continue;
+    const auto [first, last] = g_tlutObjsByData.equal_range(CanonicalizeGxMainRamAddress(meta.dataAddr));
+    for (auto it = first; it != last; ++it) {
+        if (it->second == objAddr) {
+            g_tlutObjsByData.erase(it);
+            return;
         }
-        const uint64_t tlutStart = CanonicalizeGxMainRamAddress(meta.dataAddr);
-        const uint64_t tlutEnd = tlutStart + static_cast<uint64_t>(meta.entries) * 2u;
-        boundsStart = std::min(boundsStart, tlutStart);
-        boundsEnd = std::max(boundsEnd, tlutEnd);
     }
-    if (boundsStart >= boundsEnd) {
-        boundsStart = 0;
-        boundsEnd = 0;
-    }
-
-    g_tlutObjBoundsStart = boundsStart;
-    g_tlutObjBoundsEnd = boundsEnd;
-    g_tlutObjBoundsDirty = false;
 }
 
 bool TexObjBackingDiffers(const TexObjMeta& lhs, const TexObjMeta& rhs) {
@@ -532,11 +523,23 @@ TexObjMeta& GetTexObjMeta(uint32_t addr) {
     return slot;
 }
 
-// Same contract as GetTexObjMeta: the caller mutates the returned reference, so
-// the cached TLUT address bounds have to be recomputed before the next flush.
-TlutObjMeta& GetTlutObjMeta(uint32_t addr) {
-    g_tlutObjBoundsDirty = true;
-    return g_TlutObjMeta[addr];
+// The only writer of TLUT metadata (GXInitTlutObj): moves the object in the payload index.
+TlutObjMeta& SetTlutObjMeta(uint32_t addr, uint32_t dataAddr, uint32_t format, uint16_t entries) {
+    TlutObjMeta& meta = g_TlutObjMeta[addr];
+    const uint32_t canonical = CanonicalizeGxMainRamAddress(dataAddr);
+    const bool same = meta.dataAddr == canonical && meta.format == format && meta.entries == entries;
+    if (!same) {
+        UnindexTlutObjLocked(addr, meta);
+    }
+    meta.dataAddr = canonical;
+    meta.format = format;
+    meta.entries = entries;
+    meta.dirty = false;
+    if (!same && TlutObjIndexed(meta)) {
+        g_tlutObjsByData.emplace(canonical, addr);
+        g_tlutObjMaxBytes = std::max(g_tlutObjMaxBytes, static_cast<uint32_t>(entries) * 2u);
+    }
+    return meta;
 }
 
 GXTexObj* GetHostTexObj(uint32_t addr) {
@@ -706,25 +709,18 @@ void MarkTlutObjsDirtyForRange(uint32_t addr, uint32_t size) {
     const uint64_t dirtyStart = CanonicalizeGxMainRamAddress(addr);
     const uint64_t dirtyEnd = dirtyStart + size;
     std::lock_guard<std::mutex> guard(g_tlutObjMutex);
-    EnsureTlutObjBoundsLocked();
-    // Most DCStoreRange calls flush small material/vertex buffers that live
-    // nowhere near a palette, so reject them without walking the map.
-    if (g_tlutObjBoundsStart >= g_tlutObjBoundsEnd ||
-        dirtyEnd <= g_tlutObjBoundsStart ||
-        dirtyStart >= g_tlutObjBoundsEnd) {
-        return;
-    }
-    for (auto& [objAddr, meta] : g_TlutObjMeta) {
-        if (meta.dataAddr == 0 || meta.entries == 0 || !IsKnownTlutFormat(meta.format)) {
+    // Only payloads starting within g_tlutObjMaxBytes left of the range can reach it.
+    const uint64_t from = dirtyStart > g_tlutObjMaxBytes ? dirtyStart - g_tlutObjMaxBytes : 0;
+    for (auto it = g_tlutObjsByData.lower_bound(static_cast<uint32_t>(from));
+         it != g_tlutObjsByData.end() && it->first < dirtyEnd; ++it) {
+        const auto metaIt = g_TlutObjMeta.find(it->second);
+        if (metaIt == g_TlutObjMeta.end()) {
             continue;
         }
-
-        const uint64_t tlutStart = CanonicalizeGxMainRamAddress(meta.dataAddr);
-        const uint64_t tlutEnd = tlutStart + static_cast<uint64_t>(meta.entries) * 2u;
-        if (dirtyEnd <= tlutStart || dirtyStart >= tlutEnd) {
-            continue;
+        TlutObjMeta& meta = metaIt->second;
+        const uint64_t tlutEnd = static_cast<uint64_t>(it->first) + static_cast<uint64_t>(meta.entries) * 2u;
+        if (tlutEnd > dirtyStart) {
+            meta.dirty = true;
         }
-
-        meta.dirty = true;
     }
 }

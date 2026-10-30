@@ -761,6 +761,19 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
   if (canCacheUpload) {
     store_cached_texture(obj, handle);
     if (canUseSourceCache) {
+      // Basara: a movie rewrites one buffer every frame, so each frame arrived here as a new version
+      // of the same address. Older versions of these bytes are stale by definition; dropping them
+      // keeps the cache from pinning every past movie frame (the use_count sweep below never could,
+      // as the content and texture-object caches still held them: ~1 GB on the title movie).
+      if (sourceKey.texDataVersion != 0) {
+        const bool erased = absl::erase_if(s_staticTextureSourceCache, [&](const auto& item) {
+          const StaticTextureKey& key = item.first;
+          return key.data == sourceKey.data && key.texDataVersion != sourceKey.texDataVersion;
+        }) != 0;
+        if (erased) {
+          clear_static_source_front_cache();
+        }
+      }
       if (s_staticTextureSourceCache.size() >= 512) {
         absl::erase_if(s_staticTextureSourceCache, [](const auto& item) { return item.second.handle.use_count() <= 1; });
         clear_static_source_front_cache();
@@ -1242,7 +1255,10 @@ void evict_tlut_object(u32 tlutObjId) noexcept {
 
 // GXInitTexObj mints a fresh object id per call and nothing ever emits DESTROY_TEXOBJ, so the texture object memo used to be bounded only by the fact that GXInvalidateTexAll dropped it six times a frame.
 constexpr u64 kTextureCacheIdleRevisions = 128;
-constexpr size_t kTextureObjectCacheSoftLimit = 1024;
+// Basara: a movie inits a new texture object for every frame; at 1024 the idle frames piled up to
+// ~1.3 GB of GPU memory and a 4 GB phone killed the game on the title movie. Only idle entries go,
+// so a low threshold costs a sweep, never a live texture.
+constexpr size_t kTextureObjectCacheSoftLimit = 192;
 constexpr size_t kTlutObjectCacheSoftLimit = 512;
 constexpr size_t kTexObjSourceKeySoftLimit = 2048;
 
@@ -1251,6 +1267,21 @@ static void prune_idle_texture_caches() noexcept {
   // An idle entry stays idle, so there is nothing to gain from sweeping on every bump (six a frame).
   if (revision % (kTextureCacheIdleRevisions / 2) != 0) {
     return;
+  }
+  // Basara: these direct-mapped memos only hit at the revision they were stored at, yet a stale slot
+  // kept its texture alive until another texture hashed to it. A movie stores a new identity every
+  // frame, so up to 2048 dead frames (~1.8 GB) stayed on the GPU and lmkd killed the game on a 4 GB phone.
+  for (auto& entry : s_textureResolveIdentityCache) {
+    if (entry.valid && entry.validationRevision != revision) {
+      entry.valid = false;
+      entry.binding.reset();
+    }
+  }
+  for (auto& entry : s_staticSourceFrontCache) {
+    if (entry.valid && entry.validationRevision != revision) {
+      entry.valid = false;
+      entry.handle.reset();
+    }
   }
   if (s_textureObjectCaches.size() >= kTextureObjectCacheSoftLimit) {
     std::vector<std::pair<u32, u32>> retired;
@@ -2332,6 +2363,20 @@ void shutdown() noexcept {
   clear_copy_texture_cache();
 }
 } // namespace aurora::gx
+
+// Read from another thread without a lock: sizes only, a torn value just makes one log line wrong.
+extern "C" void aurora_texture_memory_report(char* buffer, size_t size) {
+  using namespace aurora::gx;
+  std::snprintf(buffer, size,
+                "live %lld (%lld MB est), texobj %zu, source %zu, content %zu (%zu MB), palette source %zu, "
+                "palette content %zu (%zu MB), tlut %zu, uploads %zu",
+                static_cast<long long>(aurora::gfx::TextureRef::s_liveCount.load(std::memory_order_relaxed)),
+                static_cast<long long>(aurora::gfx::TextureRef::s_liveBytes.load(std::memory_order_relaxed) >> 20),
+                s_textureObjectCaches.size(), s_staticTextureSourceCache.size(), s_staticTextureContentCache.size(),
+                s_contentCacheBytes >> 20, s_staticPaletteTextureSourceCache.size(),
+                s_staticPaletteContentCache.size(), s_paletteContentCacheBytes >> 20, s_tlutObjectCaches.size(),
+                aurora::gfx::g_textureUploads.size());
+}
 
 static wgpu::AddressMode wgpu_address_mode(GXTexWrapMode mode) {
   switch (mode) {

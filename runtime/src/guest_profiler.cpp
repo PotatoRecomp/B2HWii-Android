@@ -33,6 +33,7 @@
 #include <dlfcn.h>
 #include <link.h>
 #include <csignal>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <ucontext.h>
@@ -532,6 +533,12 @@ void ThreadCpuMs(double* user, double* kernel) {
         };
         *user = ms(userTime);
         *kernel = ms(kernelTime);
+    }
+#elif defined(__linux__)
+    rusage usage{};
+    if (getrusage(RUSAGE_THREAD, &usage) == 0) {
+        *user = usage.ru_utime.tv_sec * 1e3 + usage.ru_utime.tv_usec / 1e3;
+        *kernel = usage.ru_stime.tv_sec * 1e3 + usage.ru_stime.tv_usec / 1e3;
     }
 #endif
 }

@@ -17,7 +17,8 @@ int FileSelectRawCursor() { return -1; }
 bool HasProfile(uint16_t) { return false; }
 std::vector<uint16_t> Profiles() { return {}; }
 
-uint16_t CurrentScene() { return 0; }
+// Not 0: that is NSMBW's strap screen, where the overlay hides the touch controller for taps.
+uint16_t CurrentScene() { return 0xFFFF; }
 bool PauseMenuOpen() { return false; }
 int PauseMenuKind() { return 0; }
 uint32_t CourseSelectMenuObject() { return 0; }

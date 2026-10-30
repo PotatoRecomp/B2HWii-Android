@@ -7,6 +7,7 @@
 #include "controller_button_names.h"
 #include "controller_mapping_wizard.h"
 #include "input_bindings.h"
+#include "keybinds.h"
 #include "game_graphics_options.h"
 #include "music_attenuation.h"
 #include "runtime_config.h"
@@ -480,7 +481,7 @@ const char* KeyBindingName(int scancode) {
     }
 }
 
-enum class RebindKind { KeyboardButton, KeyboardAxis, Controller, MuteHotkey };
+enum class RebindKind { KeyboardButton, KeyboardAxis, Controller, MuteHotkey, ClassicKey };
 struct RebindState {
     bool active = false;
     bool openPopup = false;
@@ -496,6 +497,7 @@ struct RebindState {
     std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{};
     std::array<bool, SDL_GAMEPAD_AXIS_COUNT> axesReady{};
 } g_rebind;
+std::string g_classicKeyNotice;  // says which action a key just left
 
 void BeginRebind(RebindKind kind, uint16_t target, const char* label, bool secondary = false) {
     g_rebind = {};
@@ -551,6 +553,14 @@ void CompleteRebind(uint32_t value) {
         RuntimeConfigFile::SetMuteHotkey(g_muteHotkey);
         g_rebind.active = false;
         return;
+    } else if (capture.kind == RebindKind::ClassicKey) {
+        const int scancode = static_cast<int32_t>(value) == PAD_KEY_INVALID ? 0 : static_cast<int>(value);
+        const int moved = Keybinds::Bind(capture.target, capture.secondary ? 1 : 0, scancode);
+        g_classicKeyNotice = moved < 0 ? std::string()
+                                       : std::string(SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode))) +
+                                             " moved from " + Keybinds::ActionName(moved) + " to " + capture.label + ".";
+        g_rebind.active = false;
+        return;
     } else if (capture.kind == RebindKind::KeyboardButton) {
         PADSetKeyButtonBinding(capture.port, {static_cast<int32_t>(value), capture.target});
     } else {
@@ -573,11 +583,13 @@ void DrawRebindPrompt() {
         ImGui::Text("Rebind: %s", g_rebind.label.c_str());
         ImGui::TextUnformatted(g_rebind.kind == RebindKind::Controller
             ? "Press a controller button, pull a trigger, or move a stick."
-            : g_rebind.kind == RebindKind::MuteHotkey
+            : g_rebind.kind == RebindKind::MuteHotkey || g_rebind.kind == RebindKind::ClassicKey
                 ? "Press a keyboard key."
                 : "Press a keyboard key or click a mouse button.");
         ImGui::TextUnformatted("Release any held input first. Backspace or Delete clears the mapping.");
-        ImGui::TextUnformatted("Escape can be bound. F10 is reserved for settings.");
+        ImGui::TextUnformatted(g_rebind.kind == RebindKind::ClassicKey
+            ? "Escape can be bound. F10, F11 and the mute key are reserved."
+            : "Escape can be bound. F10 is reserved for settings.");
         const float remaining = std::chrono::duration<float>(g_rebind.deadline - Clock::now()).count();
         ImGui::Text("Unmapped in %d seconds", std::max(0, static_cast<int>(std::ceil(remaining))));
         const bool clear = ImGui::Button("Clear mapping");
@@ -592,12 +604,15 @@ void DrawRebindPrompt() {
             int count = 0;
             const bool* keys = SDL_GetKeyboardState(&count);
             for (int i = 1; i < std::min(count, static_cast<int>(SDL_SCANCODE_COUNT)) && g_rebind.active; ++i) {
-                if (keys[i] && !g_rebind.keys[i] && i != SDL_SCANCODE_F10) CompleteRebind(i);
+                const bool reserved = i == SDL_SCANCODE_F10 ||
+                    (g_rebind.kind == RebindKind::ClassicKey && (i == SDL_SCANCODE_F11 || i == g_muteHotkey));
+                if (keys[i] && !g_rebind.keys[i] && !reserved) CompleteRebind(i);
                 g_rebind.keys[i] = keys[i];
             }
             const uint32_t mouse = SDL_GetMouseState(nullptr, nullptr);
             for (int i = 1; i <= 5 && g_rebind.active; ++i)
                 if (!overControl && g_rebind.kind != RebindKind::MuteHotkey &&
+                    g_rebind.kind != RebindKind::ClassicKey &&
                     (mouse & ~g_rebind.mouse & (1u << (i - 1))) != 0) CompleteRebind(static_cast<uint32_t>(-i - 1));
             g_rebind.mouse = mouse;
         } else if (g_rebind.active && SDL_GetKeyboardFocus() != nullptr && g_rebind.kind == RebindKind::Controller) {
@@ -686,6 +701,66 @@ bool DrawKeyboardSettings(uint32_t port) {
         ImGui::PopID();
     }
     return true;
+}
+
+// The keyboard's Classic Controller for player 1 (virtual_remote), which stands aside while a
+// port has "Keyboard and mouse" on.
+void DrawClassicKeyboardSettings() {
+    ImGui::SeparatorText("Keyboard (Classic Controller)");
+    bool keyboardOnAPort = false;
+    for (uint32_t port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
+        uint32_t count = 0;
+        keyboardOnAPort = keyboardOnAPort || PADGetKeyButtonBindings(port, &count) != nullptr;
+    }
+    if (keyboardOnAPort) {
+        ImGui::TextDisabled("Keyboard and mouse is on, so these keys apply once it is off.");
+        if (ImGui::Button("Turn off Keyboard and mouse")) {
+            for (uint32_t port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
+                PADSetKeyboardActive(port, false);
+            }
+            PADSerializeMappings();
+        }
+    }
+    ImGui::TextDisabled("Click a binding, then press a key. No key for 10 seconds clears it.");
+    if (ImGui::Button("Reset to defaults")) {
+        Keybinds::ResetDefaults();
+        g_classicKeyNotice.clear();
+    }
+    // Always one line, so the rows below stay where they are when a notice comes and goes.
+    ImGui::TextDisabled("%s", g_classicKeyNotice.empty() ? " " : g_classicKeyNotice.c_str());
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float bindingWidth = ImGui::CalcTextSize("Keypad Enter").x + style.FramePadding.x * 2.0f;
+    const float orWidth = ImGui::CalcTextSize("or").x + style.ItemSpacing.x * 2.0f;
+    const float labelX = ImGui::GetCursorPosX() + bindingWidth * 2.0f + orWidth + style.ItemInnerSpacing.x;
+    for (int action = 0; action < Keybinds::kActionCount; ++action) {
+        const char* name = Keybinds::ActionName(action);
+        const auto target = static_cast<uint16_t>(action);
+        ImGui::PushID(action + 3000);
+        const std::string primary = Keybinds::KeyName(action, 0) + "##primary";
+        if (ImGui::Button(primary.c_str(), ImVec2(bindingWidth, 0.0f))) {
+            BeginRebind(RebindKind::ClassicKey, target, name);
+        }
+        ImGui::SameLine();
+        const std::string secondKey = Keybinds::KeyName(action, 1);
+        if (secondKey == "None") {
+            if (ImGui::SmallButton("+")) {
+                BeginRebind(RebindKind::ClassicKey, target, name, true);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Add a second key; pressing either one works");
+            }
+        } else {
+            ImGui::TextUnformatted("or");
+            ImGui::SameLine();
+            const std::string alternate = secondKey + "##alt";
+            if (ImGui::Button(alternate.c_str(), ImVec2(bindingWidth, 0.0f))) {
+                BeginRebind(RebindKind::ClassicKey, target, name, true);
+            }
+        }
+        ImGui::SameLine(labelX);
+        ImGui::TextUnformatted(name);
+        ImGui::PopID();
+    }
 }
 
 // Controller settings menu: port selection, controller assignment and button mapping.
@@ -794,7 +869,11 @@ void DrawControllerSettings() {
 
     ImGui::Separator();
     const uint32_t selectedGamePort = static_cast<uint32_t>(g_controllerPort);
-    if (DrawKeyboardSettings(selectedGamePort)) {
+    const bool keyboardOnPort = DrawKeyboardSettings(selectedGamePort);
+    if (selectedGamePort == 0) {
+        DrawClassicKeyboardSettings();
+    }
+    if (keyboardOnPort) {
         return;
     }
     ImGui::Separator();
@@ -1276,13 +1355,19 @@ void DrawFrameGraph() {
 
 // The game's side of the performance overlay over half a second: its own frames (the presented
 // count above includes interpolated ones), the emulation thread's busy time a frame (everything but
-// the scheduler's idle wait), of which GX command processing, and draws.
+// the scheduler's idle wait and waiting for the renderer), of which GX command processing, and draws.
+// The renderer's side: the frame worker's time a cycle, of which preparing the next frame (a GPU that
+// is behind holds it there), and how long a game frame waited for it. Together they say which of
+// game thread, renderer thread and GPU limits a slow device.
 struct GameFrameStats {
     float fps = -1.0f;
     float busyMs = 0.0f;
     float gxMs = 0.0f;
     float loadPercent = 0.0f;
     uint32_t draws = 0;
+    float renderMs = 0.0f;
+    float prepareMs = 0.0f;
+    float waitMs = 0.0f;
 };
 
 const GameFrameStats& SampleGameFrameStats() {
@@ -1291,6 +1376,7 @@ const GameFrameStats& SampleGameFrameStats() {
     static Clock::time_point s_last{};
     static uint32_t s_lastFrames = 0;
     static uint64_t s_lastIdle = 0, s_lastGx = 0, s_lastDraws = 0;
+    static AuroraFrameWorkerTotals s_lastWorker{};
     const Clock::time_point now = Clock::now();
     if (s_last != Clock::time_point{} && now - s_last < std::chrono::milliseconds(500)) {
         return s_stats;
@@ -1299,21 +1385,30 @@ const GameFrameStats& SampleGameFrameStats() {
     const uint64_t idle = VI_HLE_IdleNanosTotal();
     const uint64_t gx = AuroraGxProcessNanosTotal();
     const uint64_t draws = AuroraGxDrawsTotal();
+    AuroraFrameWorkerTotals worker{};
+    aurora_get_frame_worker_totals(&worker);
     if (s_last != Clock::time_point{}) {
         const double wallNs = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(now - s_last).count());
-        const double busyNs = std::max(0.0, wallNs - static_cast<double>(idle - s_lastIdle));
+        const double waitNs = static_cast<double>(worker.producerWaitNanos - s_lastWorker.producerWaitNanos);
+        const double busyNs = std::max(0.0, wallNs - static_cast<double>(idle - s_lastIdle) - waitNs);
         const uint32_t n = frames - s_lastFrames;
+        const uint64_t cycles = worker.cycles - s_lastWorker.cycles;
         s_stats.fps = static_cast<float>(n * 1e9 / wallNs);
         s_stats.loadPercent = static_cast<float>(busyNs * 100.0 / wallNs);
         s_stats.busyMs = n ? static_cast<float>(busyNs / 1e6 / n) : 0.0f;
         s_stats.gxMs = n ? static_cast<float>((gx - s_lastGx) / 1e6 / n) : 0.0f;
         s_stats.draws = n ? static_cast<uint32_t>((draws - s_lastDraws) / n) : 0;
+        s_stats.waitMs = n ? static_cast<float>(waitNs / 1e6 / n) : 0.0f;
+        s_stats.renderMs = cycles ? static_cast<float>((worker.busyNanos - s_lastWorker.busyNanos) / 1e6 / cycles) : 0.0f;
+        s_stats.prepareMs =
+            cycles ? static_cast<float>((worker.prepareNanos - s_lastWorker.prepareNanos) / 1e6 / cycles) : 0.0f;
     }
     s_last = now;
     s_lastFrames = frames;
     s_lastIdle = idle;
     s_lastGx = gx;
     s_lastDraws = draws;
+    s_lastWorker = worker;
     return s_stats;
 }
 
@@ -1331,9 +1426,11 @@ void DrawPerformanceStats() {
         ImGui::SameLine();
         ImGui::Text("| CPU %.1f ms (%.0f%%) | GX %.1f ms", game.busyMs, game.loadPercent, game.gxMs);
         ImGui::Text("Draws %u", game.draws);
+        ImGui::Text("Render %.1f ms (prepare %.1f) | wait %.1f ms | shaders %u", game.renderMs, game.prepareMs,
+                    game.waitMs, aurora_get_queued_pipeline_count());
     }
 
-    const SystemStats& sys = SampleSystemStats();
+    const SystemStats sys = SampleSystemStats();
     int at = std::snprintf(line, sizeof(line), "CPU");
     if (sys.processCpuPercent >= 0.0f) {
         at += std::snprintf(line + at, sizeof(line) - at, " %.0f%% of %d cores", sys.processCpuPercent, sys.cores);
@@ -1867,6 +1964,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             } else if (g_topBarVisible) {
                 SetTopBarVisible(false);
             }
+            Keybinds::SuppressUntilReleased();
             ApplyInputBlockState();
         }
         if (IsMouseActivity(ev->sdl)) {

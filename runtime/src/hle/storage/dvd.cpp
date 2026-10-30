@@ -227,7 +227,9 @@ bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::v
 void StartReadCachePreload() {
 #if defined(__ANDROID__)
     const uint64_t ram = static_cast<uint64_t>(sysconf(_SC_PHYS_PAGES)) * static_cast<uint64_t>(sysconf(_SC_PAGE_SIZE));
-    if (ram < (3ull << 30) || std::getenv("BASARA_NO_DVD_PRELOAD") != nullptr) {
+    // The preload holds ~0.9 GiB for the whole session: on a 4 GB phone (3.8 GiB reported) that left
+    // under 0.1 GiB free in battle and lmkd killed the game. Only 6 GB phones and up keep it.
+    if (ram < (5ull << 30) || std::getenv("BASARA_NO_DVD_PRELOAD") != nullptr) {
         RT_LOGF(RT_TAG_DVD, "read cache: off (%llu MiB of RAM)\n", static_cast<unsigned long long>(ram >> 20));
         return;
     }

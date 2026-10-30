@@ -59,7 +59,16 @@ if ($Mode -in 'run', 'cycle') {
     Get-Process WiiCompiled -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } |
         ForEach-Object { Stop-Process -Id $_.Id -Force }
 
+    # Keep the logs bounded: the live log rolls over past 32 MB, and only the newest sessions stay.
     $live = Join-Path $logs 'console-live.txt'
+    if ((Test-Path $live) -and (Get-Item $live).Length -gt 32MB) {
+        # tools/b-logwindow.ps1 may hold it open, which blocks a rename but not an in-place truncate.
+        try { Move-Item $live (Join-Path $logs 'console-live.prev.txt') -Force -ErrorAction Stop }
+        catch { try { Clear-Content $live -ErrorAction Stop } catch { } }
+    }
+    Get-ChildItem (Join-Path $bd 'UserData\Logs') -Directory -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 |
+        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     try { Add-Content $live "===== RUN WIN $(Get-Date -Format HH:mm:ss) =====" } catch { }
     $logRoot = Join-Path $bd 'UserData\Logs'
     $before = @(Get-ChildItem $logRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object FullName)

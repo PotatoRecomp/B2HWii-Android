@@ -5,9 +5,26 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
 #include <SDL3/SDL_init.h>
+#include <SDL3/SDL_timer.h>
+
+namespace {
+
+// BASARA_AUDIO_STRETCH=0: push straight into SDL's queue (the old path, no time stretching).
+bool StretchWanted() {
+    const char* value = std::getenv("BASARA_AUDIO_STRETCH");
+    return value == nullptr || std::strcmp(value, "0") != 0;
+}
+
+// No pull from the device for this long while the game is pushing audio: the output was lost (on
+// Android AAudio reports AAUDIO_ERROR_DISCONNECTED on a route change and may stay silent).
+constexpr uint64_t kStalledPullMs = 1500;
+constexpr uint64_t kReopenIntervalMs = 3000;
+
+} // namespace
 
 AudioBackend& AudioBackend::Instance() {
     static AudioBackend instance;
@@ -36,6 +53,44 @@ void AudioBackend::SetMuted(bool muted) {
     ApplyGainLocked();
 }
 
+void SDLCALL AudioBackend::PullCallback(void* userdata, SDL_AudioStream* stream, int additionalAmount, int) {
+    if (additionalAmount <= 0) {
+        return;
+    }
+    auto* self = static_cast<AudioBackend*>(userdata);
+    const size_t frames = (static_cast<size_t>(additionalAmount) + 3) / 4;
+    self->m_pullBuffer.resize(frames * 2);
+    {
+        std::lock_guard<std::mutex> lock(self->m_stretchMutex);
+        self->m_stretcher.Pull(self->m_pullBuffer.data(), frames);
+    }
+    self->m_lastPullMs.store(SDL_GetTicks(), std::memory_order_relaxed);
+    SDL_PutAudioStreamData(stream, self->m_pullBuffer.data(), static_cast<int>(frames * 4));
+}
+
+SDL_AudioStream* AudioBackend::OpenStreamLocked(const SDL_AudioSpec& spec) {
+    SDL_AudioStream* stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
+                                                        m_stretch ? &AudioBackend::PullCallback : nullptr, this);
+    if (!stream) {
+        RT_LOG(RT_TAG_AUDIO) << "SDL_OpenAudioDeviceStream failed: " << SDL_GetError() << std::endl;
+        return nullptr;
+    }
+
+    if (!SDL_ResumeAudioStreamDevice(stream)) {
+        RT_LOG(RT_TAG_AUDIO) << "SDL_ResumeAudioStreamDevice failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyAudioStream(stream);
+        return nullptr;
+    }
+
+    if (!SDL_SetAudioStreamGain(stream, EffectiveGainLocked())) {
+        RT_LOG(RT_TAG_AUDIO) << "SDL_SetAudioStreamGain failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyAudioStream(stream);
+        return nullptr;
+    }
+    m_lastPullMs.store(SDL_GetTicks(), std::memory_order_relaxed);
+    return stream;
+}
+
 bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channels) {
     if (m_initialized && m_sampleRate == sampleRate && m_channels == channels) {
         return true;
@@ -56,21 +111,16 @@ bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channel
     spec.channels = static_cast<int>(channels);
     spec.freq = static_cast<int>(sampleRate);
 
-    SDL_AudioStream* stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    m_stretch = channels == 2 && StretchWanted();
+    if (m_stretch) {
+        std::lock_guard<std::mutex> lock(m_stretchMutex);
+        m_stretcher.Reset(sampleRate);
+    }
+    RT_LOGF(RT_TAG_AUDIO, "output %u Hz, %s\n", sampleRate,
+            m_stretch ? "time stretching on" : "time stretching off (BASARA_AUDIO_STRETCH=0)");
+
+    SDL_AudioStream* stream = OpenStreamLocked(spec);
     if (!stream) {
-        RT_LOG(RT_TAG_AUDIO) << "SDL_OpenAudioDeviceStream failed: " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    if (!SDL_ResumeAudioStreamDevice(stream)) {
-        RT_LOG(RT_TAG_AUDIO) << "SDL_ResumeAudioStreamDevice failed: " << SDL_GetError() << std::endl;
-        SDL_DestroyAudioStream(stream);
-        return false;
-    }
-
-    if (!SDL_SetAudioStreamGain(stream, EffectiveGainLocked())) {
-        RT_LOG(RT_TAG_AUDIO) << "SDL_SetAudioStreamGain failed: " << SDL_GetError() << std::endl;
-        SDL_DestroyAudioStream(stream);
         return false;
     }
 
@@ -104,7 +154,9 @@ void AudioBackend::Shutdown() {
 }
 
 uint32_t AudioBackend::QueueLimitBytesLocked() const {
-    constexpr uint32_t queueMs = 120;
+    // A cap, not a target: the queue normally sits near 70 ms. A slow phone (Helio G99 in a
+    // crowded battle) hands over audio in bursts, and a 120 ms cap dropped dozens of blocks a second.
+    constexpr uint32_t queueMs = 200;
 
     const uint64_t bytesPerSecond = static_cast<uint64_t>(m_spec.freq) *
                                     static_cast<uint64_t>(m_spec.channels) *
@@ -120,8 +172,12 @@ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
     if (queued < 0) {
         return true;
     }
+    ++m_statPushes;
+    m_statEmpty += queued == 0 ? 1 : 0;
+    m_statMinQueued = m_statMinQueued < 0 ? queued : std::min(m_statMinQueued, queued);
     const uint32_t maxQueued = QueueLimitBytesLocked();
     if (static_cast<uint64_t>(queued) + static_cast<uint64_t>(std::max(incomingBytes, 0)) > maxQueued) {
+        ++m_statDropped;
         // Match Dolphin's FIFO overflow behavior: preserve the continuous audio
         // already queued and discard the new block.  Clearing SDL's entire
         // stream creates an audible discontinuity (the severe crackle seen when
@@ -134,7 +190,78 @@ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
         }
         return false;
     }
+    m_statPushedBytes += static_cast<uint64_t>(std::max(incomingBytes, 0));
     return true;
+}
+
+void AudioBackend::ReopenIfStalledLocked() {
+    const uint64_t now = SDL_GetTicks();
+    // The audio thread can store a pull time later than `now`: never subtract past zero.
+    const uint64_t lastPull = m_lastPullMs.load(std::memory_order_relaxed);
+    if (now <= lastPull || now - lastPull < kStalledPullMs || now - m_lastReopenMs < kReopenIntervalMs) {
+        return;
+    }
+    m_lastReopenMs = now;
+    ++m_statReopens;
+    RT_LOGF(RT_TAG_AUDIO, "output stalled (no pull for %llu ms): reopening the audio device\n",
+            static_cast<unsigned long long>(now - lastPull));
+    if (m_stream) {
+        SDL_DestroyAudioStream(m_stream);
+    }
+    m_stream = OpenStreamLocked(m_spec);
+}
+
+bool AudioBackend::PushFramesLocked(const int16_t* frames, size_t frameCount) {
+    const int lenBytes = static_cast<int>(frameCount * 2 * sizeof(int16_t));
+    if (m_stretch) {
+        ReopenIfStalledLocked();
+        std::lock_guard<std::mutex> lock(m_stretchMutex);
+        m_stretcher.Push(frames, frameCount);
+        ++m_statPushes;
+        m_statPushedBytes += static_cast<uint64_t>(lenBytes);
+        return true;
+    }
+    if (!QueueHasCapacityLocked(lenBytes)) {
+        return true;
+    }
+    if (!SDL_PutAudioStreamData(m_stream, frames, lenBytes)) {
+        RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
+        return false;
+    }
+    return true;
+}
+
+AudioBackend::Stats AudioBackend::TakeStats() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    Stats stats;
+    const double bytesPerMs = m_spec.freq * m_spec.channels * sizeof(int16_t) / 1000.0;
+    stats.stretching = m_stretch;
+    stats.pushes = m_statPushes;
+    stats.reopens = m_statReopens;
+    if (m_stretch) {
+        std::lock_guard<std::mutex> stretchLock(m_stretchMutex);
+        const AudioStretcher::Stats s = m_stretcher.TakeStats();
+        stats.empty = s.gaps;
+        stats.dropped = s.skips;
+        stats.minQueuedMs = s.minBacklogMs;
+        stats.playedMs = s.playedMs;
+        stats.minTempo = s.minTempo;
+        stats.maxTempo = s.maxTempo;
+        if (bytesPerMs > 0) {
+            stats.pushedMs = static_cast<float>(m_statPushedBytes / bytesPerMs);
+        }
+    } else {
+        stats.empty = m_statEmpty;
+        stats.dropped = m_statDropped;
+        if (bytesPerMs > 0) {
+            stats.minQueuedMs = m_statMinQueued < 0 ? -1.0f : static_cast<float>(m_statMinQueued / bytesPerMs);
+            stats.pushedMs = static_cast<float>(m_statPushedBytes / bytesPerMs);
+        }
+    }
+    m_statPushes = m_statEmpty = m_statDropped = m_statReopens = 0;
+    m_statMinQueued = -1;
+    m_statPushedBytes = 0;
+    return stats;
 }
 
 bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
@@ -143,7 +270,7 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_initialized || !m_stream) {
+    if (!m_initialized) {
         return false;
     }
 
@@ -168,16 +295,7 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
         m_convertBuffer[frame * 2 + 1] = static_cast<int16_t>(right);
     }
 
-    const int lenBytes = static_cast<int>(frameCount * 2 * sizeof(int16_t));
-    if (!QueueHasCapacityLocked(lenBytes)) {
-        return true;
-    }
-    if (!SDL_PutAudioStreamData(m_stream, m_convertBuffer.data(), lenBytes)) {
-        RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    return true;
+    return PushFramesLocked(m_convertBuffer.data(), frameCount);
 }
 
 bool AudioBackend::PushSamplesLE16(const int16_t* samples, size_t sampleCount) {
@@ -186,18 +304,9 @@ bool AudioBackend::PushSamplesLE16(const int16_t* samples, size_t sampleCount) {
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_initialized || !m_stream) {
+    if (!m_initialized) {
         return false;
     }
 
-    const int lenBytes = static_cast<int>(sampleCount * sizeof(int16_t));
-    if (!QueueHasCapacityLocked(lenBytes)) {
-        return true;
-    }
-    if (!SDL_PutAudioStreamData(m_stream, samples, lenBytes)) {
-        RT_LOG(RT_TAG_AUDIO) << "SDL_PutAudioStreamData failed: " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    return true;
+    return PushFramesLocked(samples, sampleCount / 2);
 }

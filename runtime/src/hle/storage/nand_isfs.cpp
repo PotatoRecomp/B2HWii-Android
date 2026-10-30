@@ -464,8 +464,11 @@ extern "C" int32_t NAND_IOS_Close_HLE(uint32_t fd) {
         return ISFS_EINVAL;
     }
     
-    CloseFd(fd);
-    return ISFS_OK;
+    // NANDOpen's write handles are shadow copies, and the game closes them through here: publish
+    // the shadow, or the save is lost and the original file stays as it was.
+    return CommitAndCloseFd("IOS_Close", static_cast<int32_t>(fd), /*missingFdIsError=*/false) == NAND_RESULT_OK
+               ? ISFS_OK
+               : ISFS_EIO;
 }
 PPC_NATIVE_OVERRIDE(803A1AB4, NAND_IOS_Close_HLE, int32_t, (uint32_t fd), (fd));
 
@@ -491,9 +494,7 @@ extern "C" int32_t NAND_IOS_Read_HLE(uint32_t fd, uint32_t bufferPtr, uint32_t l
     
     return static_cast<int32_t>(bytesRead);
 }
-#if 0
-PPC_NATIVE_OVERRIDE(80225010, NAND_IOS_Read_HLE, int32_t, (uint32_t fd, uint32_t bufferPtr, uint32_t length), (fd, bufferPtr, length));
-#endif
+PPC_NATIVE_OVERRIDE(803A1C5C, NAND_IOS_Read_HLE, int32_t, (uint32_t fd, uint32_t bufferPtr, uint32_t length), (fd, bufferPtr, length));
 
 extern "C" int32_t NAND_IOS_Write_HLE(uint32_t fd, uint32_t bufferPtr, uint32_t length) {
     auto* handle = GetHandle(fd);
@@ -518,9 +519,7 @@ extern "C" int32_t NAND_IOS_Write_HLE(uint32_t fd, uint32_t bufferPtr, uint32_t 
     
     return static_cast<int32_t>(bytesWritten);
 }
-#if 0
-PPC_NATIVE_OVERRIDE(80225220, NAND_IOS_Write_HLE, int32_t, (uint32_t fd, uint32_t bufferPtr, uint32_t length), (fd, bufferPtr, length));
-#endif
+PPC_NATIVE_OVERRIDE(803A1E64, NAND_IOS_Write_HLE, int32_t, (uint32_t fd, uint32_t bufferPtr, uint32_t length), (fd, bufferPtr, length));
 
 extern "C" int32_t NAND_IOS_Seek_HLE(uint32_t fd, int32_t offset, int32_t whence) {
     auto* handle = GetHandle(fd);

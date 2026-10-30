@@ -47,6 +47,19 @@ typedef struct {
 const AuroraStats* aurora_get_stats();
 void aurora_get_present_timing(AuroraPresentTiming* timing);
 
+// Frame worker totals since start: its cycles, its own time (seal, encode, submit, prepare), of which
+// preparing the next frame (where a GPU that has fallen behind holds it), and the time the game
+// thread spent waiting for it.
+typedef struct {
+  uint64_t cycles;
+  uint64_t busyNanos;
+  uint64_t prepareNanos;
+  uint64_t producerWaitNanos;
+} AuroraFrameWorkerTotals;
+void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals);
+// One line: live host textures and the size of each texture cache.
+void aurora_texture_memory_report(char* buffer, size_t size);
+
 // Interpolation health: the per-frame fields describe the last sealed frame, the counters
 // accumulate since it was configured. This answers "output FPS dropped but the game held 60".
 typedef struct {

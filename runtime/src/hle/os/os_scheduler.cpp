@@ -269,7 +269,8 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         OS__SetCurrentContext_801a1e70(kIdleThreadContextAddr);
         
         const bool timeIdle = VI_HLE_IdleTimingEnabled();
-        const auto idleStart = timeIdle ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        // Always timed: the CPU boost hint reports each frame's work without these waits.
+        const auto idleStart = std::chrono::steady_clock::now();
         int idleEnder = 5;
         while (true) {
             // Enable interrupts and idle until something becomes runnable.
@@ -332,9 +333,11 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
             }
         }
 
+        const uint64_t idleNanos = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - idleStart).count());
+        VI_HLE_AddSchedulerIdle(idleNanos);
         if (timeIdle) {
-            VI_HLE_NoteSchedulerIdle(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - idleStart).count()), idleEnder, runningContext);
+            VI_HLE_NoteSchedulerIdle(idleNanos, idleEnder, runningContext);
         }
         OS__ClearContext_801a2098(kIdleThreadContextAddr);
     }

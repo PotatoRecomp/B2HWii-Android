@@ -344,7 +344,8 @@ bool ValidateTlutData(uint32_t objAddr, const TlutObjMeta& meta);
 TexObjMeta& GetTexObjMeta(uint32_t addr);
 TexObjMeta ExtractTexObjMetaFromGuest(uint32_t addr);
 bool TryGetOrExtractTexObjMeta(uint32_t addr, TexObjMeta& outMeta);
-TlutObjMeta& GetTlutObjMeta(uint32_t addr);
+// GXInitTlutObj's metadata write (call with g_tlutObjMutex held); keeps the flush index in step.
+TlutObjMeta& SetTlutObjMeta(uint32_t addr, uint32_t dataAddr, uint32_t format, uint16_t entries);
 GXTexObj* GetHostTexObj(uint32_t addr);
 GXTexObj* TryGetHostTexObj(uint32_t addr);
 GXTexObj* CreateHostTexObj(uint32_t addr);

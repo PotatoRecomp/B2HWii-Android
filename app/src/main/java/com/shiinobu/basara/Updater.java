@@ -7,6 +7,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Bundle;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -39,22 +40,52 @@ final class Updater {
         String apkUrl;
         long size;
         String sha256;    // lowercase hex, or null when GitHub lists none
+
+        Bundle toBundle() {
+            final Bundle bundle = new Bundle();
+            bundle.putString("version", version);
+            bundle.putString("apkUrl", apkUrl);
+            bundle.putLong("size", size);
+            bundle.putString("sha256", sha256);
+            return bundle;
+        }
+
+        static Release from(Bundle bundle) {
+            if (bundle == null || bundle.getString("apkUrl") == null) {
+                return null;
+            }
+            final Release release = new Release();
+            release.version = bundle.getString("version");
+            release.apkUrl = bundle.getString("apkUrl");
+            release.size = bundle.getLong("size", -1);
+            release.sha256 = bundle.getString("sha256");
+            return release;
+        }
     }
 
     interface Progress { void update(long done, long total); }
 
     private Updater() {}
 
-    /** The latest release, or null when it has no Android download. Network: call off the UI thread. */
+    /**
+     * The latest release (apkUrl null when it has no Android download), or null when nothing is
+     * released yet. Network: call off the UI thread.
+     */
     static Release latest() throws IOException {
-        final HttpURLConnection connection = open(LATEST_RELEASE);
+        final HttpURLConnection connection = open(releaseUrl());
         connection.setRequestProperty("Accept", "application/vnd.github+json");
         try {
-            if (connection.getResponseCode() == HttpURLConnection.HTTP_NOT_FOUND) {
+            final int code;
+            try {
+                code = connection.getResponseCode();
+            } catch (IOException e) {
+                throw new IOException("couldn't reach GitHub. Check the internet connection and try again.");
+            }
+            if (code == HttpURLConnection.HTTP_NOT_FOUND) {
                 return null;  // nothing released yet
             }
-            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                throw new IOException("GitHub answered " + connection.getResponseCode());
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw new IOException("GitHub answered " + code);
             }
             final JSONObject json = new JSONObject(readAll(connection.getInputStream()));
             final Release release = new Release();
@@ -70,7 +101,7 @@ final class Updater {
                     return release;
                 }
             }
-            return null;
+            return release;  // apkUrl null: no Android download
         } catch (JSONException e) {
             throw new IOException("unreadable answer from GitHub: " + e.getMessage());
         } finally {
@@ -168,7 +199,30 @@ final class Updater {
         }
     }
 
-    private static HttpURLConnection open(String url) throws IOException {
+    /**
+     * Testing: `adb shell setprop debug.basara.update_url http://localhost:PORT/latest.json` (with
+     * `adb reverse`) reads a stand-in release from a local server. The installer still accepts only
+     * an APK signed with this app's key.
+     */
+    private static String releaseUrl() {
+        return debugProperty("debug.basara.update_url", LATEST_RELEASE);
+    }
+
+    /** A `debug.basara.*` system property, or `fallback` when it isn't set. */
+    static String debugProperty(String name, String fallback) {
+        try {
+            final String value = (String) Class.forName("android.os.SystemProperties")
+                    .getMethod("get", String.class).invoke(null, name);
+            if (value != null && !value.isEmpty()) {
+                return value;
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            // No override.
+        }
+        return fallback;
+    }
+
+    static HttpURLConnection open(String url) throws IOException {
         final HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(TIMEOUT_MS);
         connection.setReadTimeout(TIMEOUT_MS);
@@ -177,7 +231,7 @@ final class Updater {
         return connection;
     }
 
-    private static String readAll(InputStream in) throws IOException {
+    static String readAll(InputStream in) throws IOException {
         try (InputStream stream = in) {
             final ByteArrayOutputStream out = new ByteArrayOutputStream();
             final byte[] buffer = new byte[8192];

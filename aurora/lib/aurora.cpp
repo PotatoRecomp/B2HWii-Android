@@ -259,6 +259,12 @@ struct FrameWorkerState {
 
 FrameWorkerState g_frameWorker;
 
+// aurora_get_frame_worker_totals (the performance overlay).
+std::atomic<uint64_t> g_workerCycles{0};
+std::atomic<uint64_t> g_workerBusyNanos{0};
+std::atomic<uint64_t> g_workerPrepareNanos{0};
+std::atomic<uint64_t> g_producerWaitNanos{0};
+
 bool frame_worker_requested() noexcept {
 #ifdef AURORA_ENABLE_GX
   static const bool enabled = [] {
@@ -372,8 +378,15 @@ bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::micr
 
 void wait_for_frame_worker_private(FrameWorkerPhase phase) noexcept {
   constexpr auto kWaitServiceInterval = std::chrono::milliseconds(1);
+  if (frame_worker_phase_reached(phase)) {
+    return;
+  }
+  const auto started = std::chrono::steady_clock::now();
   while (!wait_for_frame_worker_private_for(phase, kWaitServiceInterval)) {
   }
+  g_producerWaitNanos.fetch_add(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count(),
+      std::memory_order_relaxed);
 }
 
 bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::microseconds timeout) noexcept {
@@ -1863,6 +1876,10 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
     const auto prepareEnd = WorkerClock::now();
     const auto msOf = [](WorkerClock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
     const double busy = msOf(published - cycleStart) + msOf(prepareEnd - prepareStart);
+    g_workerBusyNanos.fetch_add(static_cast<uint64_t>(busy * 1e6), std::memory_order_relaxed);
+    g_workerPrepareNanos.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(prepareEnd - prepareStart).count(),
+        std::memory_order_relaxed);
     static WorkerClock::time_point s_window{};
     static int s_logged = 0;
     if (prepareEnd - s_window > std::chrono::minutes(1)) {
@@ -1890,6 +1907,7 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
   if (overlapEncode) {
     // Mutex-free: the producer drains and records the next frame in parallel, taking the renderer
     // mutex per drain, and this phase never takes it.
+    const auto overlapStart = WorkerClock::now();
     presentationJobs = encode_sealed_frame(sealedFrame, ctx);
     publish_presentations(std::move(presentationJobs), ctx.interpolationActive);
     if (imguiNewFrameOwed) {
@@ -1897,6 +1915,9 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
       std::lock_guard gpuLock(g_rendererGpuMutex);
       imgui::new_frame(window::get_window_size());
     }
+    g_workerBusyNanos.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(WorkerClock::now() - overlapStart).count(),
+        std::memory_order_relaxed);
     {
       std::lock_guard lock(g_frameWorker.mutex);
       g_frameWorker.ready.store(true, std::memory_order_release);
@@ -1904,6 +1925,7 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
     g_frameWorker.cv.notify_all();
   }
 
+  g_workerCycles.fetch_add(1, std::memory_order_relaxed);
   record_frame_telemetry();
   return true;
 }
@@ -2060,6 +2082,12 @@ void aurora_set_frame_worker_wait_callback(AuroraFrameWorkerWaitCallback callbac
   aurora::g_frameWorkerWaitCallback.store(callback, std::memory_order_release);
 }
 void aurora_wait_for_frame_worker() { aurora::wait_for_frame_worker(); }
+void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals) {
+  totals->cycles = aurora::g_workerCycles.load(std::memory_order_relaxed);
+  totals->busyNanos = aurora::g_workerBusyNanos.load(std::memory_order_relaxed);
+  totals->prepareNanos = aurora::g_workerPrepareNanos.load(std::memory_order_relaxed);
+  totals->producerWaitNanos = aurora::g_producerWaitNanos.load(std::memory_order_relaxed);
+}
 bool aurora_wait_for_frame_worker_for(uint32_t timeoutMicros) {
   return aurora::wait_for_frame_worker_for(std::chrono::microseconds(timeoutMicros));
 }

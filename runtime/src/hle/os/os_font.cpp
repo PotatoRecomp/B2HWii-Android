@@ -1,4 +1,4 @@
-// NSMBW: system (IPL ROM) font support.
+// System (IPL ROM) font support.
 //
 // NSMBW's dRomFontMgr_c loads the console's ROM font through nw4r::ut::RomFont, which asks the SDK
 // for the font encoding first. OSGetFontEncode reads the VI DTV status register (0xCC00206E) on
@@ -15,7 +15,7 @@
 namespace {
 constexpr uint32_t kOsFontEncodeAnsi = 0;  // OS_FONT_ENCODE_ANSI: NTSC-U / PAL consoles
 constexpr uint32_t kOsFontEncodeSjis = 1;  // OS_FONT_ENCODE_SJIS: Japanese consoles
-uint32_t g_fontEncode = kOsFontEncodeAnsi;  // SMNE01 is a North American game
+uint32_t g_fontEncode = kOsFontEncodeSjis;  // RBSJ08 is a Japanese game
 
 void LogOnce(bool& logged, const char* message)
 {
@@ -26,7 +26,7 @@ void LogOnce(bool& logged, const char* message)
 }
 } // namespace
 
-// OSGetFontEncode (NSMBW 0x801B00A0): the current system-font encoding, ANSI unless the game set one.
+// OSGetFontEncode (NSMBW 0x801B00A0, not hooked): the current system-font encoding, SJIS unless the game set one.
 extern "C" uint32_t OSGetFontEncode_HLE_801b00a0()
 {
     static bool logged = false;

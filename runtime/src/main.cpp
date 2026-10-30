@@ -254,6 +254,19 @@ const std::filesystem::path& GetRunLogDirectory() {
 
         std::error_code ec;
         std::filesystem::create_directories(logRoot, ec);
+#if defined(__ANDROID__)
+        // Android: one Logs/console.log, replaced on every start. Players send this file in, and
+        // a folder per run left them guessing which one to pick. The previous run's folders and
+        // crash reports are cleared so nothing stale sits next to it.
+        for (const auto& entry : std::filesystem::directory_iterator(logRoot, ec)) {
+            std::error_code entryEc;
+            const std::string name = entry.path().filename().string();
+            if (entry.is_directory(entryEc) || name.rfind("crash_", 0) == 0) {
+                std::filesystem::remove_all(entry.path(), entryEc);
+            }
+        }
+        return logRoot;
+#endif
         PruneOldRunLogs(logRoot);
 
 #if defined(_WIN32)
@@ -1446,6 +1459,44 @@ int RuntimeMain(int argc, char** argv) {
             };
             if (property("debug.basara.det") == "1") {
                 setenv("BASARA_DETERMINISTIC", "1", 1);
+            }
+            // The device, for reports from phones nobody here can reach over adb.
+            {
+                std::string cpus;
+                for (int cpu = 0; cpu < 16; ++cpu) {
+                    char path[96];
+                    std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", cpu);
+                    FILE* file = std::fopen(path, "r");
+                    if (file == nullptr) continue;
+                    long khz = 0;
+                    if (std::fscanf(file, "%ld", &khz) == 1) {
+                        cpus += cpus.empty() ? "" : " ";
+                        cpus += std::to_string(cpu) + ":" + std::to_string(khz / 1000);
+                    }
+                    std::fclose(file);
+                }
+                RT_LOG(RT_TAG_RUNTIME) << "device: " << property("ro.product.manufacturer") << " "
+                                       << property("ro.product.model") << ", soc "
+                                       << property("ro.soc.manufacturer") << " " << property("ro.soc.model")
+                                       << " (" << property("ro.board.platform") << "), Android "
+                                       << property("ro.build.version.release") << " (SDK "
+                                       << property("ro.build.version.sdk") << "), cpu max MHz " << cpus
+                                       << std::endl;
+            }
+            // Beta builds log frame timing every two seconds: testers' phones are out of adb's reach,
+            // so their console.log has to carry the whole picture.
+            {
+                char cmdline[128] = {};
+                if (FILE* file = std::fopen("/proc/self/cmdline", "r")) {
+                    std::fread(cmdline, 1, sizeof(cmdline) - 1, file);
+                    std::fclose(file);
+                }
+                // The game runs in "<package>:game".
+                const std::string_view process(cmdline);
+                if (process.find(".beta:") != std::string_view::npos && std::getenv("BASARA_LOG_FPS") == nullptr) {
+                    setenv("BASARA_LOG_FPS", "1", 1);
+                    RT_LOG(RT_TAG_RUNTIME) << "beta build: frame timing log on" << std::endl;
+                }
             }
             for (const auto& [prop, env] : {std::pair{"debug.basara.dethash", "BASARA_DET_HASH"},
                                             std::pair{"debug.basara.detdump", "BASARA_DET_DUMP"},

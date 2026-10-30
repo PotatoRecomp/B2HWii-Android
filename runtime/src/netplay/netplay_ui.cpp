@@ -1026,9 +1026,8 @@ constexpr int kVideoGraph = kVideoFps + 1, kVideoCoins = kVideoFps + 2;
 constexpr int kVideoVSync = kVSyncRow ? kVideoFps + 3 : -1;
 constexpr int kVideoOk = kVideoFps + (kVSyncRow ? 4 : 3);
 constexpr const char* kFullscreenNames[] = {"Off", "Borderless", "Exclusive"};
-constexpr int kKeyRows = 6;
-constexpr int kKeySmartSpin = 1 + Keybinds::kActionCount;  // the Space Smart Spin QoL checkbox
-constexpr int kKeyReset = kKeySmartSpin + 1, kKeyOk = kKeyReset + 1;
+constexpr int kKeyRows = 8, kKeyColumns = 3;
+constexpr int kKeyReset = 1 + Keybinds::kActionCount, kKeyOk = kKeyReset + 1;
 
 struct VideoChoice {
     float scale;
@@ -1341,20 +1340,16 @@ void DrawKeybindsTab(const Canvas& c) {
     const int capturing = Keybinds::Capturing();
     for (int action = 0; action < Keybinds::kActionCount; ++action) {
         const int column = action / kKeyRows, row = action % kKeyRows;
-        const float x0 = column == 0 ? -178.0f : 178.0f;
-        const float y = 126.0f - 40.0f * row;
-        Text(c, Keybinds::ActionName(action), x0 - 168, y, 21, 0);
-        const std::string label = capturing == action ? "Press a key..." : Keybinds::KeyLabel(action);
-        const float size = label.size() > 16 ? 17.0f : label.size() > 11 ? 19.0f : 22.0f;
-        Button(c, label, x0 + 78, y, 172, g_ui.cursor == 1 + action, true, g_ui.frame, size, 35.0f);
-        AddHit(x0 + 78, y, 178, 38, 1 + action);
+        const float x0 = -232.0f + 232.0f * column;
+        const float y = 134.0f - 33.0f * row;
+        Text(c, Keybinds::ActionName(action), x0 - 108, y, 16, 0);
+        const std::string label = capturing == action ? "Press..." : Keybinds::KeyLabel(action);
+        const float size = label.size() > 12 ? 13.0f : label.size() > 8 ? 15.0f : 18.0f;
+        Button(c, label, x0 + 50, y, 116, g_ui.cursor == 1 + action, true, g_ui.frame, size, 29.0f);
+        AddHit(x0 + 50, y, 120, 31, 1 + action);
     }
     if (capturing >= 0) {
-        Text(c, "Press the new key (Esc cancels).", 0, -122, 22);
-    } else {
-        Button(c, "Space Smart Spin QoL", 24, -122, 400, g_ui.cursor == kKeySmartSpin, true, g_ui.frame, 26.0f, 36.0f);
-        Checkbox(c, -150, -122, Keybinds::SmartSpin());
-        AddHit(0, -122, 410, 40, kKeySmartSpin);
+        Text(c, "Press the new key (Esc cancels).", 0, -135, 20);
     }
     const float y = -kSettingsHeight / 2 + 43.0f;
     Button(c, "Reset Defaults", -126, y, 232, g_ui.cursor == kKeyReset, true, g_ui.frame, 26.0f);
@@ -1463,23 +1458,18 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
         }
         return;
     }
-    if (cursor == kKeySmartSpin) {
-        if (up) cursor = kKeyRows;
-        if (down) cursor = kKeyReset;
-        if (confirm) Keybinds::SetSmartSpin(!Keybinds::SmartSpin());
-        return;
-    }
     if (cursor >= kKeyReset) {
         if (left || right) cursor = cursor == kKeyReset ? kKeyOk : kKeyReset;
-        if (up) cursor = kKeySmartSpin;
+        if (up) cursor = kKeyRows;
         if (confirm && cursor == kKeyReset) Keybinds::ResetDefaults();
         if (confirm && cursor == kKeyOk) CloseSettings();
         return;
     }
     const int action = cursor - 1, column = action / kKeyRows, row = action % kKeyRows;
     if (up) cursor = row == 0 ? 0 : cursor - 1;
-    if (down) cursor = row == kKeyRows - 1 ? kKeySmartSpin : cursor + 1;
-    if ((left && column == 1) || (right && column == 0)) cursor = 1 + (1 - column) * kKeyRows + row;
+    if (down) cursor = row == kKeyRows - 1 || cursor == Keybinds::kActionCount ? kKeyReset : cursor + 1;
+    if (left && column > 0) cursor -= kKeyRows;
+    if (right && column < kKeyColumns - 1) cursor = std::min(cursor + kKeyRows, static_cast<int>(Keybinds::kActionCount));
     if (confirm) Keybinds::BeginCapture(action);
 }
 

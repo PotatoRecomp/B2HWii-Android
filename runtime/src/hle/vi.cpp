@@ -741,7 +741,16 @@ bool ElasticVsync() {
     return on;
 }
 
-bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora, bool guestIdle = true)
+// Starts at kStartupRetraces: before Basara's main loop (802BE4F4) the game thread polls CRI while
+// its file server thread loads the startup files one step per retrace, behind a black screen; 60
+// retraces a second stretched that to 14 s on a phone. Nothing is shown yet, so retraces then come
+// every kStartupInterval, until the main loop sets its own value at its first frame.
+constexpr int64_t kStartupRetraces = 1;
+constexpr auto kStartupInterval = std::chrono::milliseconds(2);
+std::atomic<int64_t> g_catchUpRetraceNanos{kStartupRetraces};
+
+bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora, bool guestIdle = true,
+                        bool allowCatchUp = false)
 {
     bool advancedAny = false;
 
@@ -779,10 +788,18 @@ bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora, b
             if (!g_vi.initialized) {
                 return advancedAny;
             }
-            const auto interval = ActiveIntervalLocked();
+            const bool startup = g_catchUpRetraceNanos.load(std::memory_order_relaxed) == kStartupRetraces;
+            const auto interval = startup ? std::chrono::nanoseconds(kStartupInterval)
+                                          : ActiveIntervalLocked();
             target = g_vi.lastRetrace + interval;
             if (now < target) {
-                return advancedAny;
+                // Frameskip catch-up: the game is behind, so its next step may start now.
+                const int64_t earliest = g_catchUpRetraceNanos.load(std::memory_order_acquire);
+                if (!allowCatchUp || catchUpCount != 0 || earliest == 0 ||
+                    now.time_since_epoch() < std::chrono::nanoseconds(earliest)) {
+                    return advancedAny;
+                }
+                target = now;
             }
             if (ElasticVsync()) {
                 if (!guestIdle && now < target + interval) {
@@ -825,6 +842,14 @@ bool VI_HLE_IsAdvancingRetrace() {
 // busy loops (GX drawing, the scheduler's idle spin) to keep VBlank ticking.
 void VI_HLE_PollRetrace(CpuContext* ctx) {
     AdvanceDueRetraces(ctx, 8, true);
+}
+
+void VI_HLE_PollRetraceIdle(CpuContext* ctx) {
+    AdvanceDueRetraces(ctx, 8, true, true, true);
+}
+
+void VI_HLE_SetCatchUpRetrace(int64_t earliestNanos) {
+    g_catchUpRetraceNanos.store(earliestNanos, std::memory_order_release);
 }
 
 // From the middle of guest work (a GX call): an elastic retrace may still wait for the idle loop.
@@ -877,6 +902,10 @@ void VI_HLE_WaitForNextRetracePoll() {
         std::lock_guard<std::mutex> lock(g_viMutex);
         EnsureInitializedLocked();
         retraceDeadline = g_vi.lastRetrace + ActiveIntervalLocked();
+    }
+    // A frameskip catch-up retrace (VI_HLE_PollRetraceIdle) may be due before the regular one.
+    if (const int64_t earliest = g_catchUpRetraceNanos.load(std::memory_order_acquire); earliest != 0) {
+        retraceDeadline = std::min(retraceDeadline, Clock::time_point(std::chrono::nanoseconds(earliest)));
     }
 
     const auto now = Clock::now();
@@ -1222,6 +1251,18 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                     n * 1000.0 / window, times.gameMs / n, gxNanos / 1e6 / n, lockNanos / 1e6 / n, draws / n,
                     copies / n, creates / n, times.endFrameMs / n, times.paceMs / n, times.worstMs,
                     std::sqrt(std::max(0.0, times.sumSq / n - (window / n) * (window / n))), times.slow);
+            {
+                // The game's own steps (main loop passes), drawn or skipped: its speed, against 60.
+                static uint64_t s_lastSteps = 0, s_lastSkipped = 0;
+                uint64_t steps = 0, skipped = 0;
+                BasaraFrameskip_Stats(&steps, &skipped);
+                const double windowSteps = static_cast<double>(steps - s_lastSteps);
+                RT_LOGF(RT_TAG_VI, "game steps %.1f a second (speed %.0f%%), %llu skipped draws\n",
+                        windowSteps * 1000.0 / window, windowSteps * 1000.0 / window / 60.0 * 100.0,
+                        static_cast<unsigned long long>(skipped - s_lastSkipped));
+                s_lastSteps = steps;
+                s_lastSkipped = skipped;
+            }
             const uint32_t waits = g_idleWaits.exchange(0, std::memory_order_relaxed);
             const uint32_t retraceEnds = g_idleRetraceEnds.exchange(0, std::memory_order_relaxed);
             static uint32_t s_windowRetraceCount = 0;

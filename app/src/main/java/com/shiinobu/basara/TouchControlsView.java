@@ -42,7 +42,13 @@ final class TouchControlsView extends View {
     private static final int MODE_STICK_R = 4;  // the same for the right stick
 
     private static final int SHAPE_ROUND = 0, SHAPE_PILL = 1;
-    private static final float STICK_DEAD_ZONE = 0.12f;
+    private static final float STICK_DEAD_ZONE = 0.08f;
+    /** Full tilt this far from the centre, as a fraction of the drawn radius: a short thumb move. */
+    private static final float STICK_FULL_TILT = 0.7f;
+    private static final float MIN_SCALE = 0.5f, MAX_SCALE = 2f;
+
+    // Layout editor toolbar, left to right.
+    private static final String[] TOOLS = {"Smaller", "Bigger", "Reset", "Done"};
 
     // One warm off-white for everything drawn and one vermilion for what is pressed: the colours
     // of ink and seal on paper, which leaves the game's own picture the loudest thing on screen.
@@ -60,6 +66,8 @@ final class TouchControlsView extends View {
         /** A finger held on the game's menus (menu mode), as fractions of the view; held is false
          *  when it is lifted. The game's sliders follow it. */
         void onPointer(float x, float y, boolean held);
+        /** The layout editor closed; layout is what setLayout takes ("" for the default). */
+        void onLayoutDone(String layout);
     }
 
     private static final class Button {
@@ -112,6 +120,16 @@ final class TouchControlsView extends View {
     private int dragId = -1;  // the finger the game's menus follow (onPointer), or -1
     private final android.util.SparseLongArray tapTimes = new android.util.SparseLongArray();
 
+    // The player's layout: element key -> {centre x / width, centre y / height, size multiplier}.
+    private static final String[] ELEMENTS = {"lstick", "rstick", "pad", "face", "L", "ZL", "R", "ZR",
+        "minus", "home", "plus"};
+    private final java.util.HashMap<String, float[]> custom = new java.util.HashMap<>();
+    private boolean editing;
+    private String selected;
+    private int editFinger = -1;
+    private float grabDx, grabDy;
+    private float faceX, faceY, faceSpread;  // the face diamond's centre and its buttons' distance
+
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -151,7 +169,47 @@ final class TouchControlsView extends View {
         invalidate();
     }
 
-    private boolean showsControls() { return controlsVisible && !menuMode; }
+    private boolean showsControls() { return editing || (controlsVisible && !menuMode); }
+
+    /** Restores a layout saved from the editor ("" or garbage: the default one). */
+    void setLayout(String layout) {
+        custom.clear();
+        if (layout != null) {
+            for (String entry : layout.split(";")) {
+                final String[] kv = entry.split("=");
+                if (kv.length != 2) continue;
+                final String[] v = kv[1].split(",");
+                if (v.length != 3) continue;
+                try {
+                    custom.put(kv[0], new float[] {Float.parseFloat(v[0]), Float.parseFloat(v[1]),
+                        Math.max(MIN_SCALE, Math.min(MAX_SCALE, Float.parseFloat(v[2])))});
+                } catch (NumberFormatException ignored) {
+                    // a damaged entry keeps its default place
+                }
+            }
+        }
+        layoutControls(getWidth(), getHeight());
+    }
+
+    private String encodeLayout() {
+        final StringBuilder out = new StringBuilder();
+        for (java.util.Map.Entry<String, float[]> e : custom.entrySet()) {
+            final float[] v = e.getValue();
+            if (out.length() > 0) out.append(';');
+            out.append(e.getKey()).append('=').append(String.format(java.util.Locale.ROOT, "%.4f,%.4f,%.3f",
+                v[0], v[1], v[2]));
+        }
+        return out.toString();
+    }
+
+    /** The layout editor: drag a control to move it, Smaller and Bigger resize the selected one. */
+    void setEditMode(boolean on) {
+        editing = on;
+        selected = null;
+        editFinger = -1;
+        release();
+        invalidate();
+    }
 
     /** Lets go of everything, e.g. when the app loses focus or a menu opens. */
     void release() {
@@ -194,20 +252,23 @@ final class TouchControlsView extends View {
         final float u = h;  // everything scales with the short side
         final float leftEdge = left + 0.03f * u, rightEdge = w - right - 0.03f * u;
 
-        leftStick.r = 0.185f * u;
+        leftStick.r = 0.16f * u;
         leftStick.x = leftEdge + 0.04f * u + leftStick.r;
         leftStick.y = 0.50f * u;
-        padR = 0.145f * u;
+        padR = 0.13f * u;
         padX = leftStick.x + 0.34f * u;
         padY = 0.80f * u;
 
         // The diamond, as on the controller: A right, B bottom, X top, Y left.
-        final float faceX = rightEdge - 0.20f * u, faceY = 0.50f * u, face = 0.125f * u, faceR = 0.078f * u;
+        faceX = rightEdge - 0.19f * u;
+        faceY = 0.50f * u;
+        faceSpread = 0.115f * u;
+        final float face = faceSpread, faceR = 0.07f * u;
         place(A, faceX + face, faceY, faceR);
         place(B, faceX, faceY + face, faceR);
         place(X, faceX, faceY - face, faceR);
         place(Y, faceX - face, faceY, faceR);
-        rightStick.r = 0.125f * u;
+        rightStick.r = 0.115f * u;
         rightStick.x = faceX - 0.34f * u;
         rightStick.y = 0.80f * u;
 
@@ -221,11 +282,176 @@ final class TouchControlsView extends View {
         place(MINUS, w / 2f - centreGap, centreY, centreR);
         place(HOME, w / 2f, centreY, centreR);
         place(PLUS, w / 2f + centreGap, centreY, centreR);
+        for (java.util.Map.Entry<String, float[]> e : custom.entrySet()) {
+            final float[] v = e.getValue();
+            transform(e.getKey(), v[0] * w, v[1] * h, v[2]);
+        }
         for (Stick stick : new Stick[] {leftStick, rightStick}) {
             stick.homeX = stick.x;
             stick.homeY = stick.y;
         }
+        excludeSystemGestures();
         invalidate();
+    }
+
+    /**
+     * A thumb on a stick near the screen's edge otherwise starts the system's back gesture, which
+     * cancels every touch: the stick dropped out mid-move. Android honours 200 dp per edge.
+     */
+    private void excludeSystemGestures() {
+        final float limit = 200f * getResources().getDisplayMetrics().density;
+        final java.util.List<android.graphics.Rect> rects = new java.util.ArrayList<>();
+        final float lh = Math.min(limit, leftStick.r * 3f) / 2f;
+        rects.add(new android.graphics.Rect(0, Math.round(leftStick.homeY - lh),
+            Math.round(leftStick.homeX + leftStick.r * 1.4f), Math.round(leftStick.homeY + lh)));
+        final float rh = Math.min(limit, (faceSpread + 0.08f * getHeight()) * 2f) / 2f;
+        rects.add(new android.graphics.Rect(Math.round(faceX - faceSpread * 2f), Math.round(faceY - rh),
+            getWidth(), Math.round(faceY + rh)));
+        setSystemGestureExclusionRects(rects);
+    }
+
+    private Button button(int bit) {
+        for (Button b : buttons) {
+            if (b.bit == bit) return b;
+        }
+        throw new IllegalArgumentException("no button " + bit);
+    }
+
+    private static int bitOf(String key) {
+        switch (key) {
+            case "L": return L;
+            case "ZL": return ZL;
+            case "R": return R;
+            case "ZR": return ZR;
+            case "minus": return MINUS;
+            case "home": return HOME;
+            case "plus": return PLUS;
+            default: return 0;
+        }
+    }
+
+    /** {centre x, centre y, radius} of an element as laid out now. */
+    private float[] bounds(String key) {
+        switch (key) {
+            case "lstick": return new float[] {leftStick.homeX, leftStick.homeY, leftStick.r};
+            case "rstick": return new float[] {rightStick.homeX, rightStick.homeY, rightStick.r};
+            case "pad": return new float[] {padX, padY, padR};
+            case "face": return new float[] {faceX, faceY, faceSpread + button(A).r};
+            default: {
+                final Button b = button(bitOf(key));
+                return new float[] {b.x, b.y, Math.max(b.r, b.halfWidth)};
+            }
+        }
+    }
+
+    /** Moves an element's centre to (x, y) and multiplies its size by scale (from the default). */
+    private void transform(String key, float x, float y, float scale) {
+        switch (key) {
+            case "lstick": leftStick.x = x; leftStick.y = y; leftStick.r *= scale; break;
+            case "rstick": rightStick.x = x; rightStick.y = y; rightStick.r *= scale; break;
+            case "pad": padX = x; padY = y; padR *= scale; break;
+            case "face":
+                for (int bit : new int[] {A, B, X, Y}) {
+                    final Button b = button(bit);
+                    b.x = x + (b.x - faceX) * scale;
+                    b.y = y + (b.y - faceY) * scale;
+                    b.r *= scale;
+                    b.halfWidth = b.r;
+                }
+                faceX = x;
+                faceY = y;
+                faceSpread *= scale;
+                break;
+            default: {
+                final int bit = bitOf(key);
+                if (bit == 0) return;
+                final Button b = button(bit);
+                b.x = x;
+                b.y = y;
+                b.r *= scale;
+                b.halfWidth *= scale;
+            }
+        }
+    }
+
+    private String elementAt(float x, float y) {
+        String best = null;
+        float bestDistance = Float.MAX_VALUE;
+        for (String key : ELEMENTS) {
+            final float[] b = bounds(key);
+            final float d = (float) Math.hypot(x - b[0], y - b[1]);
+            if (d <= b[2] * 1.15f && d / b[2] < bestDistance) {
+                best = key;
+                bestDistance = d / b[2];
+            }
+        }
+        return best;
+    }
+
+    private RectF toolRect(int i) {
+        final float h = getHeight(), bw = 0.2f * h, bh = 0.1f * h, gap = 0.02f * h;
+        final float left = getWidth() / 2f - (TOOLS.length * bw + (TOOLS.length - 1) * gap) / 2f;
+        return new RectF(left + i * (bw + gap), 0.2f * h, left + i * (bw + gap) + bw, 0.2f * h + bh);
+    }
+
+    private void editTouch(MotionEvent e) {
+        final int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+            final int i = e.getActionIndex();
+            final float x = e.getX(i), y = e.getY(i);
+            for (int t = 0; t < TOOLS.length; ++t) {
+                if (toolRect(t).contains(x, y)) {
+                    tool(t);
+                    return;
+                }
+            }
+            if (editFinger >= 0) return;
+            selected = elementAt(x, y);
+            if (selected != null) {
+                final float[] b = bounds(selected);
+                editFinger = e.getPointerId(i);
+                grabDx = b[0] - x;
+                grabDy = b[1] - y;
+            }
+            invalidate();
+        } else if (action == MotionEvent.ACTION_MOVE && editFinger >= 0 && selected != null) {
+            final int i = e.findPointerIndex(editFinger);
+            if (i < 0) return;
+            final float x = Math.max(0f, Math.min(getWidth(), e.getX(i) + grabDx));
+            final float y = Math.max(0f, Math.min(getHeight(), e.getY(i) + grabDy));
+            custom.put(selected, new float[] {x / getWidth(), y / getHeight(), scaleOf(selected)});
+            layoutControls(getWidth(), getHeight());
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP
+                || action == MotionEvent.ACTION_CANCEL) {
+            if (action == MotionEvent.ACTION_CANCEL || e.getPointerId(e.getActionIndex()) == editFinger) {
+                editFinger = -1;
+            }
+        }
+    }
+
+    private float scaleOf(String key) {
+        final float[] v = custom.get(key);
+        return v != null ? v[2] : 1f;
+    }
+
+    private void tool(int t) {
+        if (t == 0 || t == 1) {
+            // Resizes the selected control, or all of them when none is selected.
+            final float factor = t == 0 ? 0.9f : 1.1f;
+            for (String key : selected != null ? new String[] {selected} : ELEMENTS) {
+                final float[] b = bounds(key);
+                final float scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleOf(key) * factor));
+                custom.put(key, new float[] {b[0] / getWidth(), b[1] / getHeight(), scale});
+            }
+            layoutControls(getWidth(), getHeight());
+        } else if (t == 2) {
+            custom.clear();
+            selected = null;
+            layoutControls(getWidth(), getHeight());
+        } else {
+            setEditMode(false);
+            if (listener != null) listener.onLayoutDone(encodeLayout());
+        }
     }
 
     private void place(int bit, float x, float y, float r) {
@@ -243,6 +469,10 @@ final class TouchControlsView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+        if (editing) {
+            editTouch(e);
+            return true;
+        }
         final int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_CANCEL) {
             endDrag(e.getX(), e.getY());
@@ -367,16 +597,20 @@ final class TouchControlsView extends View {
         return dx * dx + dy * dy <= reach * reach;
     }
 
-    /** The knob follows the finger out to the rim; the middle is a dead zone. */
+    /**
+     * Full tilt at STICK_FULL_TILT of the radius; the knob follows the finger out to the rim. The
+     * middle is a small dead zone, and the tilt starts from 0 at its edge instead of jumping.
+     */
     private void steer(Stick stick, float x, float y) {
-        float nx = (x - stick.x) / stick.r, ny = (y - stick.y) / stick.r;
+        final float reach = stick.r * STICK_FULL_TILT;
+        float nx = (x - stick.x) / reach, ny = (y - stick.y) / reach;
         final float length = (float) Math.hypot(nx, ny);
-        if (length > 1f) {
-            nx /= length;
-            ny /= length;
-        }
         if (length < STICK_DEAD_ZONE) {
             nx = ny = 0f;
+        } else {
+            final float tilt = Math.min(1f, (length - STICK_DEAD_ZONE) / (1f - STICK_DEAD_ZONE));
+            nx = nx / length * tilt;
+            ny = ny / length * tilt;
         }
         if (nx == stick.valueX && ny == stick.valueY) return;
         stick.valueX = nx;
@@ -446,6 +680,32 @@ final class TouchControlsView extends View {
         for (Button b : buttons) {
             drawButton(canvas, b, base);
         }
+        if (editing) drawEditor(canvas);
+    }
+
+    private void drawEditor(Canvas canvas) {
+        final float h = getHeight();
+        if (selected != null) {
+            final float[] b = bounds(selected);
+            stroke.setStrokeWidth(Math.max(2f, h * 0.006f));
+            stroke.setColor(seal(255));
+            canvas.drawCircle(b[0], b[1], b[2] * 1.12f, stroke);
+        }
+        text.setTextSize(0.045f * h);
+        for (int t = 0; t < TOOLS.length; ++t) {
+            final RectF r = toolRect(t);
+            fill.setStyle(Paint.Style.FILL);
+            fill.setColor(t == TOOLS.length - 1 ? seal(230) : ink(220));
+            canvas.drawRoundRect(r, r.height() / 4, r.height() / 4, fill);
+            text.setColor(paper(255));
+            canvas.drawText(TOOLS[t], r.centerX(), r.centerY() - (text.descent() + text.ascent()) / 2, text);
+        }
+        text.setTextSize(0.035f * h);
+        text.setColor(paper(255));
+        final String hint = selected == null
+            ? "Drag a control to move it. With none selected, Smaller and Bigger resize them all."
+            : "Drag to move. Smaller and Bigger resize the outlined control.";
+        canvas.drawText(hint, getWidth() / 2f, 0.36f * h, text);
     }
 
     private void drawSurface(Canvas canvas, Button b, boolean down, int base) {

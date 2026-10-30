@@ -6,6 +6,7 @@
 #include "gx/fifo.hpp"
 #include "gx/shader_info.hpp"
 #include "imgui.hpp"
+#include "webgpu/fsr.hpp"
 #include "webgpu/gpu.hpp"
 #include "webgpu/metalfx.hpp"
 #include <webgpu/webgpu_cpp.h>
@@ -1380,11 +1381,14 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
   }
   wgpu::BindGroup presentBindGroup = presentSource.bindGroup;
   wgpu::BindGroup newMetalFXOutput;
+  bool fsrUpscaled = false;
   if (cachedMetalFXOutput && *cachedMetalFXOutput) {
     presentBindGroup = *cachedMetalFXOutput;
   } else if (auto upscaled = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled)) {
     presentBindGroup = std::move(upscaled);
     newMetalFXOutput = presentBindGroup;
+  } else {
+    fsrUpscaled = webgpu::fsr::encode_upscale(encoder, presentSource.bindGroup, presentSource.size, viewport);
   }
   {
     const std::array attachments{
@@ -1400,11 +1404,15 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
         .colorAttachments = attachments.data(),
     };
     const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
-    pass.SetPipeline(webgpu::g_CopyPipeline);
-    pass.SetBindGroup(0, presentBindGroup, 0, nullptr);
     pass.SetViewport(viewport.left, viewport.top, viewport.width, viewport.height,
                      viewport.znear, viewport.zfar);
-    pass.Draw(3);
+    if (fsrUpscaled) {
+      webgpu::fsr::draw_sharpened(pass);
+    } else {
+      pass.SetPipeline(webgpu::g_CopyPipeline);
+      pass.SetBindGroup(0, presentBindGroup, 0, nullptr);
+      pass.Draw(3);
+    }
     pass.End();
   }
   if (includeImGui) {
@@ -2226,5 +2234,7 @@ void aurora_set_display_mode(AuroraDisplayMode mode) { aurora::window::set_displ
 AuroraDisplayMode aurora_get_display_mode() { return aurora::window::get_display_mode(); }
 void aurora_set_metalfx_spatial(bool enabled) { aurora::g_metalfxRequested.store(enabled); }
 bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
+void aurora_set_fsr(int mode) { aurora::webgpu::fsr::set_mode(mode); }
+int aurora_get_fsr() { return aurora::webgpu::fsr::mode(); }
 bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }
 AuroraMetalFXStatus aurora_get_metalfx_status() { return aurora::g_metalfxStatus.load(); }

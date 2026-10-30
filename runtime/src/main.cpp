@@ -1613,6 +1613,8 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.desiredBackend = BACKEND_AUTO;
         // GPU driver workarounds: picked from the graphics adapter unless the player forced them.
         auroraConfig.gpuCompat = static_cast<AuroraGpuCompat>(RuntimeConfigFile::GpuCompat());
+        // FSR1 sharpens the picture when it is drawn larger than the game rendered it.
+        aurora_set_fsr(RuntimeConfigFile::Fsr());
         // DisplaySettings applies the viewport policy and render height at the first frame boundary.
         // One table for both directions. RuntimeConfigFile::IsSupportedGraphicsApi
         // whitelists exactly these config names, so an unrecognised value has

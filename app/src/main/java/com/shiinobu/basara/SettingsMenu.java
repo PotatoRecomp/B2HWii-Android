@@ -1,41 +1,120 @@
 package com.shiinobu.basara;
 
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.app.Dialog;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 
 /**
- * The app's settings (Display and Controls), on the start menu. They are saved to the app's
- * preferences and written to Config.toml before every start; the game's own settings window (the
- * gear on the save file screen and the pause menus) changes resolution, aspect and the FPS counter
- * while playing, and the app keeps those choices.
+ * The app's settings on the start menu: one full screen, the sections down the left and the open
+ * section's settings on the right, each changed with one tap (a switch, or a row of choices). They are
+ * saved to the app's preferences and written to Config.toml before every start; the game's own settings
+ * window changes resolution, aspect and the FPS counter while playing, and the app keeps those choices.
  */
 final class SettingsMenu {
     private static final String TAG = "Basara";
+    private static final int BACKGROUND = Color.rgb(16, 20, 24);
+
+    private static final String[] SECTIONS = {"Display", "Graphics", "Performance", "Controls"};
+    private static final String[] SECTION_ABOUT = {
+        "Picture shape and size",
+        "Sharpness and GPU fixes",
+        "Smoothness and speed",
+        "Touch controls and motion",
+    };
 
     private final Activity activity;
     private final AppSettings settings;
+    private final Dialog dialog;
+    private final LinearLayout nav;
+    private final LinearLayout rows;
+    private final ScrollView rowsScroll;
+    private int section;
+
+    static void show(Activity activity) {
+        new SettingsMenu(activity).dialog.show();
+    }
 
     private SettingsMenu(Activity activity) {
         this.activity = activity;
         this.settings = new AppSettings(activity);
+
+        nav = new LinearLayout(activity);
+        nav.setOrientation(LinearLayout.VERTICAL);
+        final TextView title = text("Settings", 24, Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setPadding(dp(8), 0, 0, dp(14));
+        nav.addView(title);
+        for (int i = 0; i < SECTIONS.length; ++i) {
+            final int index = i;
+            final LinearLayout item = new LinearLayout(activity);
+            item.setOrientation(LinearLayout.VERTICAL);
+            item.setPadding(dp(16), dp(10), dp(16), dp(10));
+            item.setClickable(true);
+            item.setOnClickListener(v -> showSection(index));
+            final TextView name = text(SECTIONS[i], 16, Color.WHITE);
+            name.setTypeface(LauncherActivity.MEDIUM);
+            item.addView(name);
+            item.addView(text(SECTION_ABOUT[i], 12, LauncherActivity.MUTED));
+            nav.addView(item, matchWidth(dp(6)));
+        }
+        final View spacer = new View(activity);
+        nav.addView(spacer, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        final TextView done = text("Done", 17, Color.WHITE);
+        done.setTypeface(Typeface.DEFAULT_BOLD);
+        done.setGravity(Gravity.CENTER);
+        done.setPadding(0, dp(12), 0, dp(12));
+        done.setBackground(rounded(LauncherActivity.ACCENT, dp(24)));
+        done.setOnClickListener(v -> close());
+        nav.addView(done, matchWidth(dp(10)));
+
+        rows = new LinearLayout(activity);
+        rows.setOrientation(LinearLayout.VERTICAL);
+        rowsScroll = new ScrollView(activity);
+        rowsScroll.setVerticalScrollBarEnabled(false);
+        rowsScroll.addView(rows);
+
+        final LinearLayout page = new LinearLayout(activity);
+        page.setOrientation(LinearLayout.HORIZONTAL);
+        page.setPadding(dp(16), dp(16), dp(16), dp(16));
+        page.setBackgroundColor(BACKGROUND);
+        final ScrollView navScroll = new ScrollView(activity);
+        navScroll.setFillViewport(true);
+        navScroll.setVerticalScrollBarEnabled(false);
+        navScroll.addView(nav);
+        page.addView(navScroll, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.3f));
+        final LinearLayout.LayoutParams rowsParams =
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.7f);
+        rowsParams.leftMargin = dp(16);
+        page.addView(rowsScroll, rowsParams);
+
+        dialog = new Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen);
+        dialog.setContentView(page);
+        dialog.setOnShowListener(d -> {
+            dialog.getWindow().setDecorFitsSystemWindows(false);
+            final WindowInsetsController controller = dialog.getWindow().getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.systemBars());
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        });
+        showSection(0);
     }
 
-    static void show(Activity activity) {
-        new SettingsMenu(activity).showMain();
-    }
-
-    private void showMain() {
-        final String[] items = {"Display", "Controls"};
-        new AlertDialog.Builder(activity)
-                .setTitle("Settings")
-                .setItems(items, (dialog, which) -> {
-                    if (which == 0) showDisplayMenu();
-                    else showControlsMenu();
-                })
-                .setNegativeButton("Done", null)
-                .show();
+    private void close() {
+        dialog.dismiss();
     }
 
     private void save() {
@@ -46,149 +125,251 @@ final class SettingsMenu {
         }
     }
 
-    private void showDisplayMenu() {
-        final String[] items = {
-            "Aspect Ratio: " + aspectLabel(settings.aspectMode()),
-            "Render Resolution: " + AppSettings.resolutionLabel(settings.resolutionScale()),
-            "FPS Counter: " + (settings.showFps() ? "On" : "Off"),
-            "Frametime Graph: " + (settings.frameGraph() ? "On" : "Off"),
-            "Spinning Coins: " + (settings.spinningCoins() ? "On" : "Off"),
-            "V-Sync: " + (settings.vsync() ? "On" : "Off"),
-            "Graphics Compatibility: " + gpuCompatLabel(settings.gpuCompat()),
-        };
-        new AlertDialog.Builder(activity)
-                .setTitle("Display")
-                .setItems(items, (dialog, which) -> {
-                    if (which == 0) showAspectChoice();
-                    else if (which == 1) showResolutionChoice();
-                    else if (which == 2) { settings.setShowFps(!settings.showFps()); save(); showDisplayMenu(); }
-                    else if (which == 3) { settings.setFrameGraph(!settings.frameGraph()); save(); showDisplayMenu(); }
-                    else if (which == 4) { settings.setSpinningCoins(!settings.spinningCoins()); save(); showDisplayMenu(); }
-                    else if (which == 5) { settings.setVSync(!settings.vsync()); save(); showDisplayMenu(); }
-                    else showGpuCompatChoice();
-                })
-                .setNegativeButton("Back", (dialog, which) -> showMain())
-                .show();
+    /** After a change: save, and draw the section again with the new values. */
+    private void changed() {
+        save();
+        final int scroll = rowsScroll.getScrollY();
+        showSection(section);
+        rowsScroll.post(() -> rowsScroll.scrollTo(0, scroll));
     }
 
-    private static String gpuCompatLabel(int mode) {
-        if (mode == AppSettings.GPU_COMPAT_ON) return "On";
-        if (mode == AppSettings.GPU_COMPAT_OFF) return "Off";
-        return "Auto";
-    }
-
-    /**
-     * Fixes for phone GPUs whose drivers break the game's 3D models (scrambled textures, exploding
-     * characters). Auto turns them on for the GPUs known to need them; On and Off force them.
-     */
-    private void showGpuCompatChoice() {
-        final String[] labels = {
-            "Auto (recommended): on for the GPUs that need it",
-            "On: always use the GPU fixes",
-            "Off: never use them",
-        };
-        new AlertDialog.Builder(activity)
-                .setTitle("Graphics Compatibility")
-                .setSingleChoiceItems(labels, settings.gpuCompat(), (dialog, which) -> {
-                    settings.setGpuCompat(which);
-                    save();
-                    dialog.dismiss();
-                    showDisplayMenu();
-                })
-                .setNegativeButton("Back", (dialog, which) -> showDisplayMenu())
-                .show();
-    }
-
-    private static String aspectLabel(int mode) {
-        switch (mode) {
-            case AppSettings.ASPECT_4_3: return "Original 4:3";
-            case AppSettings.ASPECT_16_9: return "16:9";
-            default: return "Fill Screen";
+    private void showSection(int index) {
+        section = index;
+        for (int i = 0; i < SECTIONS.length; ++i) {
+            nav.getChildAt(i + 1).setBackground(i == index ? rounded(LauncherActivity.RAISED, dp(16)) : null);
         }
-    }
-
-    private void showAspectChoice() {
-        final String[] labels = {"Original 4:3", "16:9", "Fill Screen"};
-        new AlertDialog.Builder(activity)
-                .setTitle("Aspect Ratio")
-                .setSingleChoiceItems(labels, settings.aspectMode(), (dialog, which) -> {
-                    settings.setAspectMode(which);
-                    save();
-                    dialog.dismiss();
-                    showDisplayMenu();
-                })
-                .setNegativeButton("Back", (dialog, which) -> showDisplayMenu())
-                .show();
-    }
-
-    /** The aspect the game renders: Fill follows the screen (landscape), never narrower than 16:9. */
-    private float renderAspect() {
-        switch (settings.aspectMode()) {
-            case AppSettings.ASPECT_4_3: return 4f / 3f;
-            case AppSettings.ASPECT_16_9: return 16f / 9f;
-            default: {
-                final DisplayMetrics m = activity.getResources().getDisplayMetrics();
-                final int w = Math.max(m.widthPixels, m.heightPixels);
-                final int h = Math.min(m.widthPixels, m.heightPixels);
-                return h > 0 ? Math.max((float) w / h, 16f / 9f) : 16f / 9f;
-            }
+        rows.removeAllViews();
+        switch (index) {
+            case 0: showDisplay(); break;
+            case 1: showGraphics(); break;
+            case 2: showPerformance(); break;
+            default: showControls(); break;
         }
+        rowsScroll.scrollTo(0, 0);
     }
 
-    private void showResolutionChoice() {
+    // --- sections --------------------------------------------------------------------------------
+
+    private void showDisplay() {
+        choiceRow("Aspect Ratio", "The shape of the picture.",
+                new String[] {"Original 4:3", "16:9", "Fill Screen"}, settings.aspectMode(), true,
+                which -> settings.setAspectMode(which));
         final float[] scales = AppSettings.RESOLUTION_SCALES;
         final String[] labels = new String[scales.length];
-        final float aspect = renderAspect();
         int selected = 3;
         for (int i = 0; i < scales.length; ++i) {
-            if (scales[i] <= 0f) {
-                final DisplayMetrics m = activity.getResources().getDisplayMetrics();
-                labels[i] = AppSettings.resolutionLabel(0f) + "  ·  " + Math.max(m.widthPixels, m.heightPixels)
-                        + "×" + Math.min(m.widthPixels, m.heightPixels);
-                if (settings.resolutionScale() <= 0f) selected = i;
-                continue;
+            labels[i] = AppSettings.resolutionLabel(scales[i]);
+            if (scales[i] <= 0f ? settings.resolutionScale() <= 0f
+                    : Math.abs(scales[i] - settings.resolutionScale()) < 0.01f) {
+                selected = i;
             }
-            final int lines = Math.round(480 * scales[i]);
-            labels[i] = AppSettings.resolutionLabel(scales[i]) + "  ·  " + Math.round(lines * aspect) + "×" + lines;
-            if (Math.abs(scales[i] - settings.resolutionScale()) < 0.01f) selected = i;
         }
-        new AlertDialog.Builder(activity)
-                .setTitle("Render Resolution")
-                .setSingleChoiceItems(labels, selected, (dialog, which) -> {
-                    settings.setResolutionScale(scales[which]);
-                    save();
-                    dialog.dismiss();
-                    showDisplayMenu();
-                })
-                .setNegativeButton("Back", (dialog, which) -> showDisplayMenu())
-                .show();
+        choiceRow("Render Resolution", "Rendered at " + renderSize(settings.resolutionScale())
+                + ". Lower is lighter on a slow phone; FSR1 keeps it sharp.", labels, selected, true,
+                which -> settings.setResolutionScale(scales[which]));
+        toggleRow("FPS Counter", "Frames a second and phone stats in a corner.", settings.showFps(),
+                on -> settings.setShowFps(on));
+        toggleRow("Frametime Graph", "How long each frame took, under the FPS counter.", settings.frameGraph(),
+                on -> settings.setFrameGraph(on));
     }
 
-    private void showControlsMenu() {
-        final String[] items = {
-            "Touch Controls: " + (settings.touchControls() ? "On" : "Off"),
-            "Touch Control Opacity: " + Math.round(settings.touchOpacity() * 100) + "%",
-            "Tilt (turn the phone): " + (settings.motionTilt() ? "On" : "Off"),
-            "Shake (jolt the phone): " + (settings.motionShake() ? "On" : "Off"),
-            "Vibration: " + (settings.haptics() ? "On" : "Off"),
-        };
-        new AlertDialog.Builder(activity)
-                .setTitle("Controls")
-                .setItems(items, (dialog, which) -> {
-                    switch (which) {
-                        case 0: settings.setTouchControls(!settings.touchControls()); break;
-                        case 1: {
-                            final float next = settings.touchOpacity() >= 0.95f ? 0.2f : settings.touchOpacity() + 0.2f;
-                            settings.setTouchOpacity(Math.min(1f, next));
-                            break;
-                        }
-                        case 2: settings.setMotionTilt(!settings.motionTilt()); break;
-                        case 3: settings.setMotionShake(!settings.motionShake()); break;
-                        default: settings.setHaptics(!settings.haptics()); break;
-                    }
-                    showControlsMenu();
-                })
-                .setNegativeButton("Back", (dialog, which) -> showMain())
-                .show();
+    private void showGraphics() {
+        toggleRow("FSR1 Upscaling", "Keeps a picture rendered below the screen's resolution sharp when "
+                + "it is stretched to fill it.", settings.fsrOn(), on -> settings.setFsrOn(on));
+        choiceRow("FSR1 Quality", settings.fsrOn()
+                        ? "Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's "
+                                + "edge-aware upscale: sharpest, but several ms on a small phone GPU."
+                        : "Turn FSR1 Upscaling on to choose.",
+                new String[] {"Light", "Full"}, settings.fsrFull() ? 1 : 0, settings.fsrOn(),
+                which -> settings.setFsrFull(which == 1));
+        choiceRow("Graphics Compatibility", "Fixes for phone GPUs whose drivers break the 3D models "
+                        + "(scrambled textures, stretched characters). Auto uses them where needed.",
+                new String[] {"Auto", "On", "Off"}, settings.gpuCompat(), true,
+                which -> settings.setGpuCompat(which));
+    }
+
+    private void showPerformance() {
+        toggleRow("V-Sync", "Frames go out in step with the display: smoother motion.", settings.vsync(),
+                on -> settings.setVSync(on));
+        choiceRow("Frameskip", "The game moves one step per drawn frame, so a slow phone plays in slow "
+                        + "motion. Auto skips drawing a frame when it falls behind: closer to full speed, "
+                        + "choppier picture.",
+                new String[] {"Off", "Auto"}, settings.frameskip() ? 1 : 0, true,
+                which -> settings.setFrameskip(which == 1));
+    }
+
+    private void showControls() {
+        toggleRow("Touch Controls", "The on-screen Classic Controller.", settings.touchControls(),
+                on -> settings.setTouchControls(on));
+        final String[] opacities = {"20%", "40%", "60%", "80%", "100%"};
+        final int opacity = Math.max(0, Math.min(4, Math.round(settings.touchOpacity() * 5f) - 1));
+        choiceRow("Touch Control Opacity", "How solid the controls look over the game.", opacities, opacity,
+                settings.touchControls(), which -> settings.setTouchOpacity((which + 1) / 5f));
+        actionRow("Touch Control Layout", settings.touchLayout().isEmpty()
+                        ? "Move and resize the controls while playing: Back > Edit Controls Layout."
+                        : "Arranged by you. Change it while playing: Back > Edit Controls Layout.",
+                settings.touchLayout().isEmpty() ? null : "Reset", () -> settings.setTouchLayout(""));
+        toggleRow("Vibration", "A short buzz when a touch button is pressed.", settings.haptics(),
+                on -> settings.setHaptics(on));
+        toggleRow("Tilt", "Turn the phone like a steering wheel.", settings.motionTilt(),
+                on -> settings.setMotionTilt(on));
+        toggleRow("Shake", "Jolt the phone to shake the remote.", settings.motionShake(),
+                on -> settings.setMotionShake(on));
+    }
+
+    /** "WxH" the game renders at for a scale (0: the screen's own size). */
+    private String renderSize(float scale) {
+        final DisplayMetrics m = activity.getResources().getDisplayMetrics();
+        final int w = Math.max(m.widthPixels, m.heightPixels), h = Math.min(m.widthPixels, m.heightPixels);
+        if (scale <= 0f) return w + "×" + h;
+        final float aspect;
+        switch (settings.aspectMode()) {
+            case AppSettings.ASPECT_4_3: aspect = 4f / 3f; break;
+            case AppSettings.ASPECT_16_9: aspect = 16f / 9f; break;
+            default: aspect = h > 0 ? Math.max((float) w / h, 16f / 9f) : 16f / 9f; break;
+        }
+        final int lines = Math.round(480 * scale);
+        return Math.round(lines * aspect) + "×" + lines;
+    }
+
+    // --- rows ------------------------------------------------------------------------------------
+
+    private interface Toggle { void set(boolean on); }
+    private interface Choice { void pick(int which); }
+
+    /** A card: the setting's name and a line about it, with `control` on the right or underneath. */
+    private LinearLayout card(String title, String about, View control, boolean underneath, boolean enabled) {
+        final LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(underneath ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        card.setGravity(underneath ? Gravity.START : Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(18), dp(14), dp(14), dp(14));
+        card.setBackground(rounded(LauncherActivity.SURFACE, dp(18)));
+        card.setAlpha(enabled ? 1f : 0.45f);
+        final LinearLayout words = new LinearLayout(activity);
+        words.setOrientation(LinearLayout.VERTICAL);
+        final TextView name = text(title, 16, Color.WHITE);
+        name.setTypeface(LauncherActivity.MEDIUM);
+        words.addView(name);
+        final TextView line = text(about, 13, LauncherActivity.MUTED);
+        line.setPadding(0, dp(2), 0, 0);
+        words.addView(line);
+        if (underneath) {
+            card.addView(words, matchWidth(0));
+            if (control != null) card.addView(control, matchWidth(dp(12)));
+        } else {
+            card.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            if (control != null) {
+                final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                params.leftMargin = dp(12);
+                card.addView(control, params);
+            }
+        }
+        rows.addView(card, matchWidth(rows.getChildCount() == 0 ? 0 : dp(10)));
+        return card;
+    }
+
+    /** The whole card toggles; the switch on the right shows On or Off. */
+    private void toggleRow(String title, String about, boolean on, Toggle toggle) {
+        final LinearLayout track = new LinearLayout(activity);
+        track.setGravity(on ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL);
+        track.setPadding(dp(4), dp(4), dp(4), dp(4));
+        track.setBackground(rounded(on ? LauncherActivity.ACCENT : LauncherActivity.RAISED, dp(16)));
+        final View knob = new View(activity);
+        final GradientDrawable dot = new GradientDrawable();
+        dot.setShape(GradientDrawable.OVAL);
+        dot.setColor(on ? Color.WHITE : LauncherActivity.MUTED);
+        knob.setBackground(dot);
+        track.addView(knob, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        final LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(dp(56), dp(32));
+        final LinearLayout box = new LinearLayout(activity);
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        final TextView state = text(on ? "On" : "Off", 13, on ? Color.WHITE : LauncherActivity.MUTED);
+        state.setTypeface(Typeface.DEFAULT_BOLD);
+        state.setPadding(0, 0, dp(10), 0);
+        box.addView(state);
+        box.addView(track, trackParams);
+        final LinearLayout card = card(title, about, box, false, true);
+        card.setClickable(true);
+        card.setOnClickListener(v -> {
+            toggle.set(!on);
+            changed();
+        });
+    }
+
+    /** The choices side by side as chips under the line about it; the chosen one is lit. */
+    private void choiceRow(String title, String about, String[] options, int selected, boolean enabled,
+                           Choice choice) {
+        final LinearLayout chips = new LinearLayout(activity);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < options.length; ++i) {
+            final int which = i;
+            final boolean on = i == selected;
+            final TextView chip = text(options[i], 14, on ? Color.WHITE : LauncherActivity.MUTED);
+            chip.setTypeface(on ? Typeface.DEFAULT_BOLD : LauncherActivity.MEDIUM);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(16), dp(8), dp(16), dp(8));
+            chip.setMinWidth(dp(64));
+            chip.setBackground(rounded(on ? LauncherActivity.ACCENT : LauncherActivity.RAISED, dp(18)));
+            if (enabled) {
+                chip.setOnClickListener(v -> {
+                    if (which == selected) return;
+                    choice.pick(which);
+                    changed();
+                });
+            }
+            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.rightMargin = dp(8);
+            chips.addView(chip, params);
+        }
+        final HorizontalScrollView scroll = new HorizontalScrollView(activity);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.addView(chips);
+        card(title, about, scroll, true, enabled);
+    }
+
+    /** A card with a button on the right (none when `label` is null). */
+    private void actionRow(String title, String about, String label, Runnable action) {
+        TextView button = null;
+        if (label != null) {
+            button = text(label, 14, Color.WHITE);
+            button.setTypeface(Typeface.DEFAULT_BOLD);
+            button.setPadding(dp(16), dp(8), dp(16), dp(8));
+            button.setBackground(rounded(LauncherActivity.RAISED, dp(18)));
+            button.setOnClickListener(v -> {
+                action.run();
+                changed();
+            });
+        }
+        card(title, about, button, false, true);
+    }
+
+    // --- views -----------------------------------------------------------------------------------
+
+    private TextView text(String value, int sp, int color) {
+        final TextView view = new TextView(activity);
+        view.setText(value);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        view.setTextColor(color);
+        return view;
+    }
+
+    private static GradientDrawable rounded(int color, int radius) {
+        final GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(radius);
+        shape.setColor(color);
+        return shape;
+    }
+
+    private static LinearLayout.LayoutParams matchWidth(int topMargin) {
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.topMargin = topMargin;
+        return params;
+    }
+
+    private int dp(int value) {
+        return Math.round(value * activity.getResources().getDisplayMetrics().density);
     }
 }

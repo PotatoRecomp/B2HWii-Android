@@ -154,11 +154,19 @@ public final class GameActivity extends SDLActivity
     }
 
     @Override
+    public void onLayoutDone(String layout) {
+        settings.setTouchLayout(layout);
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         if (nativeReady) {
             nativeSetBackground(false);  // the game carries on where it stopped
+            // Back from the Start Menu (Continue): what was changed there applies now.
+            nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps());
         }
+        applyControlSettings();
         menuPoll.removeCallbacks(pollMenu);
         menuPoll.post(pollMenu);
         hideSystemBars();
@@ -216,11 +224,18 @@ public final class GameActivity extends SDLActivity
         return super.dispatchKeyEvent(event);
     }
 
-    /** "Start Menu": back to the launcher (its settings, Skip Start Menu); the game's process ends. */
+    /**
+     * "Start Menu": back to the launcher. The game stays paused in its process, and the launcher's
+     * Continue brings it back; a LAN session ends its process, as before.
+     */
     private void openStartMenu(boolean inSession) {
-        if (inSession) {
-            nativePrepareToLeave();  // the host keeps the session's progress
+        if (!inSession) {
+            startActivity(new Intent(this, LauncherActivity.class)
+                    .putExtra(LauncherActivity.EXTRA_SHOW_START_MENU, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            return;
         }
+        nativePrepareToLeave();  // the host keeps the session's progress
         startActivity(new Intent(this, LauncherActivity.class)
                 .putExtra(LauncherActivity.EXTRA_SHOW_START_MENU, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
@@ -309,6 +324,7 @@ public final class GameActivity extends SDLActivity
         touch.setControlsVisible(settings.touchControls());
         touch.setOpacity(settings.touchOpacity());
         touch.setHaptics(settings.haptics());
+        touch.setLayout(settings.touchLayout());
     }
 
     private void hideSystemBars() {
@@ -332,6 +348,7 @@ public final class GameActivity extends SDLActivity
         touch.release();
         final boolean inSession = nativeReady && nativeSessionActive();
         final java.util.List<String> items = new java.util.ArrayList<>();
+        items.add("Edit Controls Layout");
         items.add("Start Menu");
         if (inSession) items.add("Leave LAN Game");
         items.add("Quit Game");
@@ -339,7 +356,8 @@ public final class GameActivity extends SDLActivity
                 .setTitle("Basara 2 Heroes Wii")
                 .setItems(items.toArray(new String[0]), (dialog, which) -> {
                     final String item = items.get(which);
-                    if (item.equals("Start Menu")) openStartMenu(inSession);
+                    if (item.equals("Edit Controls Layout")) touch.setEditMode(true);
+                    else if (item.equals("Start Menu")) openStartMenu(inSession);
                     else if (item.equals("Leave LAN Game")) leaveSession();
                     else finish();
                 })

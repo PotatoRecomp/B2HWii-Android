@@ -36,6 +36,9 @@ struct RuntimeUserConfig {
     std::optional<bool> forceAspect169;
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
+    std::optional<int32_t> frameskip;  // 0 off, 1 auto (skip drawing a frame while the game runs behind)
+    std::optional<bool> skipBoot;  // run the logos at full speed, undrawn, up to the save check
+    std::optional<int32_t> fsr;  // 0 off, 1 light sharpen, 2 full FSR1 (picture drawn larger than rendered)
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
     std::optional<uint32_t> windowWidth;
@@ -545,6 +548,12 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     if (auto value = FindConfigInt(document, "video", "gpu_compat"); value && *value >= 0 && *value <= 2) {
         config.gpuCompat = *value;
     }
+    if (auto value = FindConfigInt(document, "video", "frameskip"); value && *value >= 0 && *value <= 1) {
+        config.frameskip = *value;
+    }
+    if (auto value = FindConfigInt(document, "video", "fsr"); value && *value >= 0 && *value <= 2) {
+        config.fsr = *value;
+    }
     config.windowPosX = FindConfigInt(document, "video", "window_x");
     config.windowPosY = FindConfigInt(document, "video", "window_y");
     if (auto value = FindConfigUint(document, "video", "window_width"); value && *value != 0) {
@@ -581,6 +590,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
+    config.skipBoot = FindConfigValue<bool>(document, "video", "skip_boot");
     config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
     config.vsync = FindConfigValue<bool>(document, "video", "vsync");
     if (auto value = FindConfigValue<std::string>(document, "game", "language");
@@ -812,6 +822,11 @@ inline bool SetSkipUnreadyPipelines(bool value) {
     return WriteSetting("video", "skip_unready_pipelines", value ? "true" : "false");
 }
 
+inline bool SetFsr(int32_t mode) {
+    Mutable().fsr = mode;
+    return WriteSetting("video", "fsr", std::to_string(mode));
+}
+
 inline bool SetDisableCopyFilter(bool value) {
     Mutable().disableCopyFilter = value;
     return WriteSetting("video", "disable_copy_filter", value ? "true" : "false");
@@ -985,6 +1000,20 @@ inline int32_t AspectMode(int32_t fallback) {
 
 inline int32_t GpuCompat() {
     return Get().gpuCompat.value_or(0);
+}
+
+inline int32_t Frameskip() {
+    return Get().frameskip.value_or(0);
+}
+
+inline bool SkipBoot() {
+    if (const char* env = std::getenv("BASARA_SKIP_BOOT"); env && (*env == '0' || *env == '1')) return *env == '1';
+    return Get().skipBoot.value_or(false);
+}
+
+inline int32_t Fsr() {
+    if (const char* env = std::getenv("BASARA_FSR"); env && *env >= '0' && *env <= '2') return *env - '0';
+    return Get().fsr.value_or(1);
 }
 
 inline bool SetGpuCompat(int32_t value) {

@@ -6,6 +6,7 @@
 #include "isa/big_endian.h"
 #include "hle/storage/riivolution.h"
 #include "runtime_log.h"
+#include "hle_stubs.h"
 
 // ============================================================================
 // Configuration
@@ -123,6 +124,9 @@ bool NandRename(const std::filesystem::path& from, const std::filesystem::path& 
 // Guest paths are absolute and already lexically resolved against the NAND root, so
 // they are appended as relative components instead of replacing the root.
 static std::filesystem::path BuildHostNandPath(const std::string& wiiPathStr) {
+    if (wiiPathStr.find("/00010000/5242534a") != std::string::npos) {
+        BasaraBootSkip_SaveAccess();
+    }
     std::filesystem::path hostPath = GetNandBasePath();
     size_t cursor = 0;
     while (cursor < wiiPathStr.size()) {

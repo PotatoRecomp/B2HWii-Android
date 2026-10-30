@@ -40,6 +40,20 @@ final class AppSettings {
     int gpuCompat() { return prefs.getInt("gpu_compat", GPU_COMPAT_AUTO); }
     void setGpuCompat(int mode) { prefs.edit().putInt("gpu_compat", mode).commit(); }
 
+    /** Frameskip Auto: skip drawing a frame while the game runs behind (off by default). */
+    boolean frameskip() { return prefs.getBoolean("frameskip", false); }
+    void setFrameskip(boolean on) { prefs.edit().putBoolean("frameskip", on).commit(); }
+    /**
+     * FSR1 upscaling when the game renders below the screen's resolution (on by default), in light
+     * quality (sharpen the stretched picture) or full (FSR1's edge-aware upscale, heavier on the GPU).
+     */
+    boolean fsrOn() { return prefs.getBoolean("fsr_on", true); }
+    void setFsrOn(boolean on) { prefs.edit().putBoolean("fsr_on", on).commit(); }
+    boolean fsrFull() { return prefs.getBoolean("fsr_full", false); }
+    void setFsrFull(boolean full) { prefs.edit().putBoolean("fsr_full", full).commit(); }
+    /** The config value: 0 off, 1 light, 2 full. */
+    int fsr() { return fsrOn() ? (fsrFull() ? 2 : 1) : 0; }
+
     /** Auto Update: opening the app installs the latest GitHub release (off by default). */
     boolean autoUpdate() { return prefs.getBoolean("auto_update", false); }
     void setAutoUpdate(boolean on) { prefs.edit().putBoolean("auto_update", on).commit(); }
@@ -71,9 +85,13 @@ final class AppSettings {
     boolean haptics() { return prefs.getBoolean("haptics", true); }
     void setHaptics(boolean on) { prefs.edit().putBoolean("haptics", on).commit(); }
 
-    /** Open the game straight away when the app starts; the in-game menu leads back here. */
-    boolean skipStartMenu() { return prefs.getBoolean("skip_start_menu", false); }
-    void setSkipStartMenu(boolean on) { prefs.edit().putBoolean("skip_start_menu", on).commit(); }
+    /** The touch controls as the player arranged them in the layout editor ("" is the default). */
+    String touchLayout() { return prefs.getString("touch_layout", ""); }
+    void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
+
+    /** Skip Boot:the logos run at full speed, undrawn, up to the game's save check. */
+    boolean skipBoot() { return prefs.getBoolean("skip_boot", false); }
+    void setSkipBoot(boolean on) { prefs.edit().putBoolean("skip_boot", on).commit(); }
 
     /** Beta only: why the Beta ended, once BetaGate has seen it end (kept, so going offline won't reopen it). */
     String betaEnded() { return prefs.getString("beta_ended", null); }

@@ -30,8 +30,13 @@ constexpr uint32_t kAICallbackStackSwitchAddr = 0x80662BF4u;  // Basara  // __Ca
 constexpr uint32_t kAIDmaCallbackAddr = 0x80662BF8u;  // Basara          // __AID_Callback (NSMBW)
 
 // Max completed 3 ms DMA blocks delivered per tick. Draining several at once catches up
-// backlog from a long frame without letting a large stall spiral into an unbounded loop.
-constexpr int kMaxBlocksPerTick = 4;
+// backlog from a long frame without letting a large stall spiral into an unbounded loop. A
+// busy game may poll only once a frame, so this must cover a slow frame (16 blocks = 48 ms);
+// at 4 a 20 ms frame lost a third of its audio for good.
+constexpr int kMaxBlocksPerTick = 16;
+// Elapsed time held for blocks not yet delivered. Beyond this the excess is dropped (a gap)
+// rather than played late forever.
+constexpr double kMaxAccumulatedSeconds = 0.150;
 
 struct AIDmaState {
     std::mutex mutex;
@@ -436,7 +441,8 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
         if (enabled && startAddr != 0 && length != 0 && sampleRate != 0) {
             // SoundThread can hit the idle scheduler before the outer AXOut frame finishes;
             // retain elapsed time here rather than recursively entering the singleton AI/AX device.
-            g_ai.accumulatorSeconds += static_cast<double>(deltaMicros) / 1'000'000.0;
+            g_ai.accumulatorSeconds = std::min(
+                g_ai.accumulatorSeconds + static_cast<double>(deltaMicros) / 1'000'000.0, kMaxAccumulatedSeconds);
             if (g_ai.tickActive) {
                 return;
             }

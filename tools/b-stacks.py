@@ -19,6 +19,9 @@ parser.add_argument("--chains", metavar="MODULE",
                     help="also print the first 4 libmain frames of samples whose innermost frame is in MODULE")
 parser.add_argument("--guest-self", action="store_true",
                     help="also count each sample against its innermost translated guest function (func_*)")
+parser.add_argument("--children", metavar="FUNC",
+                    help="inclusive time of each guest function FUNC (e.g. func_802BE4F4) calls directly, "
+                         "and how much of it is inside GX")
 args = parser.parse_args()
 guest_samples = []
 
@@ -61,7 +64,7 @@ with open(args.stacks) as f:
         for x in seen:
             inclusive[x] += 1
         offsets.update(seen)
-        if args.guest_self:
+        if args.guest_self or args.children:
             guest_samples.append([int(x, 16) for x in frames if "+" not in x and x != "?"])
 
 symbolizer = os.path.join(os.environ["LOCALAPPDATA"], "Android", "Sdk", "ndk", "28.2.13676358", "toolchains",
@@ -76,7 +79,7 @@ for off, _ in inclusive.most_common(args.top * 2):
     wanted.add(off)
 for chain, _ in chains.most_common(args.top):
     wanted.update(chain)
-if args.guest_self:
+if args.guest_self or args.children:
     wanted.update(offsets)
 wanted = sorted(wanted)
 names = {}
@@ -119,6 +122,22 @@ if args.guest_self:
         for (g, inner), n in guest_inner.most_common():
             if g == guest and n * 200 >= total:
                 print(f"{100.0 * n / total:5.1f}%  {g} > {inner}")
+if args.children:
+    child_time = collections.Counter()
+    child_gx = collections.Counter()
+    for frames in guest_samples:
+        named = [names.get(x, "") for x in frames]
+        if args.children not in named:
+            continue
+        # Frames are innermost first: the direct callee is the nearest guest function inside FUNC.
+        outer = len(named) - 1 - named[::-1].index(args.children)
+        child = next((n for n in reversed(named[:outer]) if n.startswith("func_")), "(self)")
+        child_time[child] += 1
+        if any(n.startswith("GX") or "aurora" in n for n in named[:outer]):
+            child_gx[child] += 1
+    print(f"\n== direct callees of {args.children} (inclusive, of which in GX)")
+    for child, n in child_time.most_common(args.top):
+        print(f"{100.0 * n / total:5.1f}%  {child}  (GX {100.0 * child_gx[child] / total:.1f}%)")
 print("\n== inclusive (libmain)")
 for off, n in inclusive.most_common(args.top * 2):
     print(f"{100.0 * n / total:5.1f}%  {name(off)}")

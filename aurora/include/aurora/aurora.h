@@ -197,6 +197,10 @@ void aurora_set_metalfx_spatial(bool enabled);
 bool aurora_get_metalfx_spatial();
 bool aurora_is_metalfx_spatial_supported();
 AuroraMetalFXStatus aurora_get_metalfx_status();
+// FSR1 when the game image is drawn larger than it was rendered, whenever MetalFX is not upscaling:
+// 0 off, 1 light (bilinear + RCAS sharpen, one pass), 2 full (EASU upscale + RCAS).
+void aurora_set_fsr(int mode);
+int aurora_get_fsr();
 
 AuroraBackend aurora_get_backend();
 const AuroraBackend* aurora_get_available_backends(size_t* count);

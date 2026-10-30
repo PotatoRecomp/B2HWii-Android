@@ -282,6 +282,7 @@ void ServiceDeferredTimingDuringGxWork() {
             // and Aurora work until the native GX call has unwound.
             VI_HLE_ProcessRetracesDeferred(8);
             OS_HLE_ProcessAlarmsDeferred(8);
+            Audio_HLE_PollDeferred();
         } else if (TryGetCpuContext() != nullptr) {
             // Same interrupt isolation as the deferred paths above: this GX call
             // is mid-execution of a translated function, so the retrace

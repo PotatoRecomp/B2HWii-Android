@@ -1,4 +1,5 @@
 #include "gpu.hpp"
+#include "fsr.hpp"
 
 #include <array>
 #include <algorithm>
@@ -56,7 +57,7 @@ TextureWithSampler g_frameBufferResolved;
 TextureWithSampler g_depthBuffer;
 
 // EFB -> XFB copy pipeline
-static wgpu::BindGroupLayout g_CopyBindGroupLayout;
+wgpu::BindGroupLayout g_CopyBindGroupLayout;
 wgpu::RenderPipeline g_CopyPipeline;
 wgpu::BindGroup g_CopyBindGroup;
 static bool g_presentSourceOverrideActive = false;
@@ -1042,6 +1043,7 @@ void serialize_pipeline_caches() noexcept {
 void shutdown() {
   serialize_pipeline_caches();
   g_initialized.store(false, std::memory_order_release);
+  fsr::shutdown();
   g_CopyBindGroupLayout = {};
   g_CopyPipeline = {};
   g_CopyBindGroup = {};

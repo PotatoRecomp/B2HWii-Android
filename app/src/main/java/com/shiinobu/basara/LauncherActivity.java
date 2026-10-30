@@ -1,6 +1,7 @@
 package com.shiinobu.basara;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -44,7 +45,7 @@ public final class LauncherActivity extends Activity {
     private static final int REQUEST_DISC = 1;
     /** Set by GameActivity.restartForSession: open the game again once its old process is gone. */
     static final String EXTRA_RESTART_GAME = "restartGame";
-    /** Set by the game's "Start Menu": show this screen even with Skip Start Menu on. */
+    /** Set by the game's "Start Menu": no automatic update check on the way back. */
     static final String EXTRA_SHOW_START_MENU = "showStartMenu";
 
     static final String PROJECT_URL = "https://github.com/shiinobu/basara2heroes-android";
@@ -54,13 +55,10 @@ public final class LauncherActivity extends Activity {
     private Tile updateCheck;
     private Tile autoUpdate;
     private Tile gameFile;
-    /** Skip Start Menu with Auto Update on: open the game once the update check finds nothing. */
-    private boolean skipAfterCheck;
     private boolean updating;
     /** An update waiting for the player to allow installs from this app. */
     private Updater.Release waitingUpdate;
     private static final String STATE_WAITING_UPDATE = "waiting_update";
-    private static final String STATE_SKIP_AFTER_CHECK = "skip_after_check";
     /** Gone to allow "All files access" for the file browser: open it on the way back. */
     private boolean waitingFileAccess;
     private static final String STATE_WAITING_FILE_ACCESS = "waiting_file_access";
@@ -73,22 +71,12 @@ public final class LauncherActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         settings = new AppSettings(this);
-        // Skip Start Menu: straight into the game, unless the game sent the player here or is
+        // Updates are checked on a fresh start, not when the game sent the player here or is
         // restarting itself into a LAN session.
         final Intent launch = getIntent();
         final boolean asked = launch != null && (launch.getBooleanExtra(EXTRA_SHOW_START_MENU, false)
                 || launch.getBooleanExtra(EXTRA_RESTART_GAME, false));
         final boolean opened = savedInstanceState == null && !asked;
-        if (opened && settings.skipStartMenu() && AppFiles.gameReady(this) && settings.betaEnded() == null) {
-            if (!settings.autoUpdate() && !BuildConfig.BETA) {
-                startActivity(new Intent(this, GameActivity.class));
-                overridePendingTransition(0, 0);
-                finish();
-                return;
-            }
-            // Auto Update (or the Beta's check) first; the game opens once there's nothing to install.
-            skipAfterCheck = true;
-        }
 
         gameFile = tile("Game File", "", v -> pickDisc());
         final Tile settingsTile = tile("Settings", "Display and controls", v -> SettingsMenu.show(this));
@@ -98,8 +86,8 @@ public final class LauncherActivity extends Activity {
             updateAutoUpdateButton();
         });
         updateAutoUpdateButton();
-        skip = tile("Skip Start Menu", "Go straight to the game", v -> {
-            settings.setSkipStartMenu(!settings.skipStartMenu());
+        skip = tile("Skip Boot", "Skip the logos, straight to the save check", v -> {
+            settings.setSkipBoot(!settings.skipBoot());
             updateSkipButton();
         });
         updateSkipButton();
@@ -134,7 +122,6 @@ public final class LauncherActivity extends Activity {
         if (savedInstanceState != null) {
             // Android 11 ends this process when "Allow from this source" changes.
             waitingUpdate = Updater.Release.from(savedInstanceState.getBundle(STATE_WAITING_UPDATE));
-            skipAfterCheck = savedInstanceState.getBoolean(STATE_SKIP_AFTER_CHECK, false);
             waitingFileAccess = savedInstanceState.getBoolean(STATE_WAITING_FILE_ACCESS, false);
         }
         if (opened && (settings.autoUpdate() || BuildConfig.BETA)) {
@@ -187,7 +174,9 @@ public final class LauncherActivity extends Activity {
             if (settings.betaEnded() != null) {
                 showBetaEnded();
             } else if (AppFiles.gameReady(this)) {
-                startActivity(new Intent(this, GameActivity.class));
+                // A game left for the Start Menu is still running: Continue brings it back.
+                startActivity(new Intent(this, GameActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
             } else {
                 pickDisc();
             }
@@ -206,6 +195,29 @@ public final class LauncherActivity extends Activity {
         restartGameIfAsked(intent);
     }
 
+    /** The pid of the game's process (":game") while it runs, else 0. */
+    private int gameProcess() {
+        final ActivityManager am = getSystemService(ActivityManager.class);
+        final java.util.List<ActivityManager.RunningAppProcessInfo> all =
+                am == null ? null : am.getRunningAppProcesses();
+        if (all != null) {
+            final String name = getPackageName() + ":game";
+            for (ActivityManager.RunningAppProcessInfo info : all) {
+                if (name.equals(info.processName)) return info.pid;
+            }
+        }
+        return 0;
+    }
+
+    /** Ends a game still running in the background, so the next start is a fresh one. */
+    private void endGame() {
+        final int pid = gameProcess();
+        if (pid != 0) {
+            android.os.Process.killProcess(pid);
+            refresh();
+        }
+    }
+
     /** Network play: the game asked to be started again into a LAN session. */
     private void restartGameIfAsked(Intent intent) {
         if (intent == null || !intent.getBooleanExtra(EXTRA_RESTART_GAME, false)) {
@@ -221,7 +233,6 @@ public final class LauncherActivity extends Activity {
         super.onSaveInstanceState(outState);
         if (waitingUpdate != null) {
             outState.putBundle(STATE_WAITING_UPDATE, waitingUpdate.toBundle());
-            outState.putBoolean(STATE_SKIP_AFTER_CHECK, skipAfterCheck);
         }
         outState.putBoolean(STATE_WAITING_FILE_ACCESS, waitingFileAccess);
     }
@@ -303,8 +314,6 @@ public final class LauncherActivity extends Activity {
                             : release == null || release.apkUrl == null ? "The latest release has no Android download."
                             : "You have the latest version (" + installed + ").";
                     new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
-                } else if (skipAfterCheck) {
-                    openGame();
                 }
             });
         }, "update-check").start();
@@ -321,11 +330,7 @@ public final class LauncherActivity extends Activity {
                         startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                 Uri.parse("package:" + getPackageName())));
                     })
-                    .setNegativeButton("Not Now", (d, w) -> {
-                        if (skipAfterCheck) {
-                            openGame();
-                        }
-                    })
+                    .setNegativeButton("Not Now", null)
                     .show();
             return;
         }
@@ -358,11 +363,7 @@ public final class LauncherActivity extends Activity {
                 dialog.dismiss();
                 if (error != null) {
                     new AlertDialog.Builder(this).setMessage("The update failed: " + error)
-                            .setPositiveButton("OK", (d, w) -> {
-                                if (skipAfterCheck) {
-                                    openGame();
-                                }
-                            }).show();
+                            .setPositiveButton("OK", null).show();
                 } else {
                     status.setText("Installing Basara " + release.version + "…");
                 }
@@ -395,15 +396,12 @@ public final class LauncherActivity extends Activity {
                 updateCheck.view.setEnabled(true);
                 updateCheck.name.setText("Check for Updates");
                 if (reason != null) {
-                    skipAfterCheck = false;
                     settings.setBetaEnded(reason);
                     showBetaEnded();
                 } else if (!automatic) {
                     final String message = error != null ? "Couldn't check for updates: " + error
                             : "This Beta is still open. Thanks for testing!";
                     new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
-                } else if (skipAfterCheck) {
-                    openGame();
                 }
             });
         }, "beta-check").start();
@@ -430,18 +428,8 @@ public final class LauncherActivity extends Activity {
                 .show();
     }
 
-    private void openGame() {
-        skipAfterCheck = false;
-        if (!AppFiles.gameReady(this)) {
-            return;
-        }
-        startActivity(new Intent(this, GameActivity.class));
-        overridePendingTransition(0, 0);
-        finish();
-    }
-
     private void updateSkipButton() {
-        showToggle(skip.pill, settings.skipStartMenu());
+        showToggle(skip.pill, settings.skipBoot());
     }
 
     private void refresh() {
@@ -455,7 +443,7 @@ public final class LauncherActivity extends Activity {
         } else {
             showStatus("Ready to play", GREEN);
         }
-        play.setText(ready ? "Play" : "Choose Game File");
+        play.setText(ready ? (gameProcess() != 0 ? "Continue" : "Play") : "Choose Game File");
         gameFile.about.setText(ready ? "Loaded (RBSJ08)"
                 : "Your ISO or RVZ (RBSJ08)");
         showAction(gameFile.pill, ready ? "Change" : "Choose");
@@ -518,6 +506,7 @@ public final class LauncherActivity extends Activity {
      * without it the player can allow it, or use the system's picker instead.
      */
     private void pickDisc() {
+        endGame();  // a game still running from the old file must not carry on with the new one
         if (Environment.isExternalStorageManager()) {
             browseDisc();
             return;
@@ -670,16 +659,16 @@ public final class LauncherActivity extends Activity {
         return view;
     }
 
-    // The start menu's colors, on the theme's #101418 background.
-    private static final int ACCENT = Color.rgb(229, 57, 53);
-    private static final int HERO_GLOW = Color.rgb(84, 24, 26);
-    private static final int SURFACE = Color.rgb(24, 31, 38);
-    private static final int RAISED = Color.rgb(38, 48, 58);
-    private static final int MUTED = Color.rgb(170, 178, 186);
-    private static final int FAINT = Color.rgb(120, 128, 136);
-    private static final int GREEN = Color.rgb(102, 187, 106);
-    private static final int AMBER = Color.rgb(255, 183, 77);
-    private static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    // The start menu's colors, on the theme's #101418 background (the settings screen shares them).
+    static final int ACCENT = Color.rgb(229, 57, 53);
+    static final int HERO_GLOW = Color.rgb(84, 24, 26);
+    static final int SURFACE = Color.rgb(24, 31, 38);
+    static final int RAISED = Color.rgb(38, 48, 58);
+    static final int MUTED = Color.rgb(170, 178, 186);
+    static final int FAINT = Color.rgb(120, 128, 136);
+    static final int GREEN = Color.rgb(102, 187, 106);
+    static final int AMBER = Color.rgb(255, 183, 77);
+    static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
     /** Between the screen's edge, its two sides and the tiles, in dp. */
     private static final int GAP = 10;
 

@@ -81,6 +81,9 @@ void ServicePendingInterruptsOnEnable()
     try {
         VI_HLE_ProcessRetracesDeferred(8);
         OS_HLE_ProcessAlarmsDeferred(8);
+        // AI blocks too: a busy battle frame otherwise saves ~10 of them for the idle loop, which
+        // then joins each block's AX mix right after starting it (2-4 ms a frame waited on G81).
+        Audio_HLE_PollDeferred();
     } catch (...) {
         g_inEnablePump = false;
         throw;

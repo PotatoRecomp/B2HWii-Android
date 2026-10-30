@@ -1295,6 +1295,24 @@ void DrawGraphicsSettings() {
         break;
     }
 #endif
+    {
+        // FSR1 on or off; on keeps the chosen quality (Light unless Full was picked).
+        static int s_fsrQuality = aurora_get_fsr() == 2 ? 2 : 1;
+        bool fsrOn = aurora_get_fsr() != 0;
+        if (ImGui::Checkbox("FSR1 upscaling", &fsrOn)) {
+            aurora_set_fsr(fsrOn ? s_fsrQuality : 0);
+            RuntimeConfigFile::SetFsr(aurora_get_fsr());
+        }
+        ImGui::BeginDisabled(!fsrOn);
+        bool full = s_fsrQuality == 2;
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Full quality (heavier on the GPU)", &full)) {
+            s_fsrQuality = full ? 2 : 1;
+            aurora_set_fsr(s_fsrQuality);
+            RuntimeConfigFile::SetFsr(s_fsrQuality);
+        }
+        ImGui::EndDisabled();
+    }
     if (ImGui::Checkbox("Disable copy filter", &g_disableCopyFilter)) {
         aurora_set_disable_copy_filter(g_disableCopyFilter);
         RuntimeConfigFile::SetDisableCopyFilter(g_disableCopyFilter);
@@ -1315,32 +1333,43 @@ constexpr int kFrameTimeCount = 180;
 float g_frameTimes[kFrameTimeCount] = {};
 int g_frameTimeNext = 0;
 
-void DrawFrameGraph() {
-    float last = g_frameTimes[(g_frameTimeNext + kFrameTimeCount - 1) % kFrameTimeCount];
-    float peak = 0.0f, sum = 0.0f;
-    int samples = 0;
-    for (float t : g_frameTimes) {
-        if (t <= 0.0f) continue;
-        peak = std::max(peak, t);
-        sum += t;
-        ++samples;
+// One item of the stats bar: a dim label (if any) and its value, after a dim divider.
+void StatItem(bool& first, const char* label, const ImVec4& color, const char* value) {
+    static const ImVec4 kDim(0.70f, 0.74f, 0.80f, 1.0f);
+    const float gap = ImGui::GetFontSize() * 0.5f;
+    if (!first) {
+        ImGui::SameLine(0.0f, gap);
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.22f), "|");
+        ImGui::SameLine(0.0f, gap);
     }
-    ImGui::Text("Frame: %.1f ms", last);
-    ImGui::TextDisabled("avg %.1f  max %.1f", samples > 0 ? sum / samples : 0.0f, peak);
+    first = false;
+    if (label != nullptr) {
+        ImGui::TextColored(kDim, "%s", label);
+        ImGui::SameLine(0.0f, gap * 0.6f);
+    }
+    ImGui::TextColored(color, "%s", value);
+}
+
+// The frame graph as an item of the stats bar: the last frame's time, then the recent frames as a
+// strip of bars one line tall (0 to 33.3 ms, more when a frame took longer).
+void DrawFrameGraph(bool& first) {
+    const float last = g_frameTimes[(g_frameTimeNext + kFrameTimeCount - 1) % kFrameTimeCount];
+    float peak = 0.0f;
+    for (float t : g_frameTimes) peak = std::max(peak, t);
+    char v[32];
+    std::snprintf(v, sizeof(v), "%.1f ms", last);
+    StatItem(first, nullptr, ImVec4(0.93f, 0.95f, 0.97f, 1.0f), v);
+    ImGui::SameLine(0.0f, ImGui::GetFontSize() * 0.4f);
     const float scale = ImGui::GetFontSize() / 13.0f;
-    const ImVec2 size(kFrameTimeCount * scale, 50.0f * scale);
+    const ImVec2 size(kFrameTimeCount * 0.6f * scale, ImGui::GetTextLineHeight());
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImGui::Dummy(size);
     ImDrawList* list = ImGui::GetWindowDrawList();
-    // 0 to 33.3 ms (two 60 Hz frames), more when a frame took longer.
     const float top = std::max(100.0f / 3.0f, peak * 1.1f);
     const auto yOf = [&](float ms) { return origin.y + size.y - std::min(ms / top, 1.0f) * size.y; };
-    list->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(0, 0, 0, 90));
-    for (const float line : {1000.0f / 60.0f, 1000.0f / 30.0f}) {
-        if (line < top) {
-            list->AddLine(ImVec2(origin.x, yOf(line)), ImVec2(origin.x + size.x, yOf(line)), IM_COL32(255, 255, 255, 60));
-        }
-    }
+    list->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(0, 0, 0, 70), 3.0f);
+    const float target = 1000.0f / 60.0f;
+    list->AddLine(ImVec2(origin.x, yOf(target)), ImVec2(origin.x + size.x, yOf(target)), IM_COL32(255, 255, 255, 50));
     const float w = size.x / kFrameTimeCount;
     for (int i = 0; i < kFrameTimeCount; ++i) {
         const float t = g_frameTimes[(g_frameTimeNext + i) % kFrameTimeCount];
@@ -1418,57 +1447,46 @@ ImVec4 FpsColor(double fps) {
     return ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
 }
 
-void DrawPerformanceStats() {
-    char line[192];
+// The stats bar, one line: frames, then CPU / GPU load, then the rest as bare numbers (game CPU,
+// GX and render ms a frame, draws, temperature, RAM, battery).
+void DrawPerformanceStats(bool& first) {
+    static const ImVec4 kText(0.93f, 0.95f, 0.97f, 1.0f);
+    static const ImVec4 kSoft(0.75f, 0.79f, 0.85f, 1.0f);
+    char v[64];
     const GameFrameStats& game = SampleGameFrameStats();
-    if (game.fps >= 0.0f) {
-        ImGui::TextColored(FpsColor(game.fps), "Game %.0f fps", game.fps);
-        ImGui::SameLine();
-        ImGui::Text("| CPU %.1f ms (%.0f%%) | GX %.1f ms", game.busyMs, game.loadPercent, game.gxMs);
-        ImGui::Text("Draws %u", game.draws);
-        ImGui::Text("Render %.1f ms (prepare %.1f) | wait %.1f ms | shaders %u", game.renderMs, game.prepareMs,
-                    game.waitMs, aurora_get_queued_pipeline_count());
-    }
-
     const SystemStats sys = SampleSystemStats();
-    int at = std::snprintf(line, sizeof(line), "CPU");
-    if (sys.processCpuPercent >= 0.0f) {
-        at += std::snprintf(line + at, sizeof(line) - at, " %.0f%% of %d cores", sys.processCpuPercent, sys.cores);
+    if (game.fps >= 0.0f) {
+        std::snprintf(v, sizeof(v), "%.0f", game.fps);
+        StatItem(first, "GAME", FpsColor(game.fps), v);
+        std::snprintf(v, sizeof(v), "%.0f%%", game.loadPercent);
+        StatItem(first, "CPU", kText, v);
+    } else if (sys.processCpuPercent >= 0.0f) {
+        std::snprintf(v, sizeof(v), "%.0f%%", sys.processCpuPercent);
+        StatItem(first, "CPU", kText, v);
     }
-    for (size_t i = 0; i < sys.clusterMHz.size() && at < static_cast<int>(sizeof(line)) - 16; ++i) {
-        at += std::snprintf(line + at, sizeof(line) - at, "%s%d", i == 0 ? " | " : "/", sys.clusterMHz[i]);
-        if (i + 1 == sys.clusterMHz.size()) at += std::snprintf(line + at, sizeof(line) - at, " MHz");
-    }
-    if (sys.cpuTempC >= 0.0f) {
-        std::snprintf(line + at, sizeof(line) - at, " | %.0f C", sys.cpuTempC);
-    }
-    ImGui::TextUnformatted(line);
-
-    at = std::snprintf(line, sizeof(line), "GPU %s", AuroraAdapterSummary());
     if (sys.gpuBusyPercent >= 0) {
-        at += std::snprintf(line + at, sizeof(line) - at, " | %d%%", sys.gpuBusyPercent);
+        std::snprintf(v, sizeof(v), "%d%%", sys.gpuBusyPercent);
+        StatItem(first, "GPU", kText, v);
     }
-    if (sys.gpuMHz > 0) {
-        at += std::snprintf(line + at, sizeof(line) - at, " | %d MHz", sys.gpuMHz);
+    if (game.fps >= 0.0f) {
+        std::snprintf(v, sizeof(v), "%.1f / %.1f / %.1f ms", game.busyMs, game.gxMs, game.renderMs);
+        StatItem(first, nullptr, kSoft, v);
+        if (game.draws >= 1000) std::snprintf(v, sizeof(v), "%.1fk", game.draws / 1000.0);
+        else std::snprintf(v, sizeof(v), "%u", game.draws);
+        StatItem(first, nullptr, kSoft, v);
     }
-    if (sys.gpuTempC >= 0.0f) {
-        std::snprintf(line + at, sizeof(line) - at, " | %.0f C", sys.gpuTempC);
+    const float temp = std::max(sys.cpuTempC, sys.gpuTempC);
+    if (temp >= 0.0f) {
+        std::snprintf(v, sizeof(v), "%.0f C", temp);
+        StatItem(first, nullptr, temp >= 70.0f ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f) : kSoft, v);
     }
-    ImGui::TextUnformatted(line);
-
     if (sys.appRamBytes != 0) {
-        at = std::snprintf(line, sizeof(line), "RAM app %.0f MB", sys.appRamBytes / 1048576.0);
-        if (sys.ramTotalBytes != 0) {
-            std::snprintf(line + at, sizeof(line) - at, " | free %.1f / %.1f GB", sys.ramAvailableBytes / 1073741824.0,
-                          sys.ramTotalBytes / 1073741824.0);
-        }
-        ImGui::TextUnformatted(line);
+        std::snprintf(v, sizeof(v), "%.0f MB", sys.appRamBytes / 1048576.0);
+        StatItem(first, nullptr, kSoft, v);
     }
-    if (sys.batteryPercent >= 0 || sys.batteryTempC >= 0.0f) {
-        at = std::snprintf(line, sizeof(line), "Battery");
-        if (sys.batteryPercent >= 0) at += std::snprintf(line + at, sizeof(line) - at, " %d%%", sys.batteryPercent);
-        if (sys.batteryTempC >= 0.0f) std::snprintf(line + at, sizeof(line) - at, " | %.1f C", sys.batteryTempC);
-        ImGui::TextUnformatted(line);
+    if (sys.batteryPercent >= 0) {
+        std::snprintf(v, sizeof(v), "%d%%", sys.batteryPercent);
+        StatItem(first, "BAT", kSoft, v);
     }
 }
 
@@ -1519,11 +1537,16 @@ void DrawFpsOverlay() {
         return;
     }
 
+    // A single bar centred at the top of the screen; the frame graph, when on, sits under it.
     const ImGuiIO& io = ImGui::GetIO();
-    constexpr float kMargin = 10.0f;
+    constexpr float kMargin = 6.0f;
     const float top = g_topBarVisible ? ImGui::GetFrameHeight() + kMargin : kMargin;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - kMargin, top), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.55f);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, top), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    const float ui = std::clamp(io.DisplaySize.y * 0.03f / 13.0f, 1.0f, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * ui, 4.0f * ui));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f * ui);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize |
                                          ImGuiWindowFlags_NoDecoration |
                                          ImGuiWindowFlags_NoFocusOnAppearing |
@@ -1532,33 +1555,31 @@ void DrawFpsOverlay() {
                                          ImGuiWindowFlags_NoNav |
                                          ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("FPS Overlay", nullptr, kFlags)) {
-        if (!g_showFps) {
-        } else if (presentTiming.sampleCount == 0) {
-            ImGui::TextUnformatted("FPS: --");
-        } else {
-            // Present timing includes the additional frames produced by
-            // interpolation, so this remains the actual displayed FPS.
-            ImGui::TextColored(FpsColor(presentTiming.framesPerSecond), "FPS: %.1f",
-                               presentTiming.framesPerSecond);
-            ImGui::SameLine();
-            ImGui::Text("(%.1f ms)", 1000.0 / std::max(1.0, presentTiming.framesPerSecond));
-            // Replay-unsafe frames hold the presented cadence with duplicated
-            // slots, so the counter alone reads 180 while the motion on screen
-            // is 60 Hz. Surface the divergence instead of hiding it.
-            if (presentTiming.effectiveFramesPerSecond <
-                presentTiming.framesPerSecond * 0.95) {
-                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "Motion: %.1f",
-                                   presentTiming.effectiveFramesPerSecond);
-            }
-        }
+        // Readable on a phone: text about 3% of the screen's height (ui above).
+        ImGui::SetWindowFontScale(ui);
+        bool first = true;
         if (g_showFps) {
-            DrawPerformanceStats();
+            char v[32];
+            if (presentTiming.sampleCount == 0) {
+                StatItem(first, "FPS", ImVec4(0.62f, 0.66f, 0.72f, 1.0f), "--");
+            } else {
+                // Present timing includes the frames produced by interpolation, so this is the
+                // displayed FPS; replay-unsafe frames repeat slots, so the motion rate shows too.
+                std::snprintf(v, sizeof(v), "%.0f", presentTiming.framesPerSecond);
+                StatItem(first, "FPS", FpsColor(presentTiming.framesPerSecond), v);
+                if (presentTiming.effectiveFramesPerSecond < presentTiming.framesPerSecond * 0.95) {
+                    std::snprintf(v, sizeof(v), "%.0f", presentTiming.effectiveFramesPerSecond);
+                    StatItem(first, "MOTION", ImVec4(1.0f, 0.75f, 0.25f, 1.0f), v);
+                }
+            }
+            DrawPerformanceStats(first);
         }
         if (g_frameGraph) {
-            DrawFrameGraph();
+            DrawFrameGraph(first);
         }
     }
     ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 void DrawShaderCompilationStatus() {

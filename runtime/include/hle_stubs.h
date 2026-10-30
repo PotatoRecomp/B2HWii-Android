@@ -12,6 +12,12 @@
 void VI_HLE_ForceRetrace(CpuContext* ctx);
 void VI_HLE_PollRetrace(CpuContext* ctx);
 void VI_HLE_PollRetraceBusy(CpuContext* ctx);
+// From the scheduler's idle loop: like VI_HLE_PollRetrace, but a frameskip catch-up
+// (VI_HLE_SetCatchUpRetrace) may deliver the next retrace before its interval is up.
+void VI_HLE_PollRetraceIdle(CpuContext* ctx);
+// Frameskip: while the game runs behind, its next retrace may come as early as this steady_clock
+// instant (nanoseconds since the clock's epoch) once the game is idle; 0 turns it off.
+void VI_HLE_SetCatchUpRetrace(int64_t earliestNanos);
 void VI_HLE_ProcessRetracesDeferred(int maxToProcess);
 void VI_HLE_WaitForNextRetracePoll();
 // BASARA_LOG_FPS: the scheduler had no guest thread to run for this long (the fps log reports it;
@@ -45,6 +51,11 @@ void Audio_HLE_Poll(CpuContext* ctx);
 // OS_HLE_ProcessAlarmsDeferred does, so it is safe to call from the middle of an
 // arbitrary translated function.
 void Audio_HLE_PollDeferred();
+// Basara's main loop (basara_frameskip.cpp): its passes since boot and how many skipped drawing.
+void BasaraFrameskip_Stats(uint64_t* frames, uint64_t* skipped);
+// Skip Boot: the game runs undrawn and unpaced from start until it first touches its save data
+// (nand_fs.cpp calls this for every path under the game's own NAND title directory).
+void BasaraBootSkip_SaveAccess();
 // Deterministic mode: the virtual tick at which the AI DMA block in flight completes, or
 // DetClock::kNever while audio DMA is stopped.
 uint64_t Audio_HLE_DetNextEventTicks();

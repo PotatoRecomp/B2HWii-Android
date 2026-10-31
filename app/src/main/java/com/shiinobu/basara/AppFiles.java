@@ -37,6 +37,20 @@ final class AppFiles {
         return dir;
     }
 
+    /**
+     * Where console.log goes: /sdcard/basara2heroes (Beta: basara2heroes-beta), which every file
+     * manager can open, unlike Android/data on many phones. Needs "All files access"; without it,
+     * null (the log stays in dataDir/Logs).
+     */
+    static File logDir() {
+        if (!android.os.Environment.isExternalStorageManager()) return null;
+        final File dir = new File(android.os.Environment.getExternalStorageDirectory(),
+                BuildConfig.BETA ? "basara2heroes-beta" : "basara2heroes");
+        //noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        return dir.isDirectory() && dir.canWrite() ? dir : null;
+    }
+
     static File gameDir(Context context) { return new File(dataDir(context), "game"); }
 
     static File runtimeDir(Context context) { return new File(context.getFilesDir(), "runtime"); }
@@ -131,7 +145,9 @@ final class AppFiles {
                 + "show_fps = " + settings.showFps() + "\n"
                 + "spinning_coins = " + settings.spinningCoins() + "\n"
                 + "skip_boot = " + settings.skipBoot() + "\n"
+                + "dynamic_resolution = " + settings.dynamicResolution() + "\n"
                 + "frame_graph = " + settings.frameGraph() + "\n"
+                + "overlay_items = " + settings.overlayItems() + "\n"
                 + "vsync = " + settings.vsync() + "\n"
                 + "texture_replacements = false\n"
                 + "texture_dumps = false\n"

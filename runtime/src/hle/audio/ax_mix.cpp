@@ -135,6 +135,14 @@ public:
         PublishAuxOutputs();
     }
 
+    bool MixBusy() {
+        if (!m_mixThread.joinable()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(m_mixMutex);
+        return m_mixPending || m_mixBusy;
+    }
+
     void ShutdownMixWorker() {
         if (!m_mixThread.joinable()) {
             return;
@@ -1799,6 +1807,10 @@ const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes) {
 
 void JoinMixWorker() {
     Instance().JoinMix();
+}
+
+bool MixWorkerBusy() {
+    return Instance().MixBusy();
 }
 
 void TakeMixStats(uint64_t* mixNanos, uint64_t* waitNanos, uint32_t* mixes, int* lastCpu) {

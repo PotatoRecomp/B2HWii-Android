@@ -12,7 +12,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
-import android.widget.HorizontalScrollView;
+import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -128,12 +128,17 @@ final class SettingsMenu {
     /** After a change: save, and draw the section again with the new values. */
     private void changed() {
         save();
-        final int scroll = rowsScroll.getScrollY();
-        showSection(section);
-        rowsScroll.post(() -> rowsScroll.scrollTo(0, scroll));
+        // Rebuilt in place: the views are swapped before the next frame, so the list stays where it was
+        // (no jump to the top and back).
+        fillSection(section);
     }
 
     private void showSection(int index) {
+        fillSection(index);
+        rowsScroll.scrollTo(0, 0);
+    }
+
+    private void fillSection(int index) {
         section = index;
         for (int i = 0; i < SECTIONS.length; ++i) {
             nav.getChildAt(i + 1).setBackground(i == index ? rounded(LauncherActivity.RAISED, dp(16)) : null);
@@ -145,7 +150,6 @@ final class SettingsMenu {
             case 2: showPerformance(); break;
             default: showControls(); break;
         }
-        rowsScroll.scrollTo(0, 0);
     }
 
     // --- sections --------------------------------------------------------------------------------
@@ -164,13 +168,30 @@ final class SettingsMenu {
                 selected = i;
             }
         }
+        final DisplayMetrics screen = activity.getResources().getDisplayMetrics();
+        final boolean aboveScreen = settings.resolutionScale() > 0f
+                && 480 * settings.resolutionScale() > Math.min(screen.widthPixels, screen.heightPixels) * 1.05f;
         choiceRow("Render Resolution", "Rendered at " + renderSize(settings.resolutionScale())
-                + ". Lower is lighter on a slow phone; FSR1 keeps it sharp.", labels, selected, true,
+                + (aboveScreen
+                        ? ", more than this screen shows: several times the GPU work for little sharpness, so fps can drop. Match screen is sharp enough."
+                        : ". Lower is lighter on a slow phone; FSR1 keeps it sharp."), labels, selected, true,
                 which -> settings.setResolutionScale(scales[which]));
-        toggleRow("FPS Counter", "Frames a second and phone stats in a corner.", settings.showFps(),
-                on -> settings.setShowFps(on));
-        toggleRow("Frametime Graph", "How long each frame took, under the FPS counter.", settings.frameGraph(),
-                on -> settings.setFrameGraph(on));
+        toggleRow("Performance Overlay", "A see-through bar at the top of the game with FPS and phone stats.",
+                settings.showFps(), on -> settings.setShowFps(on));
+        final String[] items = {"FPS", "CPU %", "GPU %", "Battery", "Temperature °C", "Details (ms, draws, RAM)",
+                "Frametime Graph"};
+        final int mask = settings.overlayItems();
+        final boolean[] lit = new boolean[items.length];
+        for (int i = 0; i < 6; ++i) lit[i] = (mask & (1 << i)) != 0;
+        lit[6] = settings.frameGraph();
+        multiRow("Overlay Items", settings.showFps()
+                        ? "Tap to show or hide each one. FPS counts the frames the game really draws a second. "
+                                + "CPU is how busy the game's thread is: near 100% means the phone's CPU is the limit."
+                        : "Turn Performance Overlay on to choose.",
+                items, lit, settings.showFps(), which -> {
+                    if (which == 6) settings.setFrameGraph(!settings.frameGraph());
+                    else settings.setOverlayItems(settings.overlayItems() ^ (1 << which));
+                });
     }
 
     private void showGraphics() {
@@ -196,6 +217,10 @@ final class SettingsMenu {
                         + "choppier picture.",
                 new String[] {"Off", "Auto"}, settings.frameskip() ? 1 : 0, true,
                 which -> settings.setFrameskip(which == 1));
+        toggleRow("Dynamic Resolution", "Lowers the render resolution while the GPU holds the game back "
+                        + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
+                        + "highest it goes.",
+                settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
     }
 
     private void showControls() {
@@ -211,6 +236,8 @@ final class SettingsMenu {
                 settings.touchLayout().isEmpty() ? null : "Reset", () -> settings.setTouchLayout(""));
         toggleRow("Vibration", "A short buzz when a touch button is pressed.", settings.haptics(),
                 on -> settings.setHaptics(on));
+        toggleRow("Touch camera", "Drag on the empty right side of the screen to turn the camera.",
+                settings.touchCamera(), on -> settings.setTouchCamera(on));
         toggleRow("Tilt", "Turn the phone like a steering wheel.", settings.motionTilt(),
                 on -> settings.setMotionTilt(on));
         toggleRow("Shake", "Jolt the phone to shake the remote.", settings.motionShake(),
@@ -297,11 +324,10 @@ final class SettingsMenu {
         });
     }
 
-    /** The choices side by side as chips under the line about it; the chosen one is lit. */
+    /** The choices as chips under the line about it, wrapping onto more lines; the chosen one is lit. */
     private void choiceRow(String title, String about, String[] options, int selected, boolean enabled,
                            Choice choice) {
-        final LinearLayout chips = new LinearLayout(activity);
-        chips.setOrientation(LinearLayout.HORIZONTAL);
+        final FlowLayout chips = new FlowLayout(activity, dp(8));
         for (int i = 0; i < options.length; ++i) {
             final int which = i;
             final boolean on = i == selected;
@@ -318,15 +344,84 @@ final class SettingsMenu {
                     changed();
                 });
             }
-            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            params.rightMargin = dp(8);
-            chips.addView(chip, params);
+            chips.addView(chip);
         }
-        final HorizontalScrollView scroll = new HorizontalScrollView(activity);
-        scroll.setHorizontalScrollBarEnabled(false);
-        scroll.addView(chips);
-        card(title, about, scroll, true, enabled);
+        card(title, about, chips, true, enabled);
+    }
+
+    /** Chips that each turn on or off by themselves; the lit ones are on. */
+    private void multiRow(String title, String about, String[] options, boolean[] lit, boolean enabled,
+                          Choice flip) {
+        final FlowLayout chips = new FlowLayout(activity, dp(8));
+        for (int i = 0; i < options.length; ++i) {
+            final int which = i;
+            final boolean on = lit[i];
+            final TextView chip = text((on ? "✓  " : "") + options[i], 14, on ? Color.WHITE : LauncherActivity.MUTED);
+            chip.setTypeface(on ? Typeface.DEFAULT_BOLD : LauncherActivity.MEDIUM);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(16), dp(8), dp(16), dp(8));
+            chip.setBackground(rounded(on ? LauncherActivity.ACCENT : LauncherActivity.RAISED, dp(18)));
+            if (enabled) {
+                chip.setOnClickListener(v -> {
+                    flip.pick(which);
+                    changed();
+                });
+            }
+            chips.addView(chip);
+        }
+        card(title, about, chips, true, enabled);
+    }
+
+    /** Children left to right, starting a new line when the next one does not fit. */
+    private static final class FlowLayout extends ViewGroup {
+        private final int gap;
+
+        FlowLayout(Activity activity, int gap) {
+            super(activity);
+            this.gap = gap;
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            final int max = MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight();
+            final boolean bounded = MeasureSpec.getMode(widthSpec) != MeasureSpec.UNSPECIFIED;
+            int x = 0, y = 0, lineH = 0, widest = 0;
+            for (int i = 0; i < getChildCount(); ++i) {
+                final View c = getChildAt(i);
+                c.measure(MeasureSpec.makeMeasureSpec(bounded ? max : 0,
+                                bounded ? MeasureSpec.AT_MOST : MeasureSpec.UNSPECIFIED),
+                        MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
+                if (x > 0 && bounded && x + c.getMeasuredWidth() > max) {
+                    x = 0;
+                    y += lineH + gap;
+                    lineH = 0;
+                }
+                x += c.getMeasuredWidth();
+                widest = Math.max(widest, x);
+                x += gap;
+                lineH = Math.max(lineH, c.getMeasuredHeight());
+            }
+            final int w = bounded ? MeasureSpec.getSize(widthSpec) : widest + getPaddingLeft() + getPaddingRight();
+            setMeasuredDimension(w, resolveSize(y + lineH + getPaddingTop() + getPaddingBottom(), heightSpec));
+        }
+
+        @Override
+        protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            final int max = r - l - getPaddingRight();
+            int x = getPaddingLeft(), y = getPaddingTop(), lineH = 0;
+            for (int i = 0; i < getChildCount(); ++i) {
+                final View c = getChildAt(i);
+                final int cw = c.getMeasuredWidth(), ch = c.getMeasuredHeight();
+                if (x > getPaddingLeft() && x + cw > max) {
+                    x = getPaddingLeft();
+                    y += lineH + gap;
+                    lineH = 0;
+                }
+                c.layout(x, y, x + cw, y + ch);
+                x += cw + gap;
+                lineH = Math.max(lineH, ch);
+            }
+        }
     }
 
     /** A card with a button on the right (none when `label` is null). */

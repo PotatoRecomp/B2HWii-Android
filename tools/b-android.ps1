@@ -3,13 +3,16 @@ param(
     [ValidateSet('configure', 'build', 'stage')][string]$Mode = 'build',
     [int]$Jobs = 12,
     [int]$TranslatedJobs = 6,
-    [string]$Ndk = (Join-Path $env:LOCALAPPDATA 'Android\Sdk\ndk\28.2.13676358')
+    [string]$Ndk = (Join-Path $env:LOCALAPPDATA 'Android\Sdk\ndk\28.2.13676358'),
+    # Another build tree (b-pgo.ps1 keeps the instrumented build apart) and extra -D options.
+    [string]$BuildDir = 'generated\android-build',
+    [string[]]$Extra = @()
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $ws = $root
 $tp = Join-Path $root 'third_party'
-$bd = Join-Path $root 'generated\android-build'
+$bd = Join-Path $root $BuildDir
 $logs = Join-Path $root 'generated\b'
 $cmake = Join-Path $tp 'cmake\bin\cmake.exe'
 $ninja = Join-Path $tp 'ninja\ninja.exe'
@@ -24,7 +27,7 @@ if ($Mode -eq 'configure') {
         '-DANDROID_ABI=arm64-v8a', '-DANDROID_PLATFORM=android-30', '-DANDROID_STL=c++_static',
         '-DCMAKE_BUILD_TYPE=Release', '-DAURORA_DAWN_PROVIDER=package', '-DAURORA_SDL3_PROVIDER=vendor',
         '-DCMAKE_POLICY_DEFAULT_CMP0168=NEW', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
-        "-DMKW_TRANSLATED_COMPILE_JOBS=$TranslatedJobs")
+        "-DMKW_TRANSLATED_COMPILE_JOBS=$TranslatedJobs") + $Extra
     foreach ($d in Get-ChildItem -LiteralPath $deps -Directory) {
         if ($d.Name -eq 'mbedtls') { $a += "-DFETCHCONTENT_SOURCE_DIR_MKW_MBEDTLS_UPSTREAM=$(P $d.FullName)"; continue }
         if ($d.Name -in @('native_prebuilt', 'cppwinrt', 'dawn_prebuilt', 'dawn_prebuilt_android')) { continue }

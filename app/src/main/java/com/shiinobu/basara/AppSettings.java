@@ -31,6 +31,17 @@ final class AppSettings {
         }
     }
 
+    /** DeviceProfile has not run yet on this install. */
+    boolean needsDeviceProfile() { return !prefs.getBoolean("device_profile_1", false); }
+
+    /** The device profile's picks, for the settings the player never set; runs once. */
+    void applyDeviceProfile(float scale, boolean frameskip) {
+        final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true);
+        if (!prefs.contains("resolution_scale")) e.putFloat("resolution_scale", scale);
+        if (!prefs.contains("frameskip")) e.putBoolean("frameskip", frameskip);
+        e.commit();
+    }
+
     int aspectMode() { return prefs.getInt("aspect_mode", ASPECT_FILL); }
     void setAspectMode(int mode) { prefs.edit().putInt("aspect_mode", mode).commit(); }
 
@@ -63,6 +74,12 @@ final class AppSettings {
     boolean spinningCoins() { return prefs.getBoolean("spinning_coins", true); }
     void setSpinningCoins(boolean on) { prefs.edit().putBoolean("spinning_coins", on).commit(); }
 
+    /** What the performance overlay shows: OVERLAY_* bits (the runtime's kOverlay* in settings_overlay.h). */
+    static final int OVERLAY_FPS = 1, OVERLAY_CPU = 2, OVERLAY_GPU = 4, OVERLAY_BATTERY = 8, OVERLAY_TEMPS = 16,
+            OVERLAY_DETAILS = 32, OVERLAY_DEFAULT = 31;
+    int overlayItems() { return prefs.getInt("overlay_items", OVERLAY_DEFAULT); }
+    void setOverlayItems(int items) { prefs.edit().putInt("overlay_items", items).commit(); }
+
     boolean frameGraph() { return prefs.getBoolean("frame_graph", false); }
     void setFrameGraph(boolean on) { prefs.edit().putBoolean("frame_graph", on).commit(); }
 
@@ -84,13 +101,18 @@ final class AppSettings {
 
     boolean haptics() { return prefs.getBoolean("haptics", true); }
     void setHaptics(boolean on) { prefs.edit().putBoolean("haptics", on).commit(); }
+    boolean touchCamera() { return prefs.getBoolean("touch_camera", true); }
+    void setTouchCamera(boolean on) { prefs.edit().putBoolean("touch_camera", on).commit(); }
 
     /** The touch controls as the player arranged them in the layout editor ("" is the default). */
     String touchLayout() { return prefs.getString("touch_layout", ""); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
 
     /** Skip Boot:the logos run at full speed, undrawn, up to the game's save check. */
-    boolean skipBoot() { return prefs.getBoolean("skip_boot", false); }
+    /** Lowers the render resolution while the GPU holds the game back (the chosen one is the ceiling). */
+    boolean dynamicResolution() { return prefs.getBoolean("dynamic_resolution", false); }
+    void setDynamicResolution(boolean on) { prefs.edit().putBoolean("dynamic_resolution", on).commit(); }
+    boolean skipBoot() { return prefs.getBoolean("skip_boot", true); }
     void setSkipBoot(boolean on) { prefs.edit().putBoolean("skip_boot", on).commit(); }
 
     /** Beta only: why the Beta ended, once BetaGate has seen it end (kept, so going offline won't reopen it). */

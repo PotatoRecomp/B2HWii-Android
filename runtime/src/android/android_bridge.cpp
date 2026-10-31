@@ -6,6 +6,7 @@
 #include "graphics_info.h"
 #include "runtime_config.h"
 #include "settings_overlay.h"
+#include "system_stats.h"
 #include "virtual_remote.h"
 
 #include "netplay/net_socket.h"
@@ -67,13 +68,23 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetTouchStick
 // 2 fill the screen) and the render scale (480 lines per 1x) apply at the next frame; 4:3 versus a
 // widescreen mode only at the next start, since the game reads it at boot.
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyDisplaySettings(
-    JNIEnv*, jclass, jint aspect, jfloat renderScale, jboolean showFps)
+    JNIEnv*, jclass, jint aspect, jfloat renderScale, jboolean showFps, jboolean dynamicResolution,
+    jint overlayItems, jboolean frameGraph)
 {
+    settings_overlay::SetOverlayItems(static_cast<uint32_t>(overlayItems));
+    settings_overlay::SetFrameGraph(frameGraph == JNI_TRUE);
     // Through the settings overlay, so the game's own settings window shows the same choice. A scale
     // of 0 is "match the screen".
     settings_overlay::SetAspect(aspect < 0 || aspect > 2 ? DisplaySettings::kAspectFill : static_cast<int32_t>(aspect));
     settings_overlay::SetRenderScale(renderScale >= 0.0f ? renderScale : 1.0f);
     settings_overlay::SetShowFps(showFps == JNI_TRUE);
+    DisplaySettings::SetDynamicResolution(dynamicResolution == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetBattery(JNIEnv*, jclass, jint percent,
+                                                                            jfloat tempC)
+{
+    SetHostBattery(percent, tempC);
 }
 
 // GameActivity.nativeGraphicsInfo: the GPU the game is drawing with and whether the GPU
@@ -158,6 +169,17 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetBackground
 {
     if (background) {
         HostSuspend::RequestPause(true);
+    } else {
+        HostSuspend::RequestResume();
+    }
+}
+
+// GameActivity.nativeSetMenuPause: the Back menu is open (true) or closed (false). A pause without the
+// backup save, since the app stays on screen.
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetMenuPause(JNIEnv*, jclass, jboolean paused)
+{
+    if (paused) {
+        HostSuspend::RequestPause(false);
     } else {
         HostSuspend::RequestResume();
     }

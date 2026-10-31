@@ -41,6 +41,9 @@ Settings Latest();
 bool GameWidescreen();
 // The window (or screen) is wider than 16:9, so Fill shows more of the game than 16:9 does.
 bool SurfaceWide();
+// Dynamic resolution: lowers the render lines (down to 0.5x, never above the chosen scale) while the
+// renderer holds the game back, and raises them again once it has room. Any thread.
+void SetDynamicResolution(bool enabled);
 // Render height for a scale (480 lines per 1x).
 float LinesForScale(float renderScale);
 

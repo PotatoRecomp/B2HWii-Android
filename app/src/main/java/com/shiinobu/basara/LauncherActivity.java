@@ -63,6 +63,7 @@ public final class LauncherActivity extends Activity {
     private boolean waitingFileAccess;
     private static final String STATE_WAITING_FILE_ACCESS = "waiting_file_access";
 
+    private int endedGame;  // the pid endGame just ended
     private TextView status;
     private Button play;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -71,6 +72,7 @@ public final class LauncherActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         settings = new AppSettings(this);
+        DeviceProfile.applyOnce(this, settings);
         // Updates are checked on a fresh start, not when the game sent the player here or is
         // restarting itself into a LAN session.
         final Intent launch = getIntent();
@@ -80,7 +82,10 @@ public final class LauncherActivity extends Activity {
 
         gameFile = tile("Game File", "", v -> pickDisc());
         final Tile settingsTile = tile("Settings", "Display and controls", v -> SettingsMenu.show(this));
-        final Tile devices = tile("Tailscale & LAN Devices", "Find other players", v -> DevicesDialog.show(this));
+        // Online play isn't ready yet: shown, but off.
+        final Tile devices = tile("Tailscale & LAN Devices", "Coming soon", null);
+        devices.view.setClickable(false);
+        devices.view.setAlpha(0.4f);
         autoUpdate = tile("Auto Update", "Update on launch", v -> {
             settings.setAutoUpdate(!settings.autoUpdate());
             updateAutoUpdateButton();
@@ -203,7 +208,8 @@ public final class LauncherActivity extends Activity {
         if (all != null) {
             final String name = getPackageName() + ":game";
             for (ActivityManager.RunningAppProcessInfo info : all) {
-                if (name.equals(info.processName)) return info.pid;
+                // One just ended still lists for a moment: it is no longer a game to Continue.
+                if (name.equals(info.processName) && info.pid != endedGame) return info.pid;
             }
         }
         return 0;
@@ -214,6 +220,7 @@ public final class LauncherActivity extends Activity {
         final int pid = gameProcess();
         if (pid != 0) {
             android.os.Process.killProcess(pid);
+            endedGame = pid;
             refresh();
         }
     }
@@ -451,23 +458,24 @@ public final class LauncherActivity extends Activity {
 
     /** Getting Started. */
     private void showHelp() {
-        final LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(dp(24), dp(16), dp(24), dp(16));
-        section(column, "1. Choose your game file", "Copy an ISO or RVZ of your own Sengoku Basara 2 Heroes "
-                + "(Japan, RBSJ08) to this phone, then choose it here. It is unpacked once, which needs about "
-                + "4 GB free. After that you can delete the ISO or RVZ.");
-        section(column, "2. Play", "Tap Play.");
-        column.addView(link("Project page on GitHub", v -> openWeb(PROJECT_URL)));
-        final TextView version = text("Basara " + versionText(), 13);
-        version.setGravity(Gravity.START);
-        version.setTextColor(MUTED);
-        version.setPadding(0, dp(16), 0, 0);
-        column.addView(version);
-        final ScrollView scroll = new ScrollView(this);
-        scroll.addView(column);
-        new AlertDialog.Builder(this).setTitle("Getting Started").setView(scroll)
-                .setPositiveButton("Done", null).show();
+        new Sheet(this, "Getting Started", "Three steps from your disc to the battlefield.")
+                .step("1", "Copy your game to the phone",
+                        "An ISO or RVZ of your own Sengoku Basara 2 Heroes disc (Japan, RBSJ08), e.g. in Download.")
+                .step("2", "Tap Game File and choose it",
+                        "It is unpacked once (about 4 GB free needed). Afterwards you can delete the ISO or RVZ.")
+                .step("3", "Tap Play",
+                        "Swipe Back while playing for the menu: Start Menu, Edit Controls Layout or Quit Game.")
+                .heading("Tips")
+                .step("?", "Slow or choppy?",
+                        "Settings > Display: a lower Render Resolution. Settings > Performance: Frameskip Auto.")
+                .step("?", "Turning the camera",
+                        "Drag on the empty right side of the screen, or use the right stick.")
+                .step("?", "Saving",
+                        "Save from the game's own menu (各種設定 > セーブ). Your saves stay when the app updates.")
+                .note("Basara " + versionText())
+                .action("Got it", null, true, false, null)
+                .action("Project page on GitHub", null, false, false, () -> openWeb(PROJECT_URL))
+                .show();
     }
 
     private void section(LinearLayout column, String title, String body) {
@@ -719,8 +727,10 @@ public final class LauncherActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(16), dp(6), dp(12), dp(6));
         row.setBackground(rounded(SURFACE, SURFACE, dp(18)));
-        row.setClickable(true);
-        row.setOnClickListener(onClick);
+        if (onClick != null) {
+            row.setClickable(true);
+            row.setOnClickListener(onClick);
+        }
         final LinearLayout words = new LinearLayout(this);
         words.setOrientation(LinearLayout.VERTICAL);
         final TextView name = text(label, 15);

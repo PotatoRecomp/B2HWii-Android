@@ -1,6 +1,7 @@
 #include "system_stats.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +18,8 @@
 #endif
 
 namespace {
+std::atomic<int> g_hostBatteryPercent{-1};
+std::atomic<float> g_hostBatteryTempC{-1.0f};
 
 using Clock = std::chrono::steady_clock;
 
@@ -164,6 +167,8 @@ void Sample(SystemStats& stats, double wallSeconds) {
         ReadLong("/sys/class/power_supply/battery/capacity", &value) ? static_cast<int>(value) : -1;
     stats.batteryTempC =
         ReadLong("/sys/class/power_supply/battery/temp", &value) ? static_cast<float>(value) / 10.0f : -1.0f;
+    if (stats.batteryPercent < 0) stats.batteryPercent = g_hostBatteryPercent.load(std::memory_order_relaxed);
+    if (stats.batteryTempC < 0.0f) stats.batteryTempC = g_hostBatteryTempC.load(std::memory_order_relaxed);
     unsigned long long size = 0, resident = 0;
     if (ReadLine("/proc/self/statm", line, sizeof(line)) && std::sscanf(line, "%llu %llu", &size, &resident) == 2) {
         stats.appRamBytes = resident * static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
@@ -180,6 +185,11 @@ void Sample(SystemStats& stats, double wallSeconds) {
 }
 
 } // namespace
+
+void SetHostBattery(int percent, float tempC) {
+    g_hostBatteryPercent.store(percent, std::memory_order_relaxed);
+    g_hostBatteryTempC.store(tempC, std::memory_order_relaxed);
+}
 
 SystemStats SampleSystemStats() {
     static std::mutex s_mutex;

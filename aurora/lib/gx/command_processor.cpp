@@ -523,14 +523,16 @@ static bool StatTiming() {
 // read (vdso clock_gettime) cost about 1% of the game thread. The ARM generic timer is one register read.
 static inline uint64_t stat_now_ns() {
 #if defined(__aarch64__)
-  static const uint64_t freq = [] {
+  // ns = ticks * (1e9 / freq) as a 32.32 fixed-point multiply: a 128-bit divide is a libgcc call
+  // (__udivti3), and four of them a draw cost ~9% of the game thread in a 10,000-draw battle.
+  static const uint64_t mult = [] {
     uint64_t f;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
-    return f != 0 ? f : 1;
+    return static_cast<uint64_t>((static_cast<unsigned __int128>(1000000000u) << 32) / (f != 0 ? f : 1));
   }();
   uint64_t ticks;
   asm volatile("mrs %0, cntvct_el0" : "=r"(ticks));
-  return static_cast<uint64_t>(static_cast<unsigned __int128>(ticks) * 1000000000u / freq);
+  return static_cast<uint64_t>((static_cast<unsigned __int128>(ticks) * mult) >> 32);
 #else
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -538,16 +540,24 @@ static inline uint64_t stat_now_ns() {
 #endif
 }
 
+// Only one outermost call in kStatSampleEvery is timed, and counted that many times over: on Cortex-A76
+// phones (erratum 1188873) the kernel traps every counter read from user space, and timing each of the
+// ~10,000 calls a battle frame cost 13% of the game thread. Over a 2 s log window the estimate holds.
+constexpr uint32_t kStatSampleEvery = 16;
+thread_local uint32_t t_statCalls = 0;
+thread_local bool t_statSampled = false;  // the current outermost call is being timed
+
 struct ProcessTimer {
   uint64_t start = 0;
   ProcessTimer() {
     if (StatTiming() && t_statDepth++ == 0) {
-      start = stat_now_ns();
+      t_statSampled = ++t_statCalls % kStatSampleEvery == 0;
+      if (t_statSampled) start = stat_now_ns();
     }
   }
   ~ProcessTimer() {
-    if (StatTiming() && --t_statDepth == 0) {
-      const uint64_t elapsed = stat_now_ns() - start;
+    if (StatTiming() && --t_statDepth == 0 && t_statSampled) {
+      const uint64_t elapsed = (stat_now_ns() - start) * kStatSampleEvery;
       g_statProcessTotalNanos.fetch_add(elapsed, std::memory_order_relaxed);
       g_statProcessNanos.fetch_add(elapsed,
                                    std::memory_order_relaxed);
@@ -578,10 +588,11 @@ uint32_t process(const u8* data, u32 size, bool bigEndian) {
   ZoneScoped;
   ProcessTimer timer;
   // Everything decoded here mutates renderer state (GX state, the recorded command lists and the mapped staging buffers), so take the renderer GPU mutex once for the whole drain rather than once per draw command.
-  const uint64_t lockStart = StatTiming() ? stat_now_ns() : 0;
+  const bool timeLock = StatTiming() && t_statDepth == 1 && t_statSampled;
+  const uint64_t lockStart = timeLock ? stat_now_ns() : 0;
   std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
-  if (StatTiming()) {
-    g_statLockNanos.fetch_add(stat_now_ns() - lockStart, std::memory_order_relaxed);
+  if (timeLock) {
+    g_statLockNanos.fetch_add((stat_now_ns() - lockStart) * kStatSampleEvery, std::memory_order_relaxed);
   }
   u32 pos = 0;
 

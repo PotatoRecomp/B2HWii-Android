@@ -127,6 +127,7 @@ bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(false);  // off unless turned on
 bool g_frameGraph = RuntimeConfigFile::FrameGraph(false);
+std::atomic<uint32_t> g_overlayItems{RuntimeConfigFile::OverlayItems(settings_overlay::kOverlayDefault)};
 std::atomic<bool> g_vsync{RuntimeConfigFile::VSync(false)};
 #if defined(__APPLE__)
 bool g_metalFxSpatialUpscaling = RuntimeConfigFile::MetalFxSpatialUpscaling(false);
@@ -1447,46 +1448,83 @@ ImVec4 FpsColor(double fps) {
     return ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
 }
 
-// The stats bar, one line: frames, then CPU / GPU load, then the rest as bare numbers (game CPU,
-// GX and render ms a frame, draws, temperature, RAM, battery).
-void DrawPerformanceStats(bool& first) {
-    static const ImVec4 kText(0.93f, 0.95f, 0.97f, 1.0f);
-    static const ImVec4 kSoft(0.75f, 0.79f, 0.85f, 1.0f);
+// One coloured group of the stats bar: a tinted label, then its value (and an optional second value,
+// a temperature, coloured by how hot it is).
+void StatGroup(bool& first, const char* label, const ImVec4& labelColor, const ImVec4& valueColor,
+               const char* value, float tempC = -1.0f) {
+    const float gap = ImGui::GetFontSize() * 0.45f;
+    if (!first) ImGui::SameLine(0.0f, gap * 2.2f);
+    first = false;
+    ImGui::TextColored(labelColor, "%s", label);
+    ImGui::SameLine(0.0f, gap);
+    ImGui::TextColored(valueColor, "%s", value);
+    if (tempC >= 0.0f) {
+        char t[16];
+        std::snprintf(t, sizeof(t), "%.0f\xC2\xB0" "C", tempC);
+        const ImVec4 heat = tempC >= 75.0f   ? ImVec4(1.0f, 0.42f, 0.38f, 1.0f)
+                            : tempC >= 60.0f ? ImVec4(1.0f, 0.78f, 0.35f, 1.0f)
+                                             : ImVec4(0.80f, 0.85f, 0.90f, 1.0f);
+        ImGui::SameLine(0.0f, gap);
+        ImGui::TextColored(heat, "%s", t);
+    }
+}
+
+ImVec4 LoadColor(float percent) {
+    if (percent >= 90.0f) return ImVec4(1.0f, 0.45f, 0.40f, 1.0f);
+    if (percent >= 70.0f) return ImVec4(1.0f, 0.82f, 0.38f, 1.0f);
+    return ImVec4(0.95f, 0.96f, 0.98f, 1.0f);
+}
+
+// The stats bar, one line, each group shown when its bit is on (Settings > Performance Overlay):
+// FPS = the game's own frames drawn a second (what the player sees move; repeated presents and
+// skipped draws don't count), CPU = how busy the game thread is (100% = the CPU limits the game),
+// GPU = the GPU's busy share, then battery, and the details for diagnosis.
+void DrawPerformanceStats(bool& first, float presentedFps) {
+    static const ImVec4 kValue(0.95f, 0.96f, 0.98f, 1.0f);
+    static const ImVec4 kSoft(0.72f, 0.77f, 0.84f, 1.0f);
+    static const ImVec4 kFpsLabel(0.55f, 0.95f, 0.60f, 1.0f);
+    static const ImVec4 kCpuLabel(0.40f, 0.78f, 1.0f, 1.0f);
+    static const ImVec4 kGpuLabel(0.78f, 0.58f, 1.0f, 1.0f);
+    static const ImVec4 kBatLabel(1.0f, 0.80f, 0.35f, 1.0f);
+    const uint32_t items = g_overlayItems.load(std::memory_order_relaxed);
+    const bool temps = (items & kOverlayTemps) != 0;
     char v[64];
     const GameFrameStats& game = SampleGameFrameStats();
     const SystemStats sys = SampleSystemStats();
-    if (game.fps >= 0.0f) {
-        std::snprintf(v, sizeof(v), "%.0f", game.fps);
-        StatItem(first, "GAME", FpsColor(game.fps), v);
-        std::snprintf(v, sizeof(v), "%.0f%%", game.loadPercent);
-        StatItem(first, "CPU", kText, v);
-    } else if (sys.processCpuPercent >= 0.0f) {
-        std::snprintf(v, sizeof(v), "%.0f%%", sys.processCpuPercent);
-        StatItem(first, "CPU", kText, v);
+    if (items & kOverlayFps) {
+        const float fps = game.fps >= 0.0f ? std::min(game.fps, presentedFps > 0.0f ? presentedFps : game.fps)
+                                           : presentedFps;
+        if (fps >= 0.0f) std::snprintf(v, sizeof(v), "%.0f", fps);
+        else std::snprintf(v, sizeof(v), "--");
+        StatGroup(first, "FPS", kFpsLabel, fps >= 0.0f ? FpsColor(fps) : kSoft, v);
     }
-    if (sys.gpuBusyPercent >= 0) {
-        std::snprintf(v, sizeof(v), "%d%%", sys.gpuBusyPercent);
-        StatItem(first, "GPU", kText, v);
+    if (items & kOverlayCpu) {
+        const float cpu = game.fps >= 0.0f ? std::min(game.loadPercent, 100.0f) : sys.processCpuPercent;
+        if (cpu >= 0.0f) std::snprintf(v, sizeof(v), "%.0f%%", cpu);
+        else std::snprintf(v, sizeof(v), "--");
+        StatGroup(first, "CPU", kCpuLabel, cpu >= 0.0f ? LoadColor(cpu) : kSoft, v, temps ? sys.cpuTempC : -1.0f);
     }
-    if (game.fps >= 0.0f) {
-        std::snprintf(v, sizeof(v), "%.1f / %.1f / %.1f ms", game.busyMs, game.gxMs, game.renderMs);
-        StatItem(first, nullptr, kSoft, v);
+    if (items & kOverlayGpu) {
+        if (sys.gpuBusyPercent >= 0) std::snprintf(v, sizeof(v), "%d%%", sys.gpuBusyPercent);
+        else std::snprintf(v, sizeof(v), "--");
+        StatGroup(first, "GPU", kGpuLabel, sys.gpuBusyPercent >= 0 ? LoadColor(sys.gpuBusyPercent) : kSoft, v,
+                  temps ? sys.gpuTempC : -1.0f);
+    }
+    if ((items & kOverlayBattery) && sys.batteryPercent >= 0) {
+        std::snprintf(v, sizeof(v), "%d%%", sys.batteryPercent);
+        const ImVec4 level = sys.batteryPercent <= 15 ? ImVec4(1.0f, 0.45f, 0.40f, 1.0f) : kValue;
+        StatGroup(first, "BAT", kBatLabel, level, v, temps ? sys.batteryTempC : -1.0f);
+    }
+    if ((items & kOverlayDetails) && game.fps >= 0.0f) {
+        std::snprintf(v, sizeof(v), "%.1f/%.1f/%.1f ms", game.busyMs, game.gxMs, game.renderMs);
+        StatGroup(first, "MS", kSoft, kSoft, v);
         if (game.draws >= 1000) std::snprintf(v, sizeof(v), "%.1fk", game.draws / 1000.0);
         else std::snprintf(v, sizeof(v), "%u", game.draws);
-        StatItem(first, nullptr, kSoft, v);
-    }
-    const float temp = std::max(sys.cpuTempC, sys.gpuTempC);
-    if (temp >= 0.0f) {
-        std::snprintf(v, sizeof(v), "%.0f C", temp);
-        StatItem(first, nullptr, temp >= 70.0f ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f) : kSoft, v);
-    }
-    if (sys.appRamBytes != 0) {
-        std::snprintf(v, sizeof(v), "%.0f MB", sys.appRamBytes / 1048576.0);
-        StatItem(first, nullptr, kSoft, v);
-    }
-    if (sys.batteryPercent >= 0) {
-        std::snprintf(v, sizeof(v), "%d%%", sys.batteryPercent);
-        StatItem(first, "BAT", kSoft, v);
+        StatGroup(first, "DRAW", kSoft, kSoft, v);
+        if (sys.appRamBytes != 0) {
+            std::snprintf(v, sizeof(v), "%.0f MB", sys.appRamBytes / 1048576.0);
+            StatGroup(first, "RAM", kSoft, kSoft, v);
+        }
     }
 }
 
@@ -1542,7 +1580,7 @@ void DrawFpsOverlay() {
     constexpr float kMargin = 6.0f;
     const float top = g_topBarVisible ? ImGui::GetFrameHeight() + kMargin : kMargin;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, top), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.78f);
+    ImGui::SetNextWindowBgAlpha(0.42f);  // the game shows through
     const float ui = std::clamp(io.DisplaySize.y * 0.03f / 13.0f, 1.0f, 3.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * ui, 4.0f * ui));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f * ui);
@@ -1559,20 +1597,11 @@ void DrawFpsOverlay() {
         ImGui::SetWindowFontScale(ui);
         bool first = true;
         if (g_showFps) {
-            char v[32];
-            if (presentTiming.sampleCount == 0) {
-                StatItem(first, "FPS", ImVec4(0.62f, 0.66f, 0.72f, 1.0f), "--");
-            } else {
-                // Present timing includes the frames produced by interpolation, so this is the
-                // displayed FPS; replay-unsafe frames repeat slots, so the motion rate shows too.
-                std::snprintf(v, sizeof(v), "%.0f", presentTiming.framesPerSecond);
-                StatItem(first, "FPS", FpsColor(presentTiming.framesPerSecond), v);
-                if (presentTiming.effectiveFramesPerSecond < presentTiming.framesPerSecond * 0.95) {
-                    std::snprintf(v, sizeof(v), "%.0f", presentTiming.effectiveFramesPerSecond);
-                    StatItem(first, "MOTION", ImVec4(1.0f, 0.75f, 0.25f, 1.0f), v);
-                }
-            }
-            DrawPerformanceStats(first);
+            // One FPS: the game's own frames, capped by what reached the screen (the effective
+            // present rate leaves out repeated slots).
+            DrawPerformanceStats(first, presentTiming.sampleCount == 0
+                                            ? -1.0f
+                                            : static_cast<float>(presentTiming.effectiveFramesPerSecond));
         }
         if (g_frameGraph) {
             DrawFrameGraph(first);
@@ -2013,6 +2042,10 @@ void SetShowFps(bool show) noexcept {
 
 bool ShowFps() noexcept {
     return g_showFps;
+}
+
+void SetOverlayItems(uint32_t items) noexcept {
+    g_overlayItems.store(items, std::memory_order_relaxed);
 }
 
 void SetVSync(bool enabled) noexcept {

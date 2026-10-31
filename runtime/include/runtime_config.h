@@ -37,6 +37,8 @@ struct RuntimeUserConfig {
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
     std::optional<int32_t> frameskip;  // 0 off, 1 auto (skip drawing a frame while the game runs behind)
+    std::optional<uint32_t> overlayItems;   // [video] overlay_items: what the FPS overlay shows (bit mask)
+    std::optional<bool> dynamicResolution;  // lower the render lines while the GPU holds the game back
     std::optional<bool> skipBoot;  // run the logos at full speed, undrawn, up to the save check
     std::optional<int32_t> fsr;  // 0 off, 1 light sharpen, 2 full FSR1 (picture drawn larger than rendered)
     std::optional<int32_t> windowPosX;
@@ -591,6 +593,8 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
     config.skipBoot = FindConfigValue<bool>(document, "video", "skip_boot");
+    config.dynamicResolution = FindConfigValue<bool>(document, "video", "dynamic_resolution");
+    config.overlayItems = FindConfigUint(document, "video", "overlay_items");
     config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
     config.vsync = FindConfigValue<bool>(document, "video", "vsync");
     if (auto value = FindConfigValue<std::string>(document, "game", "language");
@@ -872,6 +876,10 @@ inline bool SetVSync(bool value) {
     return WriteSetting("video", "vsync", value ? "true" : "false");
 }
 
+inline uint32_t OverlayItems(uint32_t fallback) {
+    return Get().overlayItems.value_or(fallback);
+}
+
 inline bool SetShowFps(bool value) {
     Mutable().showFps = value;
     return WriteSetting("video", "show_fps", value ? "true" : "false");
@@ -1004,6 +1012,12 @@ inline int32_t GpuCompat() {
 
 inline int32_t Frameskip() {
     return Get().frameskip.value_or(0);
+}
+
+inline bool DynamicResolution() {
+    // 2 = test: cycles every step (display_settings.cpp).
+    if (const char* env = std::getenv("BASARA_DYNRES"); env && *env >= '0' && *env <= '2') return *env != '0';
+    return Get().dynamicResolution.value_or(false);
 }
 
 inline bool SkipBoot() {

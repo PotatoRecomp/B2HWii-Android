@@ -220,7 +220,24 @@ struct ProcessTranscriptState {
     std::thread stderrThread;
 };
 
+// Android: the app sets BASARA_LOG_DIR to /sdcard/basara2heroes(-beta) when it may write there.
+const char* SharedLogDirectory() {
+#if defined(__ANDROID__)
+    const char* dir = std::getenv("BASARA_LOG_DIR");
+    return dir != nullptr && *dir != '\0' ? dir : nullptr;
+#else
+    return nullptr;
+#endif
+}
+
 std::filesystem::path GetDefaultRuntimeLogDirectory() {
+    if (const char* shared = SharedLogDirectory()) {
+        std::error_code ec;
+        std::filesystem::create_directories(shared, ec);
+        if (std::filesystem::is_directory(shared, ec)) {
+            return shared;
+        }
+    }
     return RuntimeConfigFile::ApplicationDataDirectory() / "Logs";
 }
 
@@ -257,11 +274,15 @@ const std::filesystem::path& GetRunLogDirectory() {
 #if defined(__ANDROID__)
         // Android: one Logs/console.log, replaced on every start. Players send this file in, and
         // a folder per run left them guessing which one to pick. The previous run's folders and
-        // crash reports are cleared so nothing stale sits next to it.
+        // crash reports are cleared so nothing stale sits next to it. In the shared /sdcard folder
+        // only our crash files go: the player may keep other things there.
+        const bool shared = SharedLogDirectory() != nullptr &&
+                            logRoot == std::filesystem::path(SharedLogDirectory());
         for (const auto& entry : std::filesystem::directory_iterator(logRoot, ec)) {
             std::error_code entryEc;
             const std::string name = entry.path().filename().string();
-            if (entry.is_directory(entryEc) || name.rfind("crash_", 0) == 0) {
+            if ((!shared && entry.is_directory(entryEc)) ||
+                (name.rfind("crash_", 0) == 0 && !entry.is_directory(entryEc))) {
                 std::filesystem::remove_all(entry.path(), entryEc);
             }
         }
@@ -1481,7 +1502,14 @@ int RuntimeMain(int argc, char** argv) {
                                        << " (" << property("ro.board.platform") << "), Android "
                                        << property("ro.build.version.release") << " (SDK "
                                        << property("ro.build.version.sdk") << "), cpu max MHz " << cpus
-                                       << std::endl;
+                                       << ", display " << (std::getenv("BASARA_DISPLAY_HZ") ? std::getenv("BASARA_DISPLAY_HZ") : "?")
+                                       << " Hz" << std::endl;
+                RT_LOG(RT_TAG_RUNTIME) << "settings: frameskip " << RuntimeConfigFile::Frameskip() << ", fsr "
+                                       << RuntimeConfigFile::Fsr() << ", skip boot " << RuntimeConfigFile::SkipBoot()
+                                       << ", resolution " << RuntimeConfigFile::Get().resolutionMultiplier.value_or(-1.0f)
+                                       << ", dynamic " << RuntimeConfigFile::DynamicResolution()
+                                       << ", vsync " << RuntimeConfigFile::VSync(true) << ", gpu compat "
+                                       << RuntimeConfigFile::GpuCompat() << std::endl;
             }
             // Beta builds log frame timing every two seconds: testers' phones are out of adb's reach,
             // so their console.log has to carry the whole picture.
@@ -1593,6 +1621,7 @@ int RuntimeMain(int argc, char** argv) {
                                                           : DisplaySettings::kAspectFill);
         displaySettings.renderScale = RuntimeConfigFile::ResolutionMultiplier(1.0f);
         DisplaySettings::Initialize(displaySettings);
+        DisplaySettings::SetDynamicResolution(RuntimeConfigFile::DynamicResolution());
         const bool configWidescreen = DisplaySettings::GameWidescreen();
         auroraConfig.windowWidth = configWidescreen ? 854 : 640;
         auroraConfig.windowHeight = 480;

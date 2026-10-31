@@ -540,10 +540,13 @@ AuroraWindowSize get_window_size() {
   // A line target (VISetFrameBufferLines) sizes the picture the game shows: its visible EFB lines
   // become exactly that many rows (the EFB workspace below them scales along), and with 16:9 or
   // the surface's aspect the width is the line count times that aspect, so the pixels are square.
-  const uint32_t visibleH = vi::visible_fb_size().y;
-  const bool lineTarget = g_frameBufferLines > 0.f && baseH > 0 && visibleH > 0;
+  // Basara: the line count spans the whole EFB (baseH), not the game's visible lines. The first
+  // size is taken before the game sets its render mode (visible == base then), and a later resize
+  // (settings change, dynamic resolution) must give the same geometry: scaling by the visible lines
+  // (392 of 528) made the height grow while the width did not, a zoomed, cropped picture.
+  const bool lineTarget = g_frameBufferLines > 0.f && baseH > 0;
   const float frameBufferScale =
-      lineTarget ? g_frameBufferLines / static_cast<float>(visibleH) : g_frameBufferScale;
+      lineTarget ? g_frameBufferLines / static_cast<float>(baseH) : g_frameBufferScale;
   const auto lineTargetSize = [&](float aspect) {
     return std::pair{
         std::max(1, static_cast<int>(std::lround(g_frameBufferLines *

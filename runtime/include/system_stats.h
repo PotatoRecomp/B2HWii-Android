@@ -22,3 +22,6 @@ struct SystemStats {
 };
 
 SystemStats SampleSystemStats();
+
+// Battery from the host (Android's BatteryManager): many phones deny the power_supply sysfs files.
+void SetHostBattery(int percent, float tempC);

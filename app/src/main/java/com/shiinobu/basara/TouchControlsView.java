@@ -40,6 +40,12 @@ final class TouchControlsView extends View {
     private static final int MODE_PAD = 2;      // the finger steers the D-pad until lifted
     private static final int MODE_STICK_L = 3;  // the finger holds the left stick until lifted
     private static final int MODE_STICK_R = 4;  // the same for the right stick
+    private static final int MODE_CAMERA = 5;   // a drag on the empty right side turns the camera
+
+    /** Camera drag: finger speed (screen heights a second) that gives a full right-stick tilt. */
+    private static final float CAMERA_FULL_SPEED = 0.9f;
+    /** The stick falls back to centre this long after the finger stops moving. */
+    private static final long CAMERA_IDLE_MS = 60;
 
     private static final int SHAPE_ROUND = 0, SHAPE_PILL = 1;
     private static final float STICK_DEAD_ZONE = 0.08f;
@@ -152,6 +158,12 @@ final class TouchControlsView extends View {
 
     void setHaptics(boolean haptics) { this.haptics = haptics; }
 
+    private boolean touchCamera = true;
+    void setTouchCamera(boolean on) {
+        touchCamera = on;
+        if (!on && cameraId >= 0) endCamera();
+    }
+
     void setControlsVisible(boolean visible) {
         controlsVisible = visible;
         release();
@@ -215,6 +227,8 @@ final class TouchControlsView extends View {
     void release() {
         pointerModes.clear();
         pointerBits.clear();
+        cameraId = -1;
+        removeCallbacks(cameraIdle);
         releaseStick(leftStick);
         releaseStick(rightStick);
         sendSticks();
@@ -509,7 +523,9 @@ final class TouchControlsView extends View {
             tapTimes.delete(id);
             freeTaps.delete(id);
             final int mode = pointerModes.get(id, 0);
-            if (mode == MODE_STICK_L || mode == MODE_STICK_R) {
+            if (mode == MODE_CAMERA) {
+                endCamera();
+            } else if (mode == MODE_STICK_L || mode == MODE_STICK_R) {
                 releaseStick(mode == MODE_STICK_L ? leftStick : rightStick);
                 sendSticks();
                 invalidate();
@@ -558,6 +574,15 @@ final class TouchControlsView extends View {
             leftStick.x = x;
             leftStick.y = y;
             steer(leftStick, x, y);
+        } else if (buttonsAt(x, y) == 0 && inCameraZone(x, y)) {
+            // Drag to look: the right stick follows the finger's speed, in the finger's direction
+            // (right turns right, up looks up). A tap that does not move still reaches the game.
+            pointerModes.put(id, MODE_CAMERA);
+            cameraId = id;
+            cameraLastX = x;
+            cameraLastY = y;
+            cameraLastTime = android.os.SystemClock.uptimeMillis();
+            freeTaps.put(id, true);
         } else {
             pointerModes.put(id, MODE_BUTTONS);
             pointerBits.put(id, buttonsAt(x, y));
@@ -570,9 +595,56 @@ final class TouchControlsView extends View {
         return showsControls() && leftStick.finger < 0 && x < getWidth() * 0.4f && y > getHeight() * 0.18f;
     }
 
+    /** The empty right side, where a drag turns the camera (the right stick when not held). */
+    private boolean inCameraZone(float x, float y) {
+        return touchCamera && showsControls() && cameraId < 0 && rightStick.finger < 0
+            && x >= getWidth() * 0.4f && y > getHeight() * 0.18f;
+    }
+
+    private int cameraId = -1;
+    private float cameraLastX, cameraLastY;
+    private long cameraLastTime;
+    private final Runnable cameraIdle = () -> {
+        if (rightStick.finger < 0 && (rightStick.valueX != 0f || rightStick.valueY != 0f)) {
+            rightStick.valueX = rightStick.valueY = 0f;
+            sendSticks();
+        }
+    };
+
+    private void dragCamera(float x, float y) {
+        final long now = android.os.SystemClock.uptimeMillis();
+        final long dt = now - cameraLastTime;
+        final float h = getHeight();
+        if (dt <= 0 || h <= 0 || rightStick.finger >= 0) return;
+        final float scale = 1000f / (dt * h * CAMERA_FULL_SPEED);
+        final float vx = clampUnit((x - cameraLastX) * scale);
+        final float vy = clampUnit((y - cameraLastY) * scale);
+        cameraLastX = x;
+        cameraLastY = y;
+        cameraLastTime = now;
+        // Smooth over touch events (they come at the panel's rate, not the game's).
+        rightStick.valueX = clampUnit(rightStick.valueX * 0.4f + vx * 0.6f);
+        rightStick.valueY = clampUnit(rightStick.valueY * 0.4f + vy * 0.6f);
+        sendSticks();
+        removeCallbacks(cameraIdle);
+        postDelayed(cameraIdle, CAMERA_IDLE_MS);
+    }
+
+    private void endCamera() {
+        cameraId = -1;
+        removeCallbacks(cameraIdle);
+        cameraIdle.run();
+    }
+
+    private static float clampUnit(float v) {
+        return v < -1f ? -1f : (v > 1f ? 1f : v);
+    }
+
     private void slide(int id, float x, float y) {
         final int mode = pointerModes.get(id, 0);
-        if (mode == MODE_STICK_L) {
+        if (mode == MODE_CAMERA) {
+            dragCamera(x, y);
+        } else if (mode == MODE_STICK_L) {
             steer(leftStick, x, y);
         } else if (mode == MODE_STICK_R) {
             steer(rightStick, x, y);

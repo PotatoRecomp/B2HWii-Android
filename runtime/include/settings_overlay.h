@@ -19,6 +19,11 @@ void SetShowFps(bool show) noexcept;
 bool ShowFps() noexcept;
 // A frame-time graph under the FPS counter, off by default. Saved to Config.toml.
 void SetFrameGraph(bool show) noexcept;
+// What the FPS overlay shows: kOverlay* bits (Android: Settings > Display > Performance Overlay).
+constexpr uint32_t kOverlayFps = 1u << 0, kOverlayCpu = 1u << 1, kOverlayGpu = 1u << 2,
+                   kOverlayBattery = 1u << 3, kOverlayTemps = 1u << 4, kOverlayDetails = 1u << 5,
+                   kOverlayDefault = kOverlayFps | kOverlayCpu | kOverlayGpu | kOverlayBattery | kOverlayTemps;
+void SetOverlayItems(uint32_t items) noexcept;
 bool FrameGraph() noexcept;
 // V-Sync: presents wait for the display, and the game's clock follows its refresh (hle/vi.cpp).
 // Off by default. Saved to Config.toml.

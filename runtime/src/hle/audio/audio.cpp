@@ -457,6 +457,26 @@ PPC_NATIVE_OVERRIDE(8037E038, DSPAssertTask_8015d57c, uint32_t, (uint32_t taskPt
 // BASARA_LOG_FPS: time in the speaker push and in the AI DMA callback (guest AX code), and blocks.
 std::atomic<uint64_t> g_tickPushNanos{0}, g_tickCallbackNanos{0};
 std::atomic<uint32_t> g_tickBlocks{0};
+// Ticks that left a due block to a later pump because the AX mix was still running.
+std::atomic<uint32_t> g_tickMixDeferrals{0};
+
+// Backlog (in blocks) below which a due block may wait for the mix worker instead of joining it.
+// 4 blocks = 12 ms, well inside the stretcher's 60 ms cushion.
+constexpr double kMixOverlapMaxBacklogBlocks = 4.0;
+
+bool MixOverlapEnabled()
+{
+    static const bool s_on = [] {
+        const char* v = std::getenv("BASARA_AUDIO_OVERLAP");
+        return !(v && *v == '0');
+    }();
+    return s_on;
+}
+
+uint32_t Audio_HLE_TakeMixDeferrals()
+{
+    return g_tickMixDeferrals.exchange(0, std::memory_order_relaxed);
+}
 
 void Audio_HLE_TakeTickStats(uint64_t* pushNanos, uint64_t* callbackNanos, uint32_t* blocks)
 {
@@ -533,6 +553,22 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
     while (true) {
         // Claim the block in one critical section; sample-then-consume separately gains
         // nothing since the callback below (the only reentrancy point) runs mutex-released.
+        {
+            std::lock_guard<std::mutex> lock(g_ai.mutex);
+            if (g_ai.accumulatorSeconds < blockDuration) {
+                break;
+            }
+        }
+        // The previous block's AI callback just started the next AX mix on the worker. Joining it
+        // now stalls the guest for a whole mix; with a small backlog leave the block to a later
+        // pump (they run about every millisecond) so the mix overlaps guest work instead.
+        if (MixOverlapEnabled() && AxDspHle::MixWorkerBusy()) {
+            std::lock_guard<std::mutex> lock(g_ai.mutex);
+            if (g_ai.accumulatorSeconds < blockDuration * kMixOverlapMaxBacklogBlocks) {
+                g_tickMixDeferrals.fetch_add(1, std::memory_order_relaxed);
+                break;
+            }
+        }
         {
             std::lock_guard<std::mutex> lock(g_ai.mutex);
             if (g_ai.accumulatorSeconds < blockDuration) {

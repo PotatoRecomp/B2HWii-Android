@@ -31,7 +31,8 @@ public final class GameActivity extends SDLActivity
     static native void nativeSetTouchSticks(float leftX, float leftY, float rightX, float rightY);
 
     /** The Display menu: aspect, render scale (480 lines per 1x), FPS counter (DisplaySettings). */
-    static native void nativeApplyDisplaySettings(int aspect, float renderScale, boolean showFps);
+    static native void nativeApplyDisplaySettings(int aspect, float renderScale, boolean showFps,
+            boolean dynamicResolution, int overlayItems, boolean frameGraph);
 
     /** "GPU name\n1|0": the GPU the game draws with and whether its compatibility fixes are on. */
     static native String nativeGraphicsInfo();
@@ -56,6 +57,10 @@ public final class GameActivity extends SDLActivity
      */
     static native void nativeSetBackground(boolean background);
     static native boolean nativeGamePaused();
+    /** The overlay's battery: many phones deny the power_supply files to apps, so it comes from here. */
+    static native void nativeSetBattery(int percent, float tempC);
+    /** The Back menu: pause the game while it is open (true), carry on (false). */
+    static native void nativeSetMenuPause(boolean paused);
 
     /** How long leaving the app waits for the backup save and the pause, before SDL's own pause. */
     private static final long SUSPEND_WAIT_MS = 1500;
@@ -81,6 +86,13 @@ public final class GameActivity extends SDLActivity
             // Read by runtime/src/platform/host_platform.cpp before anything else starts.
             Os.setenv("WIICOMPILED_RUNTIME_DIR", AppFiles.runtimeDir(this).getAbsolutePath(), true);
             Os.setenv("WIICOMPILED_DATA_DIR", AppFiles.dataDir(this).getAbsolutePath(), true);
+            final java.io.File logs = AppFiles.logDir();
+            if (logs != null) Os.setenv("BASARA_LOG_DIR", logs.getAbsolutePath(), true);
+            try {
+                // For the log's device line: the screen's refresh rate.
+                Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round(getDisplay().getRefreshRate())), true);
+            } catch (Exception ignored) {
+            }
         } catch (Exception e) {
             Log.e(TAG, "could not prepare the game's files", e);
             Toast.makeText(this, "Could not prepare the game's files: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -117,6 +129,32 @@ public final class GameActivity extends SDLActivity
     // after they go, so it doesn't blink while one menu screen hands over to the next.
     private final android.os.Handler menuPoll = new android.os.Handler(android.os.Looper.getMainLooper());
     private long lastTapScreen;
+    private long lastBattery = -100000;
+    private boolean menuOpen;
+
+    private void setMenuPause(boolean paused) {
+        if (!nativeReady) return;
+        try {
+            nativeSetMenuPause(paused);
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "menu pause bridge missing from libmain.so", e);
+        }
+    }
+
+    private void pushBattery() {
+        final Intent battery = registerReceiver(null,
+                new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (battery == null) return;
+        final int level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+        final int scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100);
+        final int temp = battery.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, -10);
+        try {
+            nativeSetBattery(level >= 0 && scale > 0 ? level * 100 / scale : -1, temp / 10f);
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "battery bridge missing from libmain.so", e);
+        }
+    }
+
     private final Runnable pollMenu = new Runnable() {
         @Override
         public void run() {
@@ -132,6 +170,10 @@ public final class GameActivity extends SDLActivity
                     if (changed.length > 4) settings.setFrameGraph(changed[4] > 0.5f);
                     if (changed.length > 5) settings.setVSync(changed[5] > 0.5f);
                 }
+            }
+            if (nativeReady && now - lastBattery > 10000) {
+                lastBattery = now;
+                pushBattery();
             }
             if (nativeReady && nativeTapScreen()) {
                 lastTapScreen = now;
@@ -163,8 +205,10 @@ public final class GameActivity extends SDLActivity
         super.onResume();
         if (nativeReady) {
             nativeSetBackground(false);  // the game carries on where it stopped
+            if (menuOpen) setMenuPause(true);  // ...unless its menu is still open
             // Back from the Start Menu (Continue): what was changed there applies now.
-            nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps());
+            nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
+                    settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph());
         }
         applyControlSettings();
         menuPoll.removeCallbacks(pollMenu);
@@ -240,6 +284,29 @@ public final class GameActivity extends SDLActivity
                 .putExtra(LauncherActivity.EXTRA_SHOW_START_MENU, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
         finish();
+    }
+
+    /**
+     * "Quit Game": closes the whole app, not just the game. The task (launcher included) leaves the
+     * recent apps, the launcher's process ends, and onDestroy ends this one.
+     */
+    private void quitApp() {
+        final android.app.ActivityManager am = getSystemService(android.app.ActivityManager.class);
+        // The launcher can sit in a task of its own: every task of the app goes, or it would come back.
+        if (am != null) {
+            for (android.app.ActivityManager.AppTask task : am.getAppTasks()) {
+                task.finishAndRemoveTask();
+            }
+        }
+        if (am != null && am.getRunningAppProcesses() != null) {
+            for (android.app.ActivityManager.RunningAppProcessInfo info : am.getRunningAppProcesses()) {
+                if (info.pid != Process.myPid() && info.uid == Process.myUid()
+                        && info.processName.equals(getPackageName())) {
+                    Process.killProcess(info.pid);
+                }
+            }
+        }
+        finishAndRemoveTask();
     }
 
     /** "Leave LAN Game": keep the host's progress, then start the game again on its own. */
@@ -324,6 +391,7 @@ public final class GameActivity extends SDLActivity
         touch.setControlsVisible(settings.touchControls());
         touch.setOpacity(settings.touchOpacity());
         touch.setHaptics(settings.haptics());
+        touch.setTouchCamera(settings.touchCamera());
         touch.setLayout(settings.touchLayout());
     }
 
@@ -347,21 +415,32 @@ public final class GameActivity extends SDLActivity
     public void onMenu() {
         touch.release();
         final boolean inSession = nativeReady && nativeSessionActive();
-        final java.util.List<String> items = new java.util.ArrayList<>();
-        items.add("Edit Controls Layout");
-        items.add("Start Menu");
-        if (inSession) items.add("Leave LAN Game");
-        items.add("Quit Game");
-        new AlertDialog.Builder(this)
-                .setTitle("Basara 2 Heroes Wii")
-                .setItems(items.toArray(new String[0]), (dialog, which) -> {
-                    final String item = items.get(which);
-                    if (item.equals("Edit Controls Layout")) touch.setEditMode(true);
-                    else if (item.equals("Start Menu")) openStartMenu(inSession);
-                    else if (item.equals("Leave LAN Game")) leaveSession();
-                    else finish();
+        // The game stands still while the menu is open (no backup save: it isn't leaving the screen).
+        menuOpen = true;
+        setMenuPause(true);
+        final Runnable resume = () -> {
+            menuOpen = false;
+            setMenuPause(false);
+        };
+        final Sheet sheet = new Sheet(this, "Paused", "Basara 2 Heroes").horizontal()
+                .action("Resume", "Back to the game", true, false, resume)
+                .action("Start Menu", "Settings and the launcher; Continue brings you back", false, false, () -> {
+                    resume.run();
+                    openStartMenu(inSession);
                 })
-                .setNegativeButton("Back to the Game", null)
+                .action("Edit Controls", "Move and resize the touch buttons", false, false, () -> {
+                    resume.run();
+                    touch.setEditMode(true);
+                });
+        if (inSession) {
+            sheet.action("Leave LAN Game", null, false, false, () -> {
+                resume.run();
+                leaveSession();
+            });
+        }
+        sheet.action("Quit Game", "Close the app completely", false, true, this::quitApp)
+                .onCancel(resume)
+                .onDismiss(this::hideSystemBars)
                 .show();
     }
 }

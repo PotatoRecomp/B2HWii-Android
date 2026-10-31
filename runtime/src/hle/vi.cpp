@@ -1063,6 +1063,7 @@ void VI_HLE_NoteSchedulerIdle(uint64_t nanos, int ender, uint32_t thread) {
 
 void OS_HLE_TakeIdleSteps(uint64_t* out);
 void Audio_HLE_TakeTickStats(uint64_t* pushNanos, uint64_t* callbackNanos, uint32_t* blocks);
+uint32_t Audio_HLE_TakeMixDeferrals();
 void Audio_HLE_TakeOutputStats(uint32_t* peak, uint32_t* clipped, double* diffRatio);
 namespace AxDspHle {
 void TakeMixStats(uint64_t* mixNanos, uint64_t* waitNanos, uint32_t* mixes, int* lastCpu);
@@ -1327,9 +1328,9 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                 uint64_t pushNanos = 0, callbackNanos = 0;
                 uint32_t blocks = 0;
                 Audio_HLE_TakeTickStats(&pushNanos, &callbackNanos, &blocks);
-                RT_LOGF(RT_TAG_VI, "audio blocks: %.1f a frame, speaker push %.2f ms, AI callback %.2f ms (%.3f ms each)\n",
+                RT_LOGF(RT_TAG_VI, "audio blocks: %.1f a frame, speaker push %.2f ms, AI callback %.2f ms (%.3f ms each), %u mix overlaps\n",
                         blocks / n, pushNanos / 1e6 / n, callbackNanos / 1e6 / n,
-                        blocks ? callbackNanos / 1e6 / blocks : 0.0);
+                        blocks ? callbackNanos / 1e6 / blocks : 0.0, Audio_HLE_TakeMixDeferrals());
                 // The speaker: audio pushed against the window's length (less means the game runs
                 // slower than real time), and pushes that found the output already empty (crackle).
                 const AudioBackend::Stats out = AudioBackend::Instance().TakeStats();

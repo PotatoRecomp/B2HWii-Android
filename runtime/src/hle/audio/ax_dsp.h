@@ -27,6 +27,9 @@ void JoinMixWorker();
 // BASARA_LOG_FPS: since the last call, time spent mixing on the worker, time the guest waited for it,
 // the number of mixes, and the CPU the last one ran on (-1 if unknown).
 void TakeMixStats(uint64_t* mixNanos, uint64_t* waitNanos, uint32_t* mixes, int* lastCpu);
+// BASARA_LOG_FPS: voice frames mixed since the last call that were loud near-Nyquist noise, and the
+// last such voice's sample format, SRC ratio (16.16) and rms.
+uint32_t TakeNoisyVoiceStats(uint32_t* format, uint32_t* ratio, uint32_t* rms);
 
 // Joins and tears down the mix worker thread. Call before the guest memory map
 // is destroyed or re-created.

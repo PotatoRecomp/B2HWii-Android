@@ -107,6 +107,11 @@ public sealed partial class CxxLinearCodeGenerator
                 Translator.Core.Ir.IrAssign assign => assign.Destination,
                 Translator.Core.Ir.IrBinary binary => binary.Destination,
                 Translator.Core.Ir.IrLoad load => load.Destination,
+                Translator.Core.Ir.IrResolvedLoad load => load.Destination,
+                Translator.Core.Ir.IrResolvedLoadPair pair =>
+                    GetRegisterBaseName(pair.SecondDestination).Equals("r11", StringComparison.OrdinalIgnoreCase)
+                        ? pair.SecondDestination
+                        : pair.FirstDestination,
                 Translator.Core.Ir.IrCall call => call.Destination,
                 Translator.Core.Ir.IrIndirectCall call => call.Destination,
                 Translator.Core.Ir.IrPhi phi => phi.Destination,

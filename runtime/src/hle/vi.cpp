@@ -1,4 +1,4 @@
-#include <sstream>
+﻿#include <sstream>
 #ifdef __ANDROID__
 #include <csignal>
 #include <dlfcn.h>
@@ -25,6 +25,7 @@
 #include "guest_profiler.h"
 #include "cpu_boost.h"
 #include "audio_backend.h"
+#include "audio/ax_dsp.h"
 #include "system_stats.h"
 
 #include <dolphin/gx/GXAurora.h>
@@ -1062,6 +1063,7 @@ void VI_HLE_NoteSchedulerIdle(uint64_t nanos, int ender, uint32_t thread) {
 
 void OS_HLE_TakeIdleSteps(uint64_t* out);
 void Audio_HLE_TakeTickStats(uint64_t* pushNanos, uint64_t* callbackNanos, uint32_t* blocks);
+void Audio_HLE_TakeOutputStats(uint32_t* peak, uint32_t* clipped, double* diffRatio);
 namespace AxDspHle {
 void TakeMixStats(uint64_t* mixNanos, uint64_t* waitNanos, uint32_t* mixes, int* lastCpu);
 }
@@ -1343,6 +1345,21 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                             "dropped full, lowest queue %.1f ms\n", out.pushedMs, window, out.pushes, out.empty,
                             out.dropped, out.minQueuedMs);
                 }
+                // What the game mixed: its loudest sample, samples stuck at full scale, and the share
+                // of energy near the top of the band (normal audio < 0.5; 2-4 is noise). Noisy voices
+                // are AX voice frames that mixed to loud near-Nyquist noise, with the last one's kind.
+                uint32_t peak = 0, clipped = 0;
+                double hf = 0.0;
+                Audio_HLE_TakeOutputStats(&peak, &clipped, &hf);
+                uint32_t voiceFormat = 0, voiceRatio = 0, voiceRms = 0;
+                const uint32_t noisyVoices = AxDspHle::TakeNoisyVoiceStats(&voiceFormat, &voiceRatio, &voiceRms);
+                char last[96] = "";
+                if (noisyVoices) {
+                    std::snprintf(last, sizeof(last), " (last: format %#x, %.0f Hz, rms %u)", voiceFormat,
+                                  voiceRatio * 32000.0 / 65536.0, voiceRms);
+                }
+                RT_LOGF(RT_TAG_VI, "audio level: peak %u, %u clipped samples, hf %.2f, %u noisy voice frames%s\n",
+                        peak, clipped, hf, noisyVoices, last);
             }
             {
                 // The renderer: the frame worker's time a cycle, of which preparing the next frame (where a

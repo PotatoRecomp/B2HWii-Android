@@ -38,6 +38,10 @@ namespace {
 std::atomic<uint64_t> g_mixNanos{0}, g_mixWaitNanos{0};
 std::atomic<uint32_t> g_mixes{0};
 std::atomic<int> g_mixCpu{-1};
+// BASARA_LOG_FPS: mixed voice frames that came out as near-Nyquist noise, and the last such voice
+// (sample format << 48 | SRC ratio << 16 | rms).
+std::atomic<uint32_t> g_noisyVoiceFrames{0};
+std::atomic<uint64_t> g_noisyVoiceKind{0};
 
 std::filesystem::path FindDspCoefficientRom() {
     if (const auto executableDirectory = RuntimeConfigFile::ExecutableDirectory()) {
@@ -1013,15 +1017,113 @@ private:
         }
     }
 
+    // BASARA_LOG_VOICES=1: each new kind of voice (sample format, resampler, filters), up to 96 kinds.
+    static void LogVoiceKind(const AXPBWii& pb) {
+        static const bool enabled = [] {
+            const char* value = std::getenv("BASARA_LOG_VOICES");
+            return value && *value && *value != '0';
+        }();
+        if (!enabled) {
+            return;
+        }
+        static std::mutex mutex;
+        static std::vector<uint64_t> seen;
+        const uint32_t ratio = Hilo(pb.src.ratio_hi, pb.src.ratio_lo);
+        const uint64_t key = static_cast<uint64_t>(pb.audio_addr.sample_format) |
+                             static_cast<uint64_t>(pb.src_type & 0xf) << 8 |
+                             static_cast<uint64_t>(pb.coef_select & 0xf) << 12 |
+                             static_cast<uint64_t>(pb.lpf.on & 1) << 16 |
+                             static_cast<uint64_t>(pb.biquad.on & 1) << 17 |
+                             static_cast<uint64_t>(pb.audio_addr.looping & 1) << 18 |
+                             static_cast<uint64_t>(pb.is_stream & 1) << 19 |
+                             static_cast<uint64_t>(ratio) << 24;
+        std::lock_guard<std::mutex> lock(mutex);
+        if (seen.size() >= 96 || std::find(seen.begin(), seen.end(), key) != seen.end()) {
+            return;
+        }
+        seen.push_back(key);
+        RT_LOGF(RT_TAG_AUDIO,
+                "voice kind: format %#x src_type %u ratio %#x (%.0f Hz) coef_select %u lpf %u (a0 %#x b0 %d) "
+                "biquad %u looping %u stream %u gain %#x\n",
+                pb.audio_addr.sample_format, pb.src_type, ratio, ratio * 32000.0 / 65536.0, pb.coef_select,
+                pb.lpf.on, pb.lpf.a0, pb.lpf.b0, pb.biquad.on, pb.audio_addr.looping, pb.is_stream,
+                static_cast<uint16_t>(pb.adpcm.gain));
+    }
+
     void ProcessVoice(AXPBWii& pb, const AXBuffers& buffers, uint32_t count, AXMixControl control,
                       const int16_t* coeffs, bool newFilter) {
         if (pb.running != 1) {
             return;
         }
+        LogVoiceKind(pb);
         Accelerator accel;
         accel.Setup(&pb);
         std::array<int16_t, kAxSamplesPerFrame> samples{};
-        Resample(accel, pb, samples.data(), count, coeffs);
+        // BASARA_VOICE_DUMP=prefix: the first PCM16 voice's source samples (prefix.src) and its
+        // resampled output (prefix.out), little-endian mono.
+        static std::FILE* s_src = nullptr;
+        static std::FILE* s_out = nullptr;
+        static uint32_t s_loop = 0;
+        static const char* s_prefix = std::getenv("BASARA_VOICE_DUMP");
+        const uint32_t loop = Hilo(pb.audio_addr.loop_addr_hi, pb.audio_addr.loop_addr_lo);
+        // Latched by the near-Nyquist detector below on the first voice it flags.
+        const bool dump = s_loop != 0 && s_loop == loop;
+        if (dump) {
+            if (!s_src) {
+                s_src = std::fopen((std::string(s_prefix) + ".src").c_str(), "wb");
+                s_out = std::fopen((std::string(s_prefix) + ".out").c_str(), "wb");
+            }
+            std::array<int16_t, 256> src{};
+            uint32_t srcCount = 0;
+            pb.src.cur_addr_frac = static_cast<uint16_t>(ResampleAudio(
+                [&](uint32_t) {
+                    const int16_t v = accel.ReadSample();
+                    if (srcCount < src.size()) src[srcCount++] = v;
+                    return v;
+                },
+                samples.data(), count, pb.src.last_samples, pb.src.cur_addr_frac,
+                Hilo(pb.src.ratio_hi, pb.src.ratio_lo), pb.src_type, VoiceCoefficients(coeffs, pb.coef_select)));
+            if (s_src) std::fwrite(src.data(), 2, srcCount, s_src);
+            if (s_out) std::fwrite(samples.data(), 2, count, s_out);
+        } else {
+            Resample(accel, pb, samples.data(), count, coeffs);
+        }
+        static const bool s_stats = std::getenv("BASARA_LOG_FPS") != nullptr;
+        if ((s_prefix && *s_prefix) || s_stats) {
+            // Near-Nyquist detector: first-difference energy against signal energy (about 4x for a
+            // signal at 16 kHz, well under 1 for normal audio). A loud voice above 2.5 is noise, as
+            // the CRI AHX voices were while the translator mangled their DCT.
+            double e = 0.0, d = 0.0;
+            for (uint32_t i = 1; i < count; ++i) {
+                e += static_cast<double>(samples[i]) * samples[i];
+                const double diff = static_cast<double>(samples[i]) - samples[i - 1];
+                d += diff * diff;
+            }
+            const bool noisy = e > count * 2000.0 * 2000.0 && d > 2.5 * e;
+            if (noisy) {
+                g_noisyVoiceFrames.fetch_add(1, std::memory_order_relaxed);
+                g_noisyVoiceKind.store(static_cast<uint64_t>(pb.audio_addr.sample_format) << 48 |
+                                           static_cast<uint64_t>(Hilo(pb.src.ratio_hi, pb.src.ratio_lo)) << 16 |
+                                           static_cast<uint64_t>(std::min(std::sqrt(e / count), 65535.0)),
+                                       std::memory_order_relaxed);
+            }
+            static int s_reports = 0;
+            const bool dumping = s_prefix && *s_prefix;
+            if (e > count * 300.0 * 300.0 && d > 2.0 * e && (dumping ? s_reports < 60 : noisy && s_reports < 8)) {
+                ++s_reports;
+                if (dumping && s_loop == 0) {
+                    s_loop = loop;
+                }
+                RT_LOGF(RT_TAG_AUDIO,
+                        "nyquist voice: diff/energy %.2f rms %.0f format %#x src_type %u ratio %#x pred_scale %#x "
+                        "loop %#x end %#x cur %#x coefs %d %d gain %#x looping %u\n",
+                        d / e, std::sqrt(e / count), pb.audio_addr.sample_format, pb.src_type,
+                        Hilo(pb.src.ratio_hi, pb.src.ratio_lo), pb.adpcm.pred_scale, loop,
+                        Hilo(pb.audio_addr.end_addr_hi, pb.audio_addr.end_addr_lo),
+                        Hilo(pb.audio_addr.cur_addr_hi, pb.audio_addr.cur_addr_lo), pb.adpcm.coefs[0],
+                        pb.adpcm.coefs[1], static_cast<uint16_t>(pb.adpcm.gain), pb.audio_addr.looping);
+            }
+        }
         // Same wrapping 16-bit ramp as MixAdd, minus the accumulate. The two's
         // complement wrap of the int16 envelope is bit-identical to the uint16
         // wrap the kernel performs, so the value stored back is unchanged.
@@ -1681,6 +1783,14 @@ void InitAram() {
     Instance().JoinMix();
     RefreshMixMemoryMap();
     g_aramWindowGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t TakeNoisyVoiceStats(uint32_t* format, uint32_t* ratio, uint32_t* rms) {
+    const uint64_t kind = g_noisyVoiceKind.load(std::memory_order_relaxed);
+    *format = static_cast<uint32_t>(kind >> 48);
+    *ratio = static_cast<uint32_t>(kind >> 16) & 0xFFFFFFFFu;
+    *rms = static_cast<uint32_t>(kind & 0xFFFFu);
+    return g_noisyVoiceFrames.exchange(0, std::memory_order_relaxed);
 }
 
 const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes) {

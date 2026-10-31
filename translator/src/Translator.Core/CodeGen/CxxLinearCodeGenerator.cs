@@ -738,6 +738,23 @@ public sealed partial class CxxLinearCodeGenerator
 
     private static void UpdateKnownUIntConstants(IrInstruction instruction, Dictionary<string, uint> constants)
     {
+        // The emitter walks the range-lowered body: a resolved load (or load pair) overwrites its
+        // destination just like IrLoad, and leaving the old constant in place would fold later
+        // addresses through a stale value.
+        switch (instruction)
+        {
+            case IrResolvedLoad resolvedLoad:
+                ForgetKnownUIntConstant(resolvedLoad.Destination, constants);
+                return;
+            case IrResolvedPsqLoad psqLoad:
+                ForgetKnownUIntConstant(psqLoad.Destination, constants);
+                return;
+            case IrResolvedLoadPair pair:
+                ForgetKnownUIntConstant(pair.FirstDestination, constants);
+                ForgetKnownUIntConstant(pair.SecondDestination, constants);
+                return;
+        }
+
         string? destination = instruction switch
         {
             IrAssign assign => assign.Destination,
@@ -765,9 +782,16 @@ public sealed partial class CxxLinearCodeGenerator
         }
         else
         {
-            constants.Remove(destination);
-            constants.Remove(GetRegisterBaseName(destination));
+            ForgetKnownUIntConstant(destination, constants);
         }
+    }
+
+    private static void ForgetKnownUIntConstant(string destination, Dictionary<string, uint> constants)
+    {
+        if (string.IsNullOrWhiteSpace(destination))
+            return;
+        constants.Remove(destination);
+        constants.Remove(GetRegisterBaseName(destination));
     }
 
     private sealed record LinkedAddressRemap(uint LinkBase, uint GuestBase, uint CodeSize);
@@ -932,6 +956,18 @@ public sealed partial class CxxLinearCodeGenerator
 
             case IrLoad load:
                 return NonvolatileFprMask(load.Destination);
+
+            // This mask is taken from the range-lowered body, so the resolved load forms must count
+            // as FPR writes too; otherwise a body that only writes f14-f31 through them is
+            // registered as preserving nonvolatile FPRs.
+            case IrResolvedLoad resolvedLoad:
+                return NonvolatileFprMask(resolvedLoad.Destination);
+
+            case IrResolvedPsqLoad psqLoad:
+                return NonvolatileFprMask(psqLoad.Destination);
+
+            case IrResolvedLoadPair pair:
+                return NonvolatileFprMask(pair.FirstDestination) | NonvolatileFprMask(pair.SecondDestination);
 
             case IrCall call:
                 return InlineRestoreNonvolatileFprMask(call) |

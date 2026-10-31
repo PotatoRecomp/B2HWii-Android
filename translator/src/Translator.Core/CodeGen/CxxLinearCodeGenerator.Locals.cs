@@ -505,6 +505,45 @@ public sealed partial class CxxLinearCodeGenerator
                                 }
                                 break;
                             }
+                        // The range-resolved forms define FPRs exactly like their plain twins, and the
+                        // emitter (EmitInstruction) tags them the same way: scalar for lfs/lfd and load
+                        // pairs, packed for psq_l. Without these cases a resolved lfs left the register's
+                        // incoming tag in place, so in a loop (non-entry blocks start at "all paired") a
+                        // scalar value reached the next block tagged paired and its scalar consumers
+                        // read it through PPC_PsToScalarInline: the high word of the double as a float.
+                        // That turned CRI's AHX voice DCT (803F8A9C) into full-scale noise.
+                        case IrResolvedLoad resolvedLoad:
+                            {
+                                var destBit = PairedFloatRegisterBit(resolvedLoad.Destination);
+                                if (destBit >= 0)
+                                {
+                                    newOut &= ~(1u << destBit);
+                                }
+                                break;
+                            }
+                        case IrResolvedLoadPair pair:
+                            {
+                                var firstBit = PairedFloatRegisterBit(pair.FirstDestination);
+                                if (firstBit >= 0)
+                                {
+                                    newOut &= ~(1u << firstBit);
+                                }
+                                var secondBit = PairedFloatRegisterBit(pair.SecondDestination);
+                                if (secondBit >= 0)
+                                {
+                                    newOut &= ~(1u << secondBit);
+                                }
+                                break;
+                            }
+                        case IrResolvedPsqLoad psqLoad:
+                            {
+                                var destBit = PairedFloatRegisterBit(psqLoad.Destination);
+                                if (destBit >= 0)
+                                {
+                                    newOut |= 1u << destBit;
+                                }
+                                break;
+                            }
                     }
                 }
 

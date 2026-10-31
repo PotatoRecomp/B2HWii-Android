@@ -103,6 +103,40 @@ void MeterAudioBlock(const uint8_t* src, uint32_t bytes) {
     }
 }
 
+// BASARA_LOG_FPS: the AI output since the last report: loudest sample, samples at full scale, and
+// first-difference energy against signal energy (normal audio stays well under 0.5; noise near the
+// top of the band, like the broken AHX voices, reaches 2-4).
+std::atomic<uint32_t> g_outPeak{0}, g_outClipped{0};
+std::atomic<uint64_t> g_outEnergy{0}, g_outDiffEnergy{0};
+
+void MeasureOutputBlock(const uint8_t* src, uint32_t bytes) {
+    static const bool enabled = std::getenv("BASARA_LOG_FPS") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    uint32_t peak = 0, clipped = 0;
+    uint64_t energy = 0, diffEnergy = 0;
+    int prev[2] = {0, 0};
+    for (uint32_t i = 0; i + 3 < bytes; i += 4) {
+        for (int ch = 0; ch < 2; ++ch) {
+            const int v = static_cast<int16_t>(static_cast<uint16_t>(src[i + ch * 2] << 8 | src[i + ch * 2 + 1]));
+            const uint32_t a = static_cast<uint32_t>(v < 0 ? -v : v);
+            peak = std::max(peak, a);
+            clipped += a >= 32767 ? 1u : 0u;
+            energy += static_cast<uint64_t>(a) * a;
+            const int64_t d = static_cast<int64_t>(v) - prev[ch];
+            diffEnergy += static_cast<uint64_t>(d * d);
+            prev[ch] = v;
+        }
+    }
+    uint32_t old = g_outPeak.load(std::memory_order_relaxed);
+    while (peak > old && !g_outPeak.compare_exchange_weak(old, peak, std::memory_order_relaxed)) {
+    }
+    g_outClipped.fetch_add(clipped, std::memory_order_relaxed);
+    g_outEnergy.fetch_add(energy, std::memory_order_relaxed);
+    g_outDiffEnergy.fetch_add(diffEnergy, std::memory_order_relaxed);
+}
+
 bool PushAudioBlock(uint32_t startAddr, uint32_t length) {
     if (startAddr == 0 || length == 0) {
         return false;
@@ -120,6 +154,15 @@ bool PushAudioBlock(uint32_t startAddr, uint32_t length) {
             src = speaker;  // the Music / Sound Effects volumes, applied outside guest memory
         }
         MeterAudioBlock(src, bytes);
+        MeasureOutputBlock(src, bytes);
+        // BASARA_AUDIO_DUMP=path: append the AI output (big-endian 16-bit, right/left) to a raw file.
+        static std::FILE* s_dump = [] {
+            const char* path = std::getenv("BASARA_AUDIO_DUMP");
+            return path && *path ? std::fopen(path, "wb") : nullptr;
+        }();
+        if (s_dump) {
+            std::fwrite(src, 1, bytes, s_dump);
+        }
         return AudioBackend::Instance().PushWiiAiSamplesBE16(src, bytes);
     }
 
@@ -420,6 +463,15 @@ void Audio_HLE_TakeTickStats(uint64_t* pushNanos, uint64_t* callbackNanos, uint3
     *pushNanos = g_tickPushNanos.exchange(0, std::memory_order_relaxed);
     *callbackNanos = g_tickCallbackNanos.exchange(0, std::memory_order_relaxed);
     *blocks = g_tickBlocks.exchange(0, std::memory_order_relaxed);
+}
+
+void Audio_HLE_TakeOutputStats(uint32_t* peak, uint32_t* clipped, double* diffRatio)
+{
+    *peak = g_outPeak.exchange(0, std::memory_order_relaxed);
+    *clipped = g_outClipped.exchange(0, std::memory_order_relaxed);
+    const uint64_t energy = g_outEnergy.exchange(0, std::memory_order_relaxed);
+    const uint64_t diff = g_outDiffEnergy.exchange(0, std::memory_order_relaxed);
+    *diffRatio = energy ? static_cast<double>(diff) / static_cast<double>(energy) : 0.0;
 }
 
 void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
@@ -725,6 +777,13 @@ void Audio_HLE_PollDeferred()
 {
     // A wall-clock pump; deterministic mode delivers audio blocks only from the scheduler.
     if (DetClock::Enabled()) {
+        return;
+    }
+    static const bool s_off = [] {
+        const char* v = std::getenv("BASARA_AUDIO_DEFERRED");
+        return v && *v == '0';
+    }();
+    if (s_off) {
         return;
     }
     if (!OS_HLE_InterruptsEnabled()) {

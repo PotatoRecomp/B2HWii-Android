@@ -64,3 +64,4 @@ __pycache__/
 *.user
 *.suo
 .DS_Store
+.aider*

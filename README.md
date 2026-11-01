@@ -18,8 +18,20 @@ Claude Opus 5.5.
 
 ## Status
 
-Work in progress. The title screen and the battle demo run at 60 fps on Windows. Testing on a phone (RedMagic 8S Pro) is
-ongoing.
+Beta (0.0.1). The game is playable from boot through Story battles on Windows and Android, with audio, saving and
+loading, and the Classic Controller. Tested on RedMagic 8S Pro (Snapdragon 8 Gen 2), Redmi Note 12 Pro (SD732G),
+Infinix GT30 (Dimensity 7300), Poco X7 Pro (Dimensity 8400), and phones with Helio G81, G99 and Unisoc T606.
+
+- **Performance:** 60 fps in battles on flagship phones. On mid-range and low-end phones, busy battles run at 35–60 fps
+  with Frameskip on. Optional settings: 30 FPS Lock, dynamic resolution, thermal control, and a device profile that
+  picks resolution and frameskip on first run.
+- **Graphics:** render resolution 0.5x–4x, FSR1 upscaling (Light/Full), Texture Detail (trilinear and anisotropic
+  filtering), custom textures and PNG dumping. HD Textures Live (2x upscale on the fly) is experimental.
+- **Controls:** touch controls with a layout editor and touch camera. Also supports gamepads (Classic Controller layout)
+  and, on Windows, a keyboard with rebindable keys.
+- **Launcher:** imports ISO/RVZ on the phone. Includes Continue, full-screen settings, a performance overlay, What's New,
+  and English/Indonesian.
+- **Experimental:** a separate GX thread, off by default, which can make the sky and some textures flicker.
 
 ## Requirements
 
@@ -49,8 +61,10 @@ tools\b-win.ps1 -Mode build           # Windows
 tools\b-android.ps1 -Mode configure   # once
 tools\b-android.ps1 -Mode build
 tools\b-android.ps1 -Mode stage       # libmain.so and data for the APK
-third_party\gradle\bin\gradle.bat assembleRelease
+third_party\gradle\bin\gradle.bat assembleRelease                 # add -PbasaraBeta for the Beta package
 ```
+
+Optional: `tools\b-pgo.ps1` for a profile-guided (PGO + ThinLTO) Android build.
 
 ## Credits
 
@@ -79,5 +93,5 @@ Bundled third-party components and their licenses are listed in [`THIRD-PARTY-NO
 
 ## License
 
-GPLv3, see [`LICENSE`](LICENSE) and [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). Translated game code, and any
-APK containing it, must not be distributed.
+GPLv3, see [`LICENSE`](LICENSE) and [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). APKs are published only on this
+repository's [Releases](../../releases) page.

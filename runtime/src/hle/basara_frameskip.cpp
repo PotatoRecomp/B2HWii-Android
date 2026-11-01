@@ -15,6 +15,7 @@
 #include "runtime_config.h"
 #include "runtime_log.h"
 #include "thermal.h"
+#include "cheats.h"
 
 extern "C" bool AuroraGxThreadEnabled();
 extern "C" uint64_t AuroraGxThreadMark();
@@ -127,6 +128,7 @@ extern "C" void BasaraMainLoop_HLE_802be4f4(CpuContext* ctx) {
     }();
     uint64_t gxFrameMark = 0;
     for (;;) {
+        Cheats::Apply();
         if (mode != 2 && ++loopFrames % kThermalCheckFrames == 0) {
             const Clock::time_point t = Clock::now();
             const bool hot = Thermal::Warm();

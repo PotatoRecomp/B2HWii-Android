@@ -1074,7 +1074,19 @@ private:
         static uint32_t s_loop = 0;
         static const char* s_prefix = std::getenv("BASARA_VOICE_DUMP");
         const uint32_t loop = Hilo(pb.audio_addr.loop_addr_hi, pb.audio_addr.loop_addr_lo);
-        // Latched by the near-Nyquist detector below on the first voice it flags.
+        // Latched by the near-Nyquist detector below on the first voice it flags, or, with
+        // BASARA_VOICE_DUMP_RATIO=hex, on the first voice resampled at that ratio.
+        static const uint32_t s_ratio = [] {
+            const char* value = std::getenv("BASARA_VOICE_DUMP_RATIO");
+            return value && *value ? static_cast<uint32_t>(std::strtoul(value, nullptr, 16)) : 0u;
+        }();
+        if (s_loop == 0 && s_ratio != 0 && s_prefix && *s_prefix &&
+            Hilo(pb.src.ratio_hi, pb.src.ratio_lo) == s_ratio) {
+            s_loop = loop;
+            RT_LOGF(RT_TAG_AUDIO, "voice dump: ratio %#x format %#x loop %#x end %#x looping %u\n", s_ratio,
+                    pb.audio_addr.sample_format, loop, Hilo(pb.audio_addr.end_addr_hi, pb.audio_addr.end_addr_lo),
+                    pb.audio_addr.looping);
+        }
         const bool dump = s_loop != 0 && s_loop == loop;
         if (dump) {
             if (!s_src) {
@@ -1119,7 +1131,7 @@ private:
             const bool dumping = s_prefix && *s_prefix;
             if (e > count * 300.0 * 300.0 && d > 2.0 * e && (dumping ? s_reports < 60 : noisy && s_reports < 8)) {
                 ++s_reports;
-                if (dumping && s_loop == 0) {
+                if (dumping && s_loop == 0 && s_ratio == 0) {
                     s_loop = loop;
                 }
                 RT_LOGF(RT_TAG_AUDIO,

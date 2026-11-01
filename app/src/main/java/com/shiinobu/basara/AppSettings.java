@@ -23,7 +23,10 @@ final class AppSettings {
     AppSettings(Context context) {
         // Both processes (launcher and :game) read it. Writes use commit(): the game process is
         // ended right after its menu closes, which would drop a pending apply().
-        prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE);
+        // MODE_MULTI_PROCESS: each new AppSettings rereads the file when the other process changed it
+        // (the :game process otherwise keeps its first copy, and Continue missed launcher changes).
+        //noinspection deprecation
+        prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
         // Once: the FPS / performance overlay costs frame time on slow phones, so installs that had
         // it on start with it off again (it can still be turned back on in Display settings).
         if (!prefs.getBoolean("show_fps_reset_1", false)) {
@@ -34,6 +37,32 @@ final class AppSettings {
     /** DeviceProfile has not run yet on this install. */
     boolean needsDeviceProfile() { return !prefs.getBoolean("device_profile_1", false); }
 
+    /** Thermal Control was on by default and still misjudges: turn it off once on every install. */
+    void resetThermalOnce() {
+        if (prefs.getBoolean("thermal_off_1", false)) return;
+        prefs.edit().putBoolean("thermal_off_1", true).putBoolean("thermal_control", false).commit();
+    }
+
+    // --- cheats (runtime/src/cheats.cpp, [cheats] in Config.toml) ---------------------------------
+    static final int MONEY_OFF = 0, MONEY_INFINITE = 1, MONEY_ONCE = 2;
+    static final int MAX_MONEY = 9_999_999;
+
+    int cheatMoney() { return !BuildConfig.CHEATS ? MONEY_OFF : Math.max(0, Math.min(2, prefs.getInt("cheat_money", MONEY_OFF))); }
+    void setCheatMoney(int mode) { prefs.edit().putInt("cheat_money", mode).commit(); }
+    int cheatMoneyAmount() { return Math.max(0, Math.min(MAX_MONEY, prefs.getInt("cheat_money_amount", MAX_MONEY))); }
+    void setCheatMoneyAmount(int amount) {
+        prefs.edit().putInt("cheat_money_amount", Math.max(0, Math.min(MAX_MONEY, amount))).commit();
+    }
+    /** Bumped by "Set Now": the game sets the money once when it sees a new number. */
+    int cheatMoneySeq() { return prefs.getInt("cheat_money_seq", 0); }
+    void bumpCheatMoneySeq() { prefs.edit().putInt("cheat_money_seq", cheatMoneySeq() + 1).commit(); }
+    boolean cheatInfiniteHp() { return BuildConfig.CHEATS && prefs.getBoolean("cheat_infinite_hp", false); }
+    void setCheatInfiniteHp(boolean on) { prefs.edit().putBoolean("cheat_infinite_hp", on).commit(); }
+    boolean cheatInfiniteBasara() { return BuildConfig.CHEATS && prefs.getBoolean("cheat_infinite_basara", false); }
+    void setCheatInfiniteBasara(boolean on) { prefs.edit().putBoolean("cheat_infinite_basara", on).commit(); }
+    /** Any cheat on (the launcher's IN USE panel). */
+    boolean anyCheat() { return cheatMoney() == MONEY_INFINITE || cheatInfiniteHp() || cheatInfiniteBasara(); }
+
     /** GX Thread was on by default for slower phones and flickers: turn it off once on every install. */
     void resetGxThreadOnce() {
         if (prefs.getBoolean("gx_thread_off_1", false)) return;
@@ -43,7 +72,7 @@ final class AppSettings {
     /** The device profile's picks, for the settings the player never set; runs once. */
     void applyDeviceProfile(float scale, boolean frameskip, boolean gxThread) {
         final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true)
-                .putBoolean("gx_thread_off_1", true);
+                .putBoolean("gx_thread_off_1", true).putBoolean("thermal_off_1", true);
         if (!prefs.contains("resolution_scale")) e.putFloat("resolution_scale", scale);
         if (!prefs.contains("frameskip")) e.putBoolean("frameskip", frameskip);
         if (!prefs.contains("gx_thread")) e.putBoolean("gx_thread", gxThread);
@@ -132,7 +161,8 @@ final class AppSettings {
     /** GX Thread (experimental): GX work on its own thread; read when the game starts. */
     boolean gxThread() { return prefs.getBoolean("gx_thread", false); }
     void setGxThread(boolean on) { prefs.edit().putBoolean("gx_thread", on).commit(); }
-    boolean thermalControl() { return prefs.getBoolean("thermal_control", true); }
+    /** Thermal Control (experimental, off by default: it still switches too eagerly). */
+    boolean thermalControl() { return prefs.getBoolean("thermal_control", false); }
     void setThermalControl(boolean on) { prefs.edit().putBoolean("thermal_control", on).commit(); }
 
     /**
@@ -153,7 +183,7 @@ final class AppSettings {
     }
     private static Boolean thermalSupported;
 
-    /** Replacement textures (Dolphin-style tex1_*.png) from /sdcard/basara2heroes[-beta]/textures. */
+    /** Replacement textures (Dolphin-style tex1_*.png) from /sdcard/Basara2Heroes[-Beta]/textures. */
     boolean customTextures() { return prefs.getBoolean("custom_textures", false); }
     void setCustomTextures(boolean on) { prefs.edit().putBoolean("custom_textures", on).commit(); }
     /** With custom textures: every texture the game uses goes to textures/dump, named for its replacement. */

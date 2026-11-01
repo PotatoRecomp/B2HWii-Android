@@ -27,15 +27,23 @@ final class SettingsMenu {
     private static final String TAG = "Basara";
     private static final int BACKGROUND = Color.rgb(16, 20, 24);
 
-    private static final String[] SECTIONS = {"Display", "Graphics", "Performance", "Controls", "Experimental"};
+    private static final int DISPLAY = 0, GRAPHICS = 1, PERFORMANCE = 2, CONTROLS = 3, SAVE_DATA = 4, CHEATS = 5,
+            EXPERIMENTAL = 6;
+    private static final String[] SECTION_NAMES = {"Display", "Graphics", "Performance", "Controls", "Save Data",
+        "Cheats", "Experimental"};
     private static final String[] SECTION_ABOUT = {
         "Picture shape and size",
         "Sharpness and GPU fixes",
         "Smoothness and speed",
         "Touch controls and motion",
+        "Back up and import",
+        "Money, HP, Basara gauge",
         "Unfinished, for testers",
     };
-    private static final int SECTION_EXPERIMENTAL = 4;
+    /** The sections shown, in order: Cheats only in a build that has them (-PbasaraCheats). */
+    private static final int[] SECTIONS = BuildConfig.CHEATS
+            ? new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, EXPERIMENTAL}
+            : new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, EXPERIMENTAL};
 
     private final Activity activity;
     private final AppSettings settings;
@@ -73,11 +81,12 @@ final class SettingsMenu {
             item.setPadding(dp(16), dp(10), dp(16), dp(10));
             item.setClickable(true);
             item.setOnClickListener(v -> showSection(index));
-            final TextView name = text(Tr.t(SECTIONS[i]), 16,
-                    i == SECTION_EXPERIMENTAL ? Sheet.WARNING_TEXT : Color.WHITE);
+            final int id = SECTIONS[i];
+            final TextView name = text(Tr.t(SECTION_NAMES[id]), 16,
+                    id == EXPERIMENTAL || id == CHEATS ? Sheet.WARNING_TEXT : Color.WHITE);
             name.setTypeface(LauncherActivity.MEDIUM);
             item.addView(name);
-            item.addView(text(Tr.t(SECTION_ABOUT[i]), 12, LauncherActivity.MUTED));
+            item.addView(text(Tr.t(SECTION_ABOUT[id]), 12, LauncherActivity.MUTED));
             nav.addView(item, matchWidth(dp(6)));
         }
         final View spacer = new View(activity);
@@ -171,11 +180,13 @@ final class SettingsMenu {
             nav.getChildAt(i + 1).setBackground(i == index ? rounded(LauncherActivity.RAISED, dp(16)) : null);
         }
         rows.removeAllViews();
-        switch (index) {
-            case 0: showDisplay(); break;
-            case 1: showGraphics(); break;
-            case 2: showPerformance(); break;
-            case 3: showControls(); break;
+        switch (SECTIONS[index]) {
+            case DISPLAY: showDisplay(); break;
+            case GRAPHICS: showGraphics(); break;
+            case PERFORMANCE: showPerformance(); break;
+            case CONTROLS: showControls(); break;
+            case SAVE_DATA: showSaveData(); break;
+            case CHEATS: showCheats(); break;
             default: showExperimental(); break;
         }
     }
@@ -262,13 +273,164 @@ final class SettingsMenu {
                         + "and sound keep full speed. For phones that cannot hold 60. Replaces Frameskip "
                         + "while on."),
                 settings.fpsLock30(), on -> settings.setFpsLock30(on));
-        final boolean thermal = AppSettings.thermalSupported(activity);
-        toggleRow(Tr.t("Thermal Control"), thermal
-                        ? Tr.t("When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
-                        + "for at least a minute, and lowers the resolution if the GPU is the one working "
-                        + "hard. Back to normal once it cools down.")
-                        : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
-                settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
+    }
+
+    private void showSaveData() {
+        final String saves = AppFiles.HOME + "/Saves";
+        card(Tr.t("How it works"), Tr.t("Back up: tap Back Up, then Save Here. The file basara2heroes-save-DATE.zip "
+                        + "goes to ") + saves + Tr.t(". Copy it to a PC or Drive to keep it safe.")
+                        + "\n\n" + Tr.t("Import (move a save to this phone): 1. Copy the .zip made by Back Up into ")
+                        + saves + Tr.t(" (or Download) on this phone. 2. Tap Import and tap that .zip. 3. Start the "
+                        + "game: it plays from the imported save.")
+                        + "\n\n" + Tr.t("Before every import the save on this phone is kept in ") + saves
+                        + Tr.t("/Auto: Undo Last Import puts it back. Only .zip files from Back Up (or a basara2w.dat) "
+                        + "work; Dolphin's data.bin does not."),
+                null, false, true);
+
+        final boolean has = SaveData.hasSave(activity);
+        actionRow(Tr.t("Back Up Save"), has
+                        ? Tr.t("Last saved ")
+                                + android.text.format.DateFormat.getMediumDateFormat(activity)
+                                        .format(new java.util.Date(SaveData.lastSaved(activity)))
+                                + " " + android.text.format.DateFormat.getTimeFormat(activity)
+                                        .format(new java.util.Date(SaveData.lastSaved(activity))) + "."
+                        : Tr.t("There is no save yet: save in the game first (各種設定 > セーブ)."),
+                has ? Tr.t("Back Up") : null, this::backUp);
+        actionRow(Tr.t("Import Save"), Tr.t("Replaces this phone's save with a .zip made by Back Up. A running "
+                        + "game is closed without saving."),
+                Tr.t("Import"), this::importSave);
+        final java.io.File last = SaveData.latestBackup(activity);
+        actionRow(Tr.t("Undo Last Import"), last == null
+                        ? Tr.t("Nothing to undo: no save has been imported on this phone.")
+                        : Tr.t("Puts back the save the last import replaced (from ")
+                                + android.text.format.DateFormat.getMediumDateFormat(activity)
+                                        .format(new java.util.Date(last.lastModified()))
+                                + " " + android.text.format.DateFormat.getTimeFormat(activity)
+                                        .format(new java.util.Date(last.lastModified())) + ").",
+                last == null ? null : Tr.t("Undo"), this::confirmUndoImport);
+    }
+
+    /** The launcher's endGame, so a running game cannot write over an imported save. */
+    private Runnable endGame() {
+        return activity instanceof LauncherActivity ? ((LauncherActivity) activity)::endGame : null;
+    }
+
+    private void backUp() {
+        if (!android.os.Environment.isExternalStorageManager()) {
+            askFileAccess(() -> SaveData.startExport(activity));
+            return;
+        }
+        final java.io.File saves = SaveData.savesDir();
+        FileBrowser.showFolder(activity, saves != null ? saves : FileBrowser.downloads(),
+                Tr.t("Where to save the backup"),
+                Tr.t("Tap Save Here to keep it in ") + AppFiles.HOME + Tr.t("/Saves, or open another folder first."),
+                folder -> SaveData.exportToFolder(activity, folder, this::changed));
+    }
+
+    private void importSave() {
+        if (!android.os.Environment.isExternalStorageManager()) {
+            askFileAccess(() -> SaveData.startImport(activity));
+            return;
+        }
+        FileBrowser.showFiles(activity, SaveData.importStart(), Tr.t("Choose your save backup"),
+                Tr.t("The basara2heroes-save-….zip made by Back Up. The save on this phone is replaced (and kept "
+                        + "for Undo Last Import)."),
+                SaveData::isSaveFile, Tr.t("No folders or .zip files here."),
+                file -> SaveData.importFile(activity, file, endGame(), this::changed));
+    }
+
+    private void confirmUndoImport() {
+        new Sheet(activity, Tr.t("Undo the last import?"), Tr.t("The save from before that import comes back. A "
+                + "running game is closed without saving."))
+                .action(Tr.t("Undo"), null, true, false, () -> {
+                    SaveData.undoLastImport(activity, endGame(), this::changed);
+                })
+                .action(Tr.t("Cancel"), null, false, false, null)
+                .show();
+    }
+
+    /** Without "All files access" the folders cannot be listed: allow it, or use the phone's own picker. */
+    private void askFileAccess(Runnable systemPicker) {
+        new Sheet(activity, Tr.t("Allow file access"), Tr.t("To list the folders on this phone."))
+                .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
+                .step("2", Tr.t("Come back"), Tr.t("Then tap the button again."))
+                .action(Tr.t("Open Settings"), null, true, false, () -> {
+                    try {
+                        activity.startActivity(new android.content.Intent(
+                                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                android.net.Uri.parse("package:" + activity.getPackageName())));
+                    } catch (android.content.ActivityNotFoundException e) {
+                        systemPicker.run();
+                    }
+                })
+                .action(Tr.t("Use System Picker"), Tr.t("The phone's own file picker, without the permission"), false,
+                        false, systemPicker)
+                .action(Tr.t("Cancel"), null, false, false, null)
+                .show();
+    }
+
+    /** Only in a build with cheats (BuildConfig.CHEATS); applied when the game starts or comes back. */
+    private void showCheats() {
+        rows.addView(Sheet.warningBox(activity, Tr.t("Cheats"),
+                Tr.t("They change your save: money and anything bought with it stay after the game saves. Back up "
+                        + "your save first (Save Data). Cheats can break the game's balance or progress, and they "
+                        + "are off in LAN play. Changes apply when you go back to the game.")),
+                matchWidth(0));
+
+        final int money = settings.cheatMoney();
+        final String amount = String.format(java.util.Locale.ROOT, "%,d", settings.cheatMoneyAmount());
+        choiceRow(Tr.t("Money"), Tr.t("Infinite keeps the money at the amount below, whatever you buy. Once sets it "
+                        + "to that amount one time (Set Now), then it goes down as you spend it."),
+                new String[] {Tr.t("Off"), Tr.t("Infinite"), Tr.t("Once")}, money, true,
+                which -> settings.setCheatMoney(which));
+        actionRow(Tr.t("Money Amount"), amount + Tr.t(" (up to 9,999,999, the game's limit)."),
+                money != AppSettings.MONEY_OFF ? Tr.t("Change") : null, this::askMoneyAmount);
+        if (money == AppSettings.MONEY_ONCE) {
+            actionRow(Tr.t("Set Money Now"), Tr.t("Load your save in the game first, then tap Set Now and go back "
+                            + "to the game: the money becomes ") + amount + ".",
+                    Tr.t("Set Now"), () -> {
+                        settings.bumpCheatMoneySeq();
+                        android.widget.Toast.makeText(activity, Tr.t("Money is set when you go back to the game."),
+                                android.widget.Toast.LENGTH_SHORT).show();
+                    });
+        }
+        toggleRow(Tr.t("Infinite HP"), Tr.t("Your characters lose no HP. Enemies and allied officers still do."),
+                settings.cheatInfiniteHp(), on -> settings.setCheatInfiniteHp(on));
+        toggleRow(Tr.t("Infinite Basara"), Tr.t("Your characters' Basara gauge stays full, refilled as soon as a "
+                        + "Basara attack ends."),
+                settings.cheatInfiniteBasara(), on -> settings.setCheatInfiniteBasara(on));
+    }
+
+    private void askMoneyAmount() {
+        final android.widget.EditText input = new android.widget.EditText(activity);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(settings.cheatMoneyAmount()));
+        input.setSelectAllOnFocus(true);
+        input.setTextColor(Color.WHITE);
+        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        input.setFilters(new android.text.InputFilter[] {new android.text.InputFilter.LengthFilter(7)});
+        final Runnable save = () -> {
+            try {
+                settings.setCheatMoneyAmount(Integer.parseInt(input.getText().toString().trim()));
+            } catch (NumberFormatException ignored) {
+                return;  // empty: keep the old amount
+            }
+            changed();
+        };
+        final Sheet sheet = new Sheet(activity, Tr.t("Money Amount"), Tr.t("0 to 9,999,999."))
+                .view(input)
+                .action(Tr.t("Save"), null, true, false, save)
+                .action(Tr.t("Cancel"), null, false, false, null);
+        // The keyboard covers the Save button on a landscape phone: its Done key saves too.
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId != android.view.inputmethod.EditorInfo.IME_ACTION_DONE) return false;
+            save.run();
+            sheet.dismiss();
+            return true;
+        });
+        sheet.show();
+        input.requestFocus();
     }
 
     private void showControls() {
@@ -357,6 +519,15 @@ final class SettingsMenu {
                         : Tr.t("Turn Custom Textures on to choose."),
                 settings.dumpTextures(), settings.customTextures(), on -> settings.setDumpTextures(on));
 
+        final boolean thermal = AppSettings.thermalSupported(activity);
+        warn(Tr.t("Still unreliable: can drop to 30 fps or lower the resolution when it is not needed."));
+        toggleRow(Tr.t("Thermal Control"), thermal
+                        ? Tr.t("When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
+                        + "for at least a minute, and lowers the resolution if the GPU is the one working "
+                        + "hard. Back to normal once it cools down.")
+                        : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
+                settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
+
         warn(Tr.t("Can make the picture switch between sharp and soft during battles."));
         toggleRow(Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
                         + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
@@ -382,7 +553,7 @@ final class SettingsMenu {
     }
 
     private static String folderName(String sub) {
-        return (BuildConfig.BETA ? "basara2heroes-beta/" : "basara2heroes/") + sub;
+        return AppFiles.HOME + "/" + sub;
     }
 
     private void confirmClearHdCache() {

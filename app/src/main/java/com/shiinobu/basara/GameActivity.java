@@ -35,7 +35,11 @@ public final class GameActivity extends SDLActivity
             boolean dynamicResolution, int overlayItems, boolean frameGraph, boolean thermalControl,
             int textureFilter);
 
-    /** "GPU name\n1|0": the GPU the game draws with and whether its compatibility fixes are on. */
+    /** Settings > Cheats (runtime/src/cheats.cpp); a new onceSeq sets the money once at the next frame. */
+    static native void nativeApplyCheats(int money, int amount, int onceSeq, boolean infiniteHp,
+            boolean infiniteBasara);
+
+    /** "GPU name\n1|0":the GPU the game draws with and whether its compatibility fixes are on. */
     static native String nativeGraphicsInfo();
 
     /** What this phone is called in LAN room lists (netplay). */
@@ -79,6 +83,8 @@ public final class GameActivity extends SDLActivity
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        CrashReport.installJavaHandler(this);
+        CrashReport.testCrashIfAsked();
         settings = new AppSettings(this);
         bootWidescreen = settings.aspectMode() != AppSettings.ASPECT_4_3;
         try {
@@ -213,10 +219,14 @@ public final class GameActivity extends SDLActivity
         if (nativeReady) {
             nativeSetBackground(false);  // the game carries on where it stopped
             if (menuOpen) setMenuPause(true);  // ...unless its menu is still open
-            // Back from the Start Menu (Continue): what was changed there applies now.
+            // Back from the Start Menu (Continue): what was changed there applies now. The launcher
+            // wrote it from its own process, so read the settings file again first.
+            settings = new AppSettings(this);
             nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
                     settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
                     settings.thermalControl(), settings.textureFilter());
+            nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
+                    settings.cheatInfiniteHp(), settings.cheatInfiniteBasara());
         }
         applyControlSettings();
         menuPoll.removeCallbacks(pollMenu);

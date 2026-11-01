@@ -566,6 +566,13 @@ extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
         cpu->gpr[3] = 0;
         return;
     }
+    // Basara: CRI's ADX server thread suspending itself at the end of a pass (the call in 804073FC's
+    // loop) runs straight into another pass for each retrace it missed (VI_HLE_TakeOwedCriServerPass).
+    constexpr uint32_t kCriServerSuspendReturn = 0x804074A4u;
+    if (cpu->lr == kCriServerSuspendReturn && VI_HLE_TakeOwedCriServerPass()) {
+        cpu->gpr[3] = 0;  // previous suspend count: it was running
+        return;
+    }
 
     const int32_t irqState = OS__DisableInterrupts_801a65ac();
 

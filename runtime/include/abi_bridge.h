@@ -4,6 +4,7 @@
 #include "system_bridge.h"
 #include "game_graphics_options.h"
 #include "runtime_log.h"
+#include "cheats.h"
 
 #include <array>
 #include <atomic>
@@ -33,8 +34,24 @@ inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
         ctx->gpr[4] = RuntimeGameGraphicsOptions::FilterScnRendererPathMask(ctx->gpr[4]);
     }
 #else
-    (void)target;
-    (void)ctx;
+    // Basara cheats (cheats.cpp). The target is a constant at every static call site, so these fold
+    // away everywhere else; indirect calls pay four compares.
+    // The shop's purchase (0x80048B20) stores money - price, then refreshes the shop through 0x80158650.
+    if (target == 0x80158650u) {
+        BasaraCheats_BeforeShopRefresh(ctx);
+    }
+    // cPl::hpSub(this, amount): every HP loss of a player character.
+    if (target == 0x80247BE0u) {
+        BasaraCheats_BeforeHpSub(ctx);
+    }
+    // The damage virtual (vtable slot 0x70) every character class shares, always reached via bctrl.
+    if (target == 0x8012C850u) {
+        BasaraCheats_BeforeDamage(ctx);
+    }
+    // cPl::plGaugeCalc: a character's Basara gauge update, once a frame.
+    if (target == 0x8022D4D8u) {
+        BasaraCheats_BeforeGaugeCalc(ctx);
+    }
 #endif
 }
 

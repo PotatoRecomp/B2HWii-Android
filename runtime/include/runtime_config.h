@@ -60,6 +60,13 @@ struct RuntimeUserConfig {
     std::optional<int32_t> hdTextures;     // [video] hd_textures: 0 off, 1 live upscale (experimental)
     std::optional<uint32_t> hdCacheMb;     // [video] hd_cache_mb: disk budget of the HD texture cache
     std::optional<bool> textureKeyReport;  // [video] texture_key_report: log each texture's replacement name
+    // [cheats] (cheats.cpp): money 0 off, 1 infinite, 2 once; money_amount; money_once_seq (a "once"
+    // request applies when it differs from the last seen); infinite_hp; infinite_basara.
+    std::optional<int32_t> cheatMoneyMode;
+    std::optional<uint32_t> cheatMoneyAmount;
+    std::optional<uint32_t> cheatMoneyOnceSeq;
+    std::optional<bool> cheatInfiniteHp;
+    std::optional<bool> cheatInfiniteBasara;
     std::optional<bool> showFps;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
@@ -619,6 +626,13 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     config.hdCacheMb = FindConfigUint(document, "video", "hd_cache_mb");
     config.textureKeyReport = FindConfigValue<bool>(document, "video", "texture_key_report");
+    if (auto value = FindConfigInt(document, "cheats", "money"); value && *value >= 0 && *value <= 2) {
+        config.cheatMoneyMode = *value;
+    }
+    config.cheatMoneyAmount = FindConfigUint(document, "cheats", "money_amount");
+    config.cheatMoneyOnceSeq = FindConfigUint(document, "cheats", "money_once_seq");
+    config.cheatInfiniteHp = FindConfigValue<bool>(document, "cheats", "infinite_hp");
+    config.cheatInfiniteBasara = FindConfigValue<bool>(document, "cheats", "infinite_basara");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
         value && (*value & ~0x10u) == 0) {
         config.disabledPostProcessingPaths = *value & 0x10u;
@@ -1038,7 +1052,7 @@ inline bool DynamicResolution() {
 
 inline bool ThermalControl() {
     if (const char* env = std::getenv("BASARA_THERMAL"); env && *env) return *env != '0';
-    return Get().thermalControl.value_or(true);
+    return Get().thermalControl.value_or(false);
 }
 
 inline bool GxThread() {
@@ -1220,6 +1234,12 @@ inline bool TextureReplacements(bool fallback = false) {
 inline bool TextureDumps(bool fallback = false) {
     return Get().textureDumps.value_or(fallback);
 }
+
+inline int CheatMoneyMode() { return Get().cheatMoneyMode.value_or(0); }
+inline uint32_t CheatMoneyAmount() { return Get().cheatMoneyAmount.value_or(9'999'999u); }
+inline uint32_t CheatMoneyOnceSeq() { return Get().cheatMoneyOnceSeq.value_or(0u); }
+inline bool CheatInfiniteHp() { return Get().cheatInfiniteHp.value_or(false); }
+inline bool CheatInfiniteBasara() { return Get().cheatInfiniteBasara.value_or(false); }
 
 inline int HdTextures() {
     return Get().hdTextures.value_or(0);

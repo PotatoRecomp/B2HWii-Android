@@ -3,6 +3,7 @@
 
 #include <aurora/aurora.h>
 
+#include "cheats.h"
 #include "display_settings.h"
 #include "host_suspend.h"
 #include "graphics_info.h"
@@ -84,6 +85,14 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyDisplayS
     settings_overlay::SetRenderScale(renderScale >= 0.0f ? renderScale : 1.0f);
     settings_overlay::SetShowFps(showFps == JNI_TRUE);
     DisplaySettings::SetDynamicResolution(dynamicResolution == JNI_TRUE);
+}
+
+// GameActivity.nativeApplyCheats: Settings > Cheats (cheats.h). A Once request applies at the next frame.
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyCheats(
+    JNIEnv*, jclass, jint money, jint amount, jint onceSeq, jboolean infiniteHp, jboolean infiniteBasara)
+{
+    Cheats::SetFromLauncher(static_cast<int32_t>(money), static_cast<uint32_t>(amount < 0 ? 0 : amount),
+                            static_cast<uint32_t>(onceSeq), infiniteHp == JNI_TRUE, infiniteBasara == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetBattery(JNIEnv*, jclass, jint percent,

@@ -37,18 +37,57 @@ final class AppFiles {
         return dir;
     }
 
+    /** The app's folder on the phone's storage, spelled exactly so (homeDir fixes another case). */
+    static final String HOME = BuildConfig.BETA ? "Basara2Heroes-Beta" : "Basara2Heroes";
+
     /**
-     * Where console.log goes: /sdcard/basara2heroes (Beta: basara2heroes-beta), which every file
-     * manager can open, unlike Android/data on many phones. Needs "All files access"; without it,
-     * null (the log stays in dataDir/Logs).
+     * /sdcard/Basara2Heroes (Beta: Basara2Heroes-Beta): everything of the game a player handles, which
+     * every file manager can open, unlike Android/data on many phones. console.log and crash reports at
+     * its top, ISO/ for the game file, Saves/ for save backups, textures/ and hd-cache/. Needs "All files
+     * access"; without it, null (the log stays in dataDir/Logs).
      */
-    static File logDir() {
+    static File homeDir() {
         if (!android.os.Environment.isExternalStorageManager()) return null;
-        final File dir = new File(android.os.Environment.getExternalStorageDirectory(),
-                BuildConfig.BETA ? "basara2heroes-beta" : "basara2heroes");
+        final File storage = android.os.Environment.getExternalStorageDirectory();
+        final File dir = new File(storage, HOME);
+        fixCase(storage, dir);
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
         return dir.isDirectory() && dir.canWrite() ? dir : null;
+    }
+
+    /**
+     * Shared storage ignores case, so an older "basara2heroes" would be used as is and keep its spelling:
+     * rename it (through a temporary name, a case-only rename does nothing) to HOME.
+     */
+    private static void fixCase(File storage, File dir) {
+        final String[] names = storage.list();
+        if (names == null) return;
+        for (String name : names) {
+            if (!name.equalsIgnoreCase(HOME) || name.equals(HOME)) continue;
+            final File old = new File(storage, name);
+            final File temp = new File(storage, HOME + ".renaming");
+            if (old.renameTo(temp) && !temp.renameTo(dir)) {
+                //noinspection ResultOfMethodCallIgnored
+                temp.renameTo(old);
+            }
+            return;
+        }
+    }
+
+    /** Where console.log goes: homeDir. */
+    static File logDir() {
+        return homeDir();
+    }
+
+    /** A folder under homeDir (made when missing), or null without "All files access". */
+    static File homeSub(String name) {
+        final File home = homeDir();
+        if (home == null) return null;
+        final File dir = new File(home, name);
+        //noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        return dir.isDirectory() ? dir : null;
     }
 
     /** Custom textures: <logDir>/textures (dumps in its dump/ folder), or null without "All files access". */
@@ -191,6 +230,12 @@ final class AppFiles {
                 + "muted = false\n"
                 + "attenuate_music_when_media_plays = false\n"
                 + "mix_worker = true\n")
+                + "\n[cheats]\n"
+                + "money = " + settings.cheatMoney() + "\n"
+                + "money_amount = " + settings.cheatMoneyAmount() + "\n"
+                + "money_once_seq = " + settings.cheatMoneySeq() + "\n"
+                + "infinite_hp = " + settings.cheatInfiniteHp() + "\n"
+                + "infinite_basara = " + settings.cheatInfiniteBasara() + "\n"
                 + "\n[network]\nenabled = false\n"
                 + "\n[discord]\nenabled = false\n"
                 + "\n[paths]\n"
@@ -200,7 +245,7 @@ final class AppFiles {
 
     /** Tables of the old Config.toml the app doesn't write (the game's own: keyboard keybinds...). */
     private static final java.util.Set<String> APP_TABLES =
-            new java.util.HashSet<>(java.util.Arrays.asList("video", "network", "discord", "paths"));
+            new java.util.HashSet<>(java.util.Arrays.asList("video", "cheats", "network", "discord", "paths"));
 
     /** Whether the old Config.toml has [name]: the game's Audio settings live in [audio], so an
      *  existing one is kept (keptSections) rather than reset to the defaults. */

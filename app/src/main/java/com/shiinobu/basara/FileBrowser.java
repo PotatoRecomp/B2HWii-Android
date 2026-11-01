@@ -34,14 +34,23 @@ final class FileBrowser {
 
     private final Activity activity;
     private final Listener listener;
+    /** Files listed and chosen (null in folder mode: only folders are listed). */
+    private final java.util.function.Predicate<File> accept;
+    private final boolean folderMode;
+    private final String emptyText;
+    private File current;
     private final List<File> roots = new ArrayList<>();
     private final LinearLayout list;
     private final TextView path;
     private final Sheet sheet;
 
-    private FileBrowser(Activity activity, File start, Listener listener) {
+    private FileBrowser(Activity activity, File start, String title, String about,
+                        java.util.function.Predicate<File> accept, String emptyText, Listener listener) {
         this.activity = activity;
         this.listener = listener;
+        this.accept = accept;
+        this.folderMode = accept == null;
+        this.emptyText = emptyText;
         final StorageManager storage = (StorageManager) activity.getSystemService(Context.STORAGE_SERVICE);
         for (StorageVolume volume : storage.getStorageVolumes()) {
             final File dir = volume.getDirectory();
@@ -64,16 +73,33 @@ final class FileBrowser {
         listParams.topMargin = dp(4);
         column.addView(list, listParams);
 
-        sheet = new Sheet(activity, Tr.t("Choose your game file"), Tr.t("An ISO or RVZ of your own disc (RBSJ08)."))
-                .view(column)
-                .action(Tr.t("Cancel"), null, false, false, null);
+        sheet = new Sheet(activity, title, about).view(column);
+        if (folderMode) {
+            // The folder on screen; on the storage list, Download.
+            sheet.action(Tr.t("Save Here"), null, true, false,
+                    () -> listener.onChosen(current != null ? current : downloads()));
+        }
+        sheet.action(Tr.t("Cancel"), null, false, false, null);
         open(start != null && start.isDirectory() ? start : null);
         sheet.show();
     }
 
     /** Opens on `start` (a folder), or the storage list when it is null. */
     static void show(Activity activity, File start, Listener listener) {
-        new FileBrowser(activity, start, listener);
+        new FileBrowser(activity, start, Tr.t("Choose your game file"), Tr.t("An ISO or RVZ of your own disc (RBSJ08). "
+                        + "Tip: keep it in ") + AppFiles.HOME + Tr.t("/ISO, this list opens there next time."),
+                FileBrowser::isGameFile, Tr.t("No folders or ISO / RVZ files here."), listener);
+    }
+
+    /** Choose a file that `accept` lists (marked green, like game files). */
+    static void showFiles(Activity activity, File start, String title, String about,
+                          java.util.function.Predicate<File> accept, String emptyText, Listener listener) {
+        new FileBrowser(activity, start, title, about, accept, emptyText, listener);
+    }
+
+    /** Choose a folder: browse into it, then Save Here. */
+    static void showFolder(Activity activity, File start, String title, String about, Listener listener) {
+        new FileBrowser(activity, start, title, about, null, Tr.t("No folders here."), listener);
     }
 
     static File downloads() {
@@ -82,6 +108,7 @@ final class FileBrowser {
 
     private void open(File dir) {
         list.removeAllViews();
+        current = dir;
         if (sheet != null) sheet.scrollToTop();
         if (dir == null) {
             path.setText(Tr.t("Storage"));
@@ -98,7 +125,7 @@ final class FileBrowser {
                 for (File child : children) {
                     if (child.getName().startsWith(".")) continue;
                     if (child.isDirectory()) folders.add(child);
-                    else if (isGameFile(child)) games.add(child);
+                    else if (!folderMode && accept.test(child)) games.add(child);
                 }
             }
             // Game files first: they are what the player came for.
@@ -112,7 +139,7 @@ final class FileBrowser {
                 row("▸", folder.getName(), null, FOLDER, () -> open(folder));
             }
             if (folders.isEmpty() && games.isEmpty()) {
-                final TextView empty = text(Tr.t("No folders or ISO / RVZ files here."), 14, LauncherActivity.MUTED);
+                final TextView empty = text(emptyText, 14, LauncherActivity.MUTED);
                 empty.setPadding(dp(14), dp(16), dp(14), dp(8));
                 list.addView(empty);
             }
@@ -197,6 +224,7 @@ final class FileBrowser {
 
     private static String size(long bytes) {
         if (bytes >= 1L << 30) return String.format(Locale.ROOT, Tr.t("%.2f GB"), bytes / (double) (1L << 30));
+        if (bytes < 1L << 20) return String.format(Locale.ROOT, "%d KB", Math.max(1, (bytes + 1023) >> 10));
         return String.format(Locale.ROOT, Tr.t("%.0f MB"), bytes / (double) (1L << 20));
     }
 

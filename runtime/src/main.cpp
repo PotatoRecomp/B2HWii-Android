@@ -221,7 +221,7 @@ struct ProcessTranscriptState {
     std::thread stderrThread;
 };
 
-// Android: the app sets BASARA_LOG_DIR to /sdcard/basara2heroes(-beta) when it may write there.
+// Android: the app sets BASARA_LOG_DIR to /sdcard/Basara2Heroes(-Beta) when it may write there.
 const char* SharedLogDirectory() {
 #if defined(__ANDROID__)
     const char* dir = std::getenv("BASARA_LOG_DIR");
@@ -1648,7 +1648,7 @@ int RuntimeMain(int argc, char** argv) {
                                                 auroraConfig.reportTextureKeys;
         auroraConfig.allowTextureDumps = RuntimeConfigFile::TextureReplacements(false) &&
                                          RuntimeConfigFile::TextureDumps(false);
-        // Android: /sdcard/basara2heroes[-beta]/textures (GameActivity), so a file manager can fill it.
+        // Android: /sdcard/Basara2Heroes[-Beta]/textures (GameActivity), so a file manager can fill it.
         if (const char* textureDir = std::getenv("BASARA_TEXTURE_DIR"); textureDir && *textureDir) {
             auroraConfig.textureRoot = textureDir;
         }

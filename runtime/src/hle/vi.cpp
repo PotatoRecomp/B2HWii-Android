@@ -857,6 +857,10 @@ void VI_HLE_SetCatchUpRetrace(int64_t earliestNanos) {
     g_catchUpRetraceNanos.store(earliestNanos, std::memory_order_release);
 }
 
+int64_t VI_HLE_BeginLoadRetraces() {
+    return g_catchUpRetraceNanos.exchange(kStartupRetraces, std::memory_order_acq_rel);
+}
+
 // From the middle of guest work (a GX call): an elastic retrace may still wait for the idle loop.
 void VI_HLE_PollRetraceBusy(CpuContext* ctx) {
     AdvanceDueRetraces(ctx, 8, true, false);
@@ -1802,3 +1806,40 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
     ViSetR3(cpu, 0);
 }
 PPC_NATIVE_OVERRIDE_VOID(8036E77C, VIWaitForRetrace_HLE_801b99ec, (CpuContext* ctx), (ctx));
+
+// CRI's V-sync thread (804072FC) wakes on every retrace and resumes the ADX server thread (804073FC),
+// which decodes a bounded amount per pass, sized for 60 passes a second, then suspends itself. On
+// hardware the V-sync thread preempts the game; here thread switches wait for the running thread's
+// next reschedule, so a game frame spanning two or three retraces collapses them into one wakeup
+// and one pass. Dialogue then decodes slower than it plays and the AX voice laps CRI's 85 ms PCM
+// ring, replaying the previous lap (the jittering voices on phones). Called as the server suspends
+// itself: true when retraces since its last pass are still owed, so it runs another pass at once.
+bool VI_HLE_TakeOwedCriServerPass() {
+    // A load can hold the game for seconds; past this many the backlog is dropped, not decoded.
+    constexpr int32_t kMaxOwedPasses = 6;
+    static bool s_started = false;
+    static uint32_t s_passes = 0;  // retraces the server has had a pass for
+    if (DetClock::Enabled()) {
+        return false;  // deterministic mode keeps the guest's own scheduling
+    }
+    uint32_t retraces = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_viMutex);
+        retraces = g_vi.retraceCount;
+    }
+    if (!s_started) {
+        s_started = true;
+        s_passes = retraces;
+        return false;
+    }
+    ++s_passes;
+    const int32_t owed = static_cast<int32_t>(retraces - s_passes);
+    if (owed <= 0) {
+        s_passes = retraces;  // extra resumes (CRI's own requests) leave no credit behind
+        return false;
+    }
+    if (owed > kMaxOwedPasses) {
+        s_passes = retraces - kMaxOwedPasses;
+    }
+    return true;
+}

@@ -35,6 +35,7 @@ final class DeviceProfile {
     static void applyOnce(Context context, AppSettings settings) {
         if (!settings.needsDeviceProfile()) {
             settings.resetGxThreadOnce();
+            settings.resetThermalOnce();
             return;
         }
         final String gpu = gpuName();

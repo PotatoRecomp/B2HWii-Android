@@ -244,7 +244,7 @@ public final class LauncherActivity extends Activity {
     }
 
     /** Ends a game still running in the background, so the next start is a fresh one. */
-    private void endGame() {
+    void endGame() {
         final int pid = gameProcess();
         if (pid != 0) {
             android.os.Process.killProcess(pid);
@@ -292,6 +292,11 @@ public final class LauncherActivity extends Activity {
         super.onResume();
         refresh();
         showBetaEnded();
+        // The game died (maybe before its own log opened): say why and where the report is.
+        final String crash = CrashReport.checkLastGameExit(this);
+        if (crash != null) {
+            Toast.makeText(this, "The game closed unexpectedly: " + crash, Toast.LENGTH_LONG).show();
+        }
         // Back from "Allow from this source": carry on with the update that was waiting for it.
         if (waitingUpdate != null && Updater.canInstall(this)) {
             final Updater.Release release = waitingUpdate;
@@ -315,13 +320,13 @@ public final class LauncherActivity extends Activity {
     }
 
     /**
-     * The log always goes to /sdcard/basara2heroes[-beta] (AppFiles.logDir), which needs "All files
+     * The log always goes to /sdcard/Basara2Heroes[-Beta] (AppFiles.logDir), which needs "All files
      * access": without it the game does not start, and this asks for it first.
      */
     private boolean requirePlayAccess() {
         if (Environment.isExternalStorageManager()) return true;
         new Sheet(this, Tr.t("Allow file access first"), Tr.t("The game writes its log to the ")
-                + (BuildConfig.BETA ? "basara2heroes-beta" : "basara2heroes")
+                + AppFiles.HOME
                 + Tr.t(" folder on your phone's storage, so problems can be reported."))
                 .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
                 .step("2", Tr.t("Come back"), Tr.t("The game starts by itself."))
@@ -396,6 +401,10 @@ public final class LauncherActivity extends Activity {
 
     /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
     private void checkForUpdates(boolean automatic) {
+        if (BuildConfig.BETA) {
+            checkBeta(automatic);  // the lock is checked even while updates are sent by hand
+            return;
+        }
         if (!BuildConfig.ONLINE_UPDATES) {
             if (!automatic) {
                 message(Tr.t("Updates are sent by hand for now"),
@@ -512,7 +521,7 @@ public final class LauncherActivity extends Activity {
             Updater.Release found = null;
             try {
                 ended = BetaGate.check();
-                if (ended == null) found = Updater.latestBeta();
+                if (ended == null && BuildConfig.ONLINE_UPDATES) found = Updater.latestBeta();
             } catch (Exception e) {
                 failure = e.getMessage();
             }
@@ -532,6 +541,10 @@ public final class LauncherActivity extends Activity {
                 } else if (!automatic) {
                     if (error != null) {
                         message(Tr.t("Couldn't check for updates"), error);
+                    } else if (!BuildConfig.ONLINE_UPDATES) {
+                        message(Tr.t("Updates are sent by hand for now"),
+                                Tr.t("New versions come straight from the developer. Install the new APK over this one; "
+                                        + "your settings and saves stay."));
                     } else {
                         new Sheet(this, Tr.t("You're up to date"), "Basara " + Updater.displayVersion(this)
                                 + Tr.t(" is the latest Beta. Thanks for testing!"))
@@ -602,9 +615,17 @@ public final class LauncherActivity extends Activity {
                 + Tr.t("  ·  V-Sync ") + (settings.vsync() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Textures ")
                 + detail[settings.textureFilter()], MUTED);
         settingLine(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Overlay ")
-                + (settings.showFps() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Thermal ") + (settings.thermalControl() ? Tr.t("On") : Tr.t("Off")),
+                + (settings.showFps() ? Tr.t("On") : Tr.t("Off")),
                 MUTED);
+        if (settings.anyCheat()) {
+            final java.util.List<String> cheats = new java.util.ArrayList<>();
+            if (settings.cheatMoney() == AppSettings.MONEY_INFINITE) cheats.add(Tr.t("Infinite Money"));
+            if (settings.cheatInfiniteHp()) cheats.add(Tr.t("Infinite HP"));
+            if (settings.cheatInfiniteBasara()) cheats.add(Tr.t("Infinite Basara"));
+            settingLine(Tr.t("⚠  Cheats: ") + String.join(", ", cheats), Sheet.WARNING_TEXT);
+        }
         final java.util.List<String> experimental = new java.util.ArrayList<>();
+        if (settings.thermalControl()) experimental.add(Tr.t("Thermal Control"));
         if (settings.hdTextures() != 0) experimental.add(Tr.t("HD Textures"));
         if (settings.gxThread()) experimental.add(Tr.t("GX Thread"));
         if (settings.dynamicResolution()) experimental.add(Tr.t("Dynamic Resolution"));
@@ -706,7 +727,11 @@ public final class LauncherActivity extends Activity {
     }
 
     private void browseDisc() {
-        FileBrowser.show(this, FileBrowser.downloads(), file -> loadGame(Uri.fromFile(file)));
+        // Basara2Heroes/ISO when the game file is kept there, else Download (where a downloaded one lands).
+        final java.io.File iso = AppFiles.homeSub("ISO");
+        final java.io.File[] games = iso == null ? null : iso.listFiles(f -> f.isFile() && FileBrowser.isGameFile(f));
+        FileBrowser.show(this, games != null && games.length > 0 ? iso : FileBrowser.downloads(),
+                file -> loadGame(Uri.fromFile(file)));
     }
 
     /**
@@ -726,6 +751,7 @@ public final class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (SaveData.onResult(this, requestCode, resultCode, data, this::endGame)) return;
         if (requestCode == REQUEST_DISC && resultCode == RESULT_OK && data != null && data.getData() != null) {
             loadGame(data.getData());
         }

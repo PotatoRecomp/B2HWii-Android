@@ -665,19 +665,20 @@ int64_t ConsumeAudioPollDeltaMicros()
     static thread_local Clock::time_point lastPoll = Clock::now();
 
     const Clock::time_point now = Clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastPoll).count();
-    lastPoll = now;
-
-    if (elapsed < 0) {
-        elapsed = 0;
-    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastPoll);
+    // Advance by what is returned, not to `now`: the idle loop polls hundreds of times a second,
+    // and dropping each poll's sub-microsecond remainder starved the output by ~0.4 ms a second.
+    lastPoll += elapsed;
 
     // Cap the catch-up interval after a debugger pause or host stall; backlog drains via
     // kMaxBlocksPerTick per pass. Never return early on a zero delta: two scheduler passes
     // can land in the same microsecond and the backlog still needs servicing.
     constexpr int64_t kMaxPollDeltaMicros = 100'000;
+    if (elapsed.count() > kMaxPollDeltaMicros) {
+        lastPoll = now;
+    }
     // microseconds::rep is long long; int64_t is long on LP64 Linux/Android.
-    return std::min<int64_t>(elapsed, kMaxPollDeltaMicros);
+    return std::clamp<int64_t>(elapsed.count(), 0, kMaxPollDeltaMicros);
 }
 
 } // namespace

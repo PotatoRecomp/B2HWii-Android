@@ -267,3 +267,100 @@ New Beta numbering: 0.0.1 Beta 1. New Betas are sent by hand for now.	Penomoran 
 Coming from the old Beta (0.9.0)? Uninstall it once first; later Betas install over each other.	Dari Beta lama (0.9.0)? Uninstall dulu sekali; Beta berikutnya terpasang menimpa yang lama.
 Updates are sent by hand for now	Update sementara dikirim manual
 New versions come straight from the developer. Install the new APK over this one; your settings and saves stay.	Versi baru dikirim langsung oleh pengembang. Pasang APK baru di atas yang ini; setelan dan save tetap aman.
+Crash reports and Beta switch	Laporan crash dan saklar Beta
+Crash reports: when the game closes unexpectedly, the next start saves last_crash.txt in the log folder. Send it with your report.	Laporan crash: bila game tertutup tiba-tiba, saat dibuka lagi last_crash.txt disimpan di folder log. Kirim bersama laporanmu.
+The developer can now switch the Beta off or ask for a newer one from afar. Offline, it keeps playing.	Pengembang kini bisa mematikan Beta atau meminta versi yang lebih baru dari jauh. Saat offline, game tetap bisa dimainkan.
+Added	Baru
+Fixed	Diperbaiki
+Known issues	Masalah yang diketahui
+ · this version	 · versi ini
+Older phones	HP lama
+The game closed right after Play on phones with older CPUs (Snapdragon 662, 665, 460, Helio G80, G85 and similar).	Game tertutup sesaat setelah Main di HP dengan CPU lama (Snapdragon 662, 665, 460, Helio G80, G85 dan sejenisnya).
+Save Data	Data Save
+Cheats	Cheat
+Back up and import	Backup dan impor
+Money, HP, Basara gauge	Uang, HP, gauge Basara
+Back Up Save	Backup Save
+Saves your save file as a .zip wherever you choose (Download, Drive...). Last saved 	Menyimpan file save sebagai .zip di tempat pilihanmu (Download, Drive...). Terakhir disimpan 
+There is no save yet: save in the game first (各種設定 > セーブ).	Belum ada save: simpan dulu di game (各種設定 > セーブ).
+Back Up	Backup
+Import Save	Impor Save
+Replaces this phone's save with a backup (.zip made by Back Up). The current save is kept first in 	Mengganti save di HP ini dengan backup (.zip dari Backup). Save sekarang disimpan dulu di 
+. A running game is closed.	. Game yang sedang jalan ditutup.
+Import	Impor
+Import a save?	Impor save?
+The save on this phone is replaced by the one you pick. It is backed up first, and a running game is closed without saving.	Save di HP ini diganti dengan yang kamu pilih. Save lama dibackup dulu, dan game yang sedang jalan ditutup tanpa menyimpan.
+Choose Backup	Pilih Backup
+Save backed up	Save sudah dibackup
+Save imported	Save sudah diimpor
+Backup failed	Backup gagal
+Import failed	Impor gagal
+Keep the .zip somewhere safe. Import it here to bring the save back.	Simpan .zip itu di tempat aman. Impor di sini untuk mengembalikan save.
+Start the game to play from the imported save. The save it replaced is in SaveBackups.	Mulai game untuk main dari save yang diimpor. Save yang diganti ada di SaveBackups.
+There is no save yet.	Belum ada save.
+No basara2w.dat in this file: pick a backup made here.	Tidak ada basara2w.dat di file ini: pilih backup yang dibuat di sini.
+This is not a Sengoku Basara 2 Heroes save.	Ini bukan save Sengoku Basara 2 Heroes.
+This save is %d bytes, the game's is %d: not a save of this game.	Save ini %d byte, save game %d: bukan save game ini.
+This file is too large to be a save.	File ini terlalu besar untuk sebuah save.
+They change your save: money and anything bought with it stay after the game saves. Back up your save first (Save Data). Cheats can break the game's balance or progress, and they are off in LAN play. Changes apply when you go back to the game.	Cheat mengubah save: uang dan barang yang dibeli tetap ada setelah game menyimpan. Backup save dulu (Data Save). Cheat bisa merusak keseimbangan atau progres game, dan mati saat main LAN. Perubahan berlaku saat kembali ke game.
+Money	Uang
+Infinite keeps the money at the amount below, whatever you buy. Once sets it to that amount one time (Set Now), then it goes down as you spend it.	Tak Terbatas menahan uang di jumlah di bawah, apa pun yang dibeli. Sekali mengatur uang ke jumlah itu satu kali (Atur Sekarang), lalu berkurang saat dipakai.
+Infinite	Tak Terbatas
+Once	Sekali
+Money Amount	Jumlah Uang
+ (up to 9,999,999, the game's limit).	 (maks 9.999.999, batas game).
+Set Money Now	Atur Uang Sekarang
+Load your save in the game first, then tap Set Now and go back to the game: the money becomes 	Muat save di game dulu, lalu ketuk Atur Sekarang dan kembali ke game: uang menjadi 
+Set Now	Atur Sekarang
+Money is set when you go back to the game.	Uang diatur saat kamu kembali ke game.
+Infinite HP	HP Tak Terbatas
+Your characters lose no HP. Enemies and allied officers still do.	HP karaktermu tidak berkurang. Musuh dan officer sekutu tetap bisa.
+Infinite Basara	Basara Tak Terbatas
+Your characters' Basara gauge stays full, refilled as soon as a Basara attack ends.	Gauge Basara karaktermu selalu penuh, diisi lagi begitu serangan Basara selesai.
+0 to 9,999,999.	0 sampai 9.999.999.
+Save	Simpan
+Infinite Money	Uang Tak Terbatas
+⚠  Cheats: 	⚠  Cheat: 
+Still unreliable: can drop to 30 fps or lower the resolution when it is not needed.	Belum andal: bisa turun ke 30 fps atau menurunkan resolusi saat tidak perlu.
+Clean voices, cheats and save backups	Suara bersih, cheat, dan backup save
+Settings > Save Data: back up your save to a .zip and import it again.	Pengaturan > Data Save: backup save ke .zip dan impor lagi.
+Settings > Cheats: money (infinite, or set once to any amount), infinite HP and infinite Basara gauge.	Pengaturan > Cheat: uang (tak terbatas, atau atur sekali ke jumlah berapa pun), HP tak terbatas, dan gauge Basara tak terbatas.
+Dialogue and cutscene voices no longer stutter or repeat when the game runs below 60 fps (Low resolution, 30 FPS Lock, busy battles).	Suara dialog dan cutscene tidak lagi patah-patah atau mengulang saat game di bawah 60 fps (resolusi rendah, Kunci 30 FPS, pertempuran ramai).
+Thermal Control is now off by default and moved to Experimental: it switched to 30 fps when it was not needed.	Kontrol Termal kini mati secara bawaan dan pindah ke Eksperimen: dulu turun ke 30 fps saat tidak perlu.
+How it works	Cara pakai
+Back up: tap Back Up, open a folder (Download is fine) and tap Save Here. A file named basara2heroes-save-DATE.zip appears there. Copy it to a PC or Drive to keep it safe.	Backup: ketuk Backup, buka folder (Download juga boleh), lalu ketuk Simpan di Sini. File bernama basara2heroes-save-TANGGAL.zip muncul di sana. Salin ke PC atau Drive agar aman.
+Import (move a save to this phone): 1. Copy the .zip made by Back Up into Download on this phone. 2. Tap Import and tap that .zip. 3. Start the game: it plays from the imported save.	Impor (pindah save ke HP ini): 1. Salin .zip hasil Backup ke folder Download di HP ini. 2. Ketuk Impor lalu ketuk .zip itu. 3. Mulai game: game memakai save yang diimpor.
+The save on this phone is kept before every import: Undo Last Import puts it back. Only .zip files from Back Up (or a basara2w.dat) work; Dolphin's data.bin does not.	Save di HP ini disimpan dulu sebelum tiap impor: Batalkan Impor Terakhir mengembalikannya. Hanya .zip hasil Backup (atau basara2w.dat) yang bisa; data.bin dari Dolphin tidak bisa.
+Last saved 	Terakhir disimpan 
+Replaces this phone's save with a .zip made by Back Up. A running game is closed without saving.	Mengganti save di HP ini dengan .zip hasil Backup. Game yang sedang jalan ditutup tanpa menyimpan.
+Undo Last Import	Batalkan Impor Terakhir
+Nothing to undo: no save has been imported on this phone.	Tidak ada yang dibatalkan: belum ada save yang diimpor di HP ini.
+Puts back the save the last import replaced (from 	Mengembalikan save yang diganti impor terakhir (dari 
+Undo	Batalkan
+Where to save the backup	Simpan backup di mana
+Open a folder, then tap Save Here. Download is fine.	Buka folder, lalu ketuk Simpan di Sini. Download juga boleh.
+Save Here	Simpan di Sini
+No folders here.	Tidak ada folder di sini.
+Choose your save backup	Pilih backup save
+The basara2heroes-save-….zip made by Back Up. The save on this phone is replaced (and kept for Undo Last Import).	File basara2heroes-save-….zip hasil Backup. Save di HP ini diganti (dan disimpan untuk Batalkan Impor Terakhir).
+No folders or .zip files here.	Tidak ada folder atau file .zip di sini.
+Undo the last import?	Batalkan impor terakhir?
+The save from before that import comes back. A running game is closed without saving.	Save dari sebelum impor itu kembali. Game yang sedang jalan ditutup tanpa menyimpan.
+To list the folders on this phone.	Untuk menampilkan folder di HP ini.
+Then tap the button again.	Lalu ketuk tombolnya lagi.
+Saved as 	Disimpan sebagai 
+Start the game to play from the imported save. The save it replaced can be put back with Undo Last Import.	Mulai game untuk main dari save yang diimpor. Save yang diganti bisa dikembalikan dengan Batalkan Impor Terakhir.
+Back up: tap Back Up, then Save Here. The file basara2heroes-save-DATE.zip goes to 	Backup: ketuk Backup, lalu Simpan di Sini. File basara2heroes-save-TANGGAL.zip masuk ke 
+. Copy it to a PC or Drive to keep it safe.	. Salin ke PC atau Drive agar aman.
+Import (move a save to this phone): 1. Copy the .zip made by Back Up into 	Impor (pindah save ke HP ini): 1. Salin .zip hasil Backup ke 
+ (or Download) on this phone. 2. Tap Import and tap that .zip. 3. Start the game: it plays from the imported save.	 (atau Download) di HP ini. 2. Ketuk Impor lalu ketuk .zip itu. 3. Mulai game: game memakai save yang diimpor.
+Before every import the save on this phone is kept in 	Sebelum tiap impor, save di HP ini disimpan di 
+/Auto: Undo Last Import puts it back. Only .zip files from Back Up (or a basara2w.dat) work; Dolphin's data.bin does not.	/Auto: Batalkan Impor Terakhir mengembalikannya. Hanya .zip hasil Backup (atau basara2w.dat) yang bisa; data.bin dari Dolphin tidak bisa.
+Tap Save Here to keep it in 	Ketuk Simpan di Sini untuk menyimpannya di 
+/Saves, or open another folder first.	/Saves, atau buka folder lain dulu.
+An ISO or RVZ of your own disc (RBSJ08). Tip: keep it in 	ISO atau RVZ dari disc milikmu sendiri (RBSJ08). Tips: simpan di 
+/ISO, this list opens there next time.	/ISO, daftar ini akan langsung terbuka di sana.
+Save restored	Save sudah dipulihkan
+The save from before the last import is back. Start the game to play from it.	Save sebelum impor terakhir sudah kembali. Mulai game untuk bermain dari save itu.
+A character's voice right after picking them no longer plays slow and broken, and the character select no longer pauses for a moment on each pick.	Suara karakter tepat setelah dipilih tidak lagi pelan dan patah-patah, dan layar pilih karakter tidak lagi berhenti sejenak di tiap pilihan.
+Settings changed in the Start Menu now apply when you Continue the game.	Setelan yang diubah di Start Menu kini langsung berlaku saat game dilanjutkan (Continue).

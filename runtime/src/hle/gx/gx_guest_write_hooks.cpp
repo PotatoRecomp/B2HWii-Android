@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 
 namespace GxGuestWrite {
 namespace {
@@ -66,6 +67,11 @@ GuestRamAlias ResolveAlias(uint32_t guestBase, size_t size) noexcept {
 } // namespace
 
 void InstallAuroraHooks() {
+    // BASARA_GX_WRITE_HOOKS=0 (bisecting): aurora digests every source on every validation.
+    if (const char* env = std::getenv("BASARA_GX_WRITE_HOOKS"); env != nullptr && env[0] == '0') {
+        RT_LOGF(RT_TAG_GX, "guest write hooks: off\n");
+        return;
+    }
     g_aliases[0] = ResolveAlias(Memory::kMem1CachedBase, Memory::kMem1Size);
     g_aliases[1] = ResolveAlias(Memory::kMem2CachedBase, Memory::kMem2Size);
     if (g_aliases[0].hostBase == nullptr || g_aliases[1].hostBase == nullptr) {

@@ -1,5 +1,6 @@
 #include <atomic>
 #include "gx.hpp"
+#include "../../gx/gx_thread.hpp"
 #include "__gx.h"
 
 #include "../../gfx/tex_copy_conv.hpp"
@@ -323,6 +324,7 @@ GXRenderModeObj GXMpal480IntDf = {
 };
 
 void GXAdjustForOverscan(GXRenderModeObj* rmin, GXRenderModeObj* rmout, u16 hor, u16 ver) {
+  AURORA_GX_SYNC(Query);
   *rmout = *rmin;
   const auto renderSize = aurora::gfx::get_render_target_size();
   rmout->fbWidth = static_cast<u16>(std::min<uint32_t>(renderSize.x, UINT16_MAX));
@@ -330,25 +332,42 @@ void GXAdjustForOverscan(GXRenderModeObj* rmin, GXRenderModeObj* rmout, u16 hor,
   rmout->xfbHeight = static_cast<u16>(std::min<uint32_t>(renderSize.y, UINT16_MAX));
 }
 
+// Producer-side mirror of dispCopySrc.height for GXSetDispCopyYScale's return value (GX thread).
+static int sProducerDispCopySrcHeight = -1;
+
 void GXSetDispCopySrc(u16 left, u16 top, u16 wd, u16 ht) {
-  g_gxState.dispCopySrc = {left, top, wd, ht};
+  sProducerDispCopySrcHeight = ht;
+  if (aurora::gx::thread::offload()) {
+    aurora::gx::thread::post([=] { g_gxState.dispCopySrc = {left, top, wd, ht}; });
+  } else {
+    g_gxState.dispCopySrc = {left, top, wd, ht};
+  }
   GX_WRITE_RAS_REG(0x49000000u | ((static_cast<u32>(top) & 0x3ffu) << 10) | (static_cast<u32>(left) & 0x3ffu));
   GX_WRITE_RAS_REG(0x4a000000u | (((static_cast<u32>(ht) - 1u) * 0x400u) & 0x000ffc00u) |
                    ((static_cast<u32>(wd) - 1u) & 0x3ffu));
 }
 
 void GXSetTexCopySrc(u16 left, u16 top, u16 wd, u16 ht) {
+  AURORA_GX_FORWARD(GXSetTexCopySrc(left, top, wd, ht));
   g_gxState.texCopySrc = {left, top, wd, ht};
   g_gxState.texCopySrcRenderSpace = false;
 }
 
 void GXSetDispCopyDst(u16 wd, u16 ht) {
-  g_gxState.dispCopyDstWidth = wd;
-  g_gxState.dispCopyDstHeight = ht;
+  if (aurora::gx::thread::offload()) {
+    aurora::gx::thread::post([=] {
+      g_gxState.dispCopyDstWidth = wd;
+      g_gxState.dispCopyDstHeight = ht;
+    });
+  } else {
+    g_gxState.dispCopyDstWidth = wd;
+    g_gxState.dispCopyDstHeight = ht;
+  }
   GX_WRITE_RAS_REG(0x4d000000u | ((((static_cast<u32>(wd) & 0x7fffu) << 1) >> 5) & 0x3ffu));
 }
 
 void GXSetTexCopyDst(u16 wd, u16 ht, GXTexFmt fmt, GXBool mipmap) {
+  AURORA_GX_FORWARD(GXSetTexCopyDst(wd, ht, fmt, mipmap));
   g_gxState.texCopyFmt = fmt;
   g_gxState.texCopyDstWidth = wd;
   g_gxState.texCopyDstHeight = ht;
@@ -356,14 +375,27 @@ void GXSetTexCopyDst(u16 wd, u16 ht, GXTexFmt fmt, GXBool mipmap) {
 }
 
 void GXSetDispCopyFrame2Field(u32 mode) {
+  AURORA_GX_FORWARD(GXSetDispCopyFrame2Field(mode));
   g_gxState.dispCopyFrame2Field = mode & 3;
 }
 
 void GXSetCopyClamp(GXFBClamp clamp) {
+  AURORA_GX_FORWARD(GXSetCopyClamp(clamp));
   g_gxState.copyClamp = static_cast<GXFBClamp>(static_cast<u32>(clamp) & 3);
 }
 
 u32 GXSetDispCopyYScale(f32 vscale) {
+  if (aurora::gx::thread::offload()) {
+    if (sProducerDispCopySrcHeight < 0) {
+      aurora::gx::thread::sync(aurora::gx::thread::SyncReason::Settings);
+      sProducerDispCopySrcHeight = g_gxState.dispCopySrc.height;
+    }
+    const u32 iScale = y_scale_to_integer(vscale);
+    aurora::gx::thread::post([=] { g_gxState.dispCopyYScale = vscale; }, "GXSetDispCopyYScale");
+    GX_WRITE_RAS_REG(0x4e000000u | iScale);
+    __gx->bpSent = 0;
+    return get_num_xfb_lines_internal(static_cast<u16>(sProducerDispCopySrcHeight), iScale);
+  }
   const u32 iScale = y_scale_to_integer(vscale);
   g_gxState.dispCopyYScale = vscale;
   GX_WRITE_RAS_REG(0x4e000000u | iScale);
@@ -395,6 +427,55 @@ void GXSetCopyClear(GXColor color, u32 depth) {
 }
 
 void GXSetCopyFilter(GXBool aa, u8 sample_pattern[12][2], GXBool vf, u8 vfilter[7]) {
+  if (aurora::gx::thread::offload()) {
+    // Same as below on producer-side copies of the filter, seeded once from the decoded state.
+    static bool seeded = false;
+    static decltype(g_gxState.copyFilterSamplePattern) samples{};
+    static decltype(g_gxState.copyFilterVFilter) taps{};
+    if (!seeded) {
+      aurora::gx::thread::sync(aurora::gx::thread::SyncReason::Settings);
+      samples = g_gxState.copyFilterSamplePattern;
+      taps = g_gxState.copyFilterVFilter;
+      seeded = true;
+    }
+    if (sample_pattern) {
+      for (size_t i = 0; i < samples.size(); ++i) {
+        samples[i][0] = sample_pattern[i][0];
+        samples[i][1] = sample_pattern[i][1];
+      }
+    }
+    if (vfilter) {
+      for (size_t i = 0; i < taps.size(); ++i) {
+        taps[i] = vfilter[i];
+      }
+    }
+    if (!aa) {
+      for (auto& sample : samples) {
+        sample = {6, 6};
+      }
+    }
+    if (!vf) {
+      taps = {0, 0, 21, 22, 21, 0, 0};
+    }
+    const auto postedSamples = samples;
+    const auto postedTaps = taps;
+    aurora::gx::thread::post(
+        [=] {
+          g_gxState.copyFilterAa = aa;
+          g_gxState.copyFilterVf = vf;
+          g_gxState.copyFilterSamplePattern = postedSamples;
+          g_gxState.copyFilterVFilter = postedTaps;
+        },
+        "GXSetCopyFilter");
+    GX_WRITE_RAS_REG(pack_copy_filter_samples(0x01, samples, 0));
+    GX_WRITE_RAS_REG(pack_copy_filter_samples(0x02, samples, 6));
+    GX_WRITE_RAS_REG(pack_copy_filter_samples(0x03, samples, 12));
+    GX_WRITE_RAS_REG(pack_copy_filter_samples(0x04, samples, 18));
+    GX_WRITE_RAS_REG(pack_copy_filter0(taps));
+    GX_WRITE_RAS_REG(pack_copy_filter1(taps));
+    __gx->bpSent = 0;
+    return;
+  }
   g_gxState.copyFilterAa = aa;
   g_gxState.copyFilterVf = vf;
   if (sample_pattern) {
@@ -428,12 +509,14 @@ void GXSetCopyFilter(GXBool aa, u8 sample_pattern[12][2], GXBool vf, u8 vfilter[
 }
 
 void GXSetDispCopyGamma(GXGamma gamma) {
+  AURORA_GX_FORWARD(GXSetDispCopyGamma(gamma));
   g_gxState.dispCopyGamma = static_cast<GXGamma>(static_cast<u32>(gamma) & 3u);
   g_gxState.bpRegCache[0x52] = (g_gxState.bpRegCache[0x52] & ~(3u << 7)) |
                                ((static_cast<u32>(g_gxState.dispCopyGamma) & 3u) << 7);
 }
 
 void GXCopyDisp(void* dest, GXBool clear) {
+  AURORA_GX_FORWARD(GXCopyDisp(dest, clear));
   (void)dest;
   // Finish queued commands before this copy reads live EFB state.
   if (aurora::gx::fifo::get_buffer_size() != 0) {
@@ -473,6 +556,7 @@ std::atomic<bool> g_texturePatches{true};
 extern "C" void AuroraSetTexturePatches(bool enabled) { g_texturePatches.store(enabled, std::memory_order_relaxed); }
 
 void GXCopyTex(void* dest, GXBool clear) {
+  AURORA_GX_FORWARD(GXCopyTex(dest, clear));
   g_statCopies.fetch_add(1, std::memory_order_relaxed);
   // Texture copies must see all earlier draws and state changes.
   if (aurora::gx::fifo::get_buffer_size() != 0) {
@@ -615,13 +699,18 @@ void GXCopyTex(void* dest, GXBool clear) {
 }
 
 void GXClearBoundingBox() {
-  g_gxState.boundingBox = {1023, 0, 1023, 0};
+  if (aurora::gx::thread::offload()) {
+    aurora::gx::thread::post([] { g_gxState.boundingBox = {1023, 0, 1023, 0}; });
+  } else {
+    g_gxState.boundingBox = {1023, 0, 1023, 0};
+  }
   GX_WRITE_RAS_REG(0x550003FFu);
   GX_WRITE_RAS_REG(0x560003FFu);
   __gx->bpSent = 0;
 }
 
 void GXReadBoundingBox(u16* left, u16* right, u16* top, u16* bottom) {
+  AURORA_GX_SYNC(Query);
   if (left) {
     *left = g_gxState.boundingBox[0];
   }

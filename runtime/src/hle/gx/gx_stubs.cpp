@@ -52,11 +52,19 @@ PPC_NATIVE_OVERRIDE_VOID(803817ec, GX__DrawDone_8016eab0, (), ());
 // (vi.cpp), and the token reads back as the last one set.
 static constexpr uint32_t kGxBreakPtPtrAddr = 0x80662db8u;       // BreakPointPtr (Basara)
 static constexpr uint32_t kGxBreakPtCallbackAddr = 0x80662dbcu;  // BreakPointCB (Basara)
+// With the GX thread on, the GP lags the CPU: the breakpoint counts as reached, and the token as
+// written, only once the GX thread has run everything submitted before them. Reporting them early
+// lets the game reuse vertex/matrix/texture buffers the GX thread has yet to read (flicker).
+extern "C" uint64_t AuroraGxThreadMark();
+extern "C" bool AuroraGxThreadMarkReached(uint64_t ticket);
+extern "C" void AuroraGxThreadPostCall(void (*fn)(uint32_t), uint32_t arg);
 static std::atomic<bool> s_breakPtArmed{false};
+static std::atomic<uint64_t> s_breakPtMark{0};
 static std::atomic<uint32_t> s_drawSyncToken{0};
 
 extern "C" void GX__EnableBreakPt_803804e8(uint32_t ptr) {
     try { Memory::Write32(kGxBreakPtPtrAddr, ptr); } catch (...) {}
+    s_breakPtMark.store(AuroraGxThreadMark());
     s_breakPtArmed.store(true);
 }
 PPC_NATIVE_OVERRIDE_VOID(803804e8, GX__EnableBreakPt_803804e8, (uint32_t ptr), (ptr));
@@ -70,6 +78,8 @@ PPC_NATIVE_OVERRIDE_VOID(80380588, GX__DisableBreakPt_80380588, (), ());
 // Returns the breakpoint callback to run when a breakpoint is armed (and disarms it, as the CP
 // interrupt handler does), else 0.
 extern "C" uint32_t GX_HLE_TakeBreakPtCallback() {
+    if (!s_breakPtArmed.load()) return 0;
+    if (!AuroraGxThreadMarkReached(s_breakPtMark.load())) return 0;  // GP not there yet: a later retrace
     if (!s_breakPtArmed.exchange(false)) return 0;
     uint32_t cb = 0;
     Memory::TryRead32(kGxBreakPtCallbackAddr, cb);
@@ -77,7 +87,7 @@ extern "C" uint32_t GX_HLE_TakeBreakPtCallback() {
 }
 
 extern "C" void GX__SetDrawSync_8038172c(uint32_t token) {
-    s_drawSyncToken.store(token & 0xFFFFu);
+    AuroraGxThreadPostCall([](uint32_t t) { s_drawSyncToken.store(t); }, token & 0xFFFFu);
     GX__SetDrawSync_8016ed08(token);
 }
 PPC_NATIVE_OVERRIDE_VOID(8038172c, GX__SetDrawSync_8038172c, (uint32_t token), (token));

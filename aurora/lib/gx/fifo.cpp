@@ -1,5 +1,6 @@
 #include "fifo.hpp"
 #include "command_processor.hpp"
+#include "gx_thread.hpp"
 #include "../gfx/common.hpp"
 #include "../internal.hpp"
 
@@ -73,27 +74,55 @@ static void note_drain_wait(uint64_t nanos) noexcept {
   TracyPlot("aurora: fifoDrainWaitUs", static_cast<int64_t>(nanos / 1000));
 }
 
-void drain() {
+void process_chunk(const uint8_t* data, uint32_t size) {
   // SEALED, not DONE.
   const auto waited = aurora::wait_for_frame_worker_sealed();
   if (waited.count() > 0) UNLIKELY {
     note_drain_wait(static_cast<uint64_t>(waited.count()));
   }
-  if (detail::sBufferSize == 0) {
-    return;
-  }
   uint32_t consumed = 0;
   bool retried = false;
-  while (consumed < detail::sBufferSize) {
-    const auto count = process(detail::sBufferData + consumed, detail::sBufferSize - consumed, true);
+  while (consumed < size) {
+    const auto count = process(data + consumed, size - consumed, true);
     if (count == 0 && retried)
       throw gfx::StagingCapacityError("FIFO draw does not fit after capacity submission");
     consumed += count;
-    if (consumed == detail::sBufferSize) break;
+    if (consumed == size) break;
     // process returned with its renderer lock released. No recursive drain.
     gfx::split_staging_batch();
     retried = true;
   }
+}
+
+void drain() {
+  if (thread::enabled()) {
+    if (thread::on_gx_thread()) {
+      // The GX thread's bytes arrive as queued chunks, in order; a drain inside a forwarded call
+      // only has to keep its original guarantee that the worker sealed the previous frame.
+      aurora::wait_for_frame_worker_sealed();
+      return;
+    }
+    // Producer: batch the bytes. Calls that need them decoded first are forwarded or sync.
+    constexpr uint32_t kSubmitBytes = 16 * 1024;
+    // BASARA_GX_THREAD=3 (lockstep bisect) hands over every drain.
+    static const bool lockstep = [] {
+      const char* value = std::getenv("BASARA_GX_THREAD");
+      return value != nullptr && value[0] == '3';
+    }();
+    if (detail::sBufferSize >= (lockstep ? 1u : kSubmitBytes)) {
+      thread::submit();
+    }
+    return;
+  }
+  if (detail::sBufferSize == 0) {
+    // Keep the SEALED join of an empty drain.
+    const auto waited = aurora::wait_for_frame_worker_sealed();
+    if (waited.count() > 0) UNLIKELY {
+      note_drain_wait(static_cast<uint64_t>(waited.count()));
+    }
+    return;
+  }
+  process_chunk(detail::sBufferData, detail::sBufferSize);
   detail::sBufferSize = 0;
 }
 

@@ -53,6 +53,9 @@ switch ($Step) {
         $lto = if ($NoLto) { 'OFF' } else { 'ON' }
         & $android -Mode configure -Extra @('-DMKW_PGO=use', "-DMKW_PGO_PROFILE=$p", "-DMKW_THINLTO=$lto")
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        # ninja does not track the .profdata: objects left from an older profile carry another
+        # ProfileSummary and ThinLTO refuses to link them with the new ones.
+        & (Join-Path $root 'third_party\ninja\ninja.exe') -C (Join-Path $root 'generated\android-build') -t clean | Out-Null
         & $android -Mode build
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         & $android -Mode stage

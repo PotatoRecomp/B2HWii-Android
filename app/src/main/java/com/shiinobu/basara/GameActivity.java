@@ -32,7 +32,7 @@ public final class GameActivity extends SDLActivity
 
     /** The Display menu: aspect, render scale (480 lines per 1x), FPS counter (DisplaySettings). */
     static native void nativeApplyDisplaySettings(int aspect, float renderScale, boolean showFps,
-            boolean dynamicResolution, int overlayItems, boolean frameGraph);
+            boolean dynamicResolution, int overlayItems, boolean frameGraph, boolean thermalControl);
 
     /** "GPU name\n1|0": the GPU the game draws with and whether its compatibility fixes are on. */
     static native String nativeGraphicsInfo();
@@ -196,8 +196,9 @@ public final class GameActivity extends SDLActivity
     }
 
     @Override
-    public void onLayoutDone(String layout) {
+    public void onLayoutDone(String layout, boolean fixedStick) {
         settings.setTouchLayout(layout);
+        settings.setFixedStick(fixedStick);
     }
 
     @Override
@@ -208,7 +209,8 @@ public final class GameActivity extends SDLActivity
             if (menuOpen) setMenuPause(true);  // ...unless its menu is still open
             // Back from the Start Menu (Continue): what was changed there applies now.
             nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
-                    settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph());
+                    settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
+                    settings.thermalControl());
         }
         applyControlSettings();
         menuPoll.removeCallbacks(pollMenu);
@@ -392,6 +394,7 @@ public final class GameActivity extends SDLActivity
         touch.setOpacity(settings.touchOpacity());
         touch.setHaptics(settings.haptics());
         touch.setTouchCamera(settings.touchCamera());
+        touch.setFixedStick(settings.fixedStick());
         touch.setLayout(settings.touchLayout());
     }
 

@@ -1,6 +1,7 @@
 #include "gx.hpp"
 #include "__gx.h"
 #include "../../gx/fifo.hpp"
+#include "../../gx/gx_thread.hpp"
 
 #include <algorithm>
 #include <array>
@@ -571,6 +572,7 @@ void GXEnd() {
   }
   if (!aurora::gx::fifo::in_display_list()) {
     aurora::gx::fifo::drain();
+    aurora::gx::thread::sync_after(aurora::gx::thread::kSyncAfterEnd);
   }
 }
 

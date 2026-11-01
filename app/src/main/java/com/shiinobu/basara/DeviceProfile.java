@@ -33,16 +33,23 @@ final class DeviceProfile {
     private DeviceProfile() {}
 
     static void applyOnce(Context context, AppSettings settings) {
-        if (!settings.needsDeviceProfile()) return;
+        if (!settings.needsDeviceProfile()) {
+            settings.resetGxThreadOnce();
+            return;
+        }
         final String gpu = gpuName();
         final int maxMhz = maxCpuMhz();
         final long ramMb = ramMb(context);
         float scale = scaleFor(gpu);
         if (ramMb > 0 && ramMb < 4608) scale = Math.min(scale, 0.75f);
         final boolean frameskip = maxMhz <= 0 || maxMhz < 3000;
-        settings.applyDeviceProfile(scale, frameskip);
+        // The same phones are CPU-bound: the GX thread takes the GX work off the game thread.
+        // GX Thread stays off: it flickers in battles, and syncing it enough to stop that is slower
+        // than running without it (G81, 2026-11-01).
+        final boolean gxThread = false;
+        settings.applyDeviceProfile(scale, frameskip, gxThread);
         Log.i(TAG, "device profile: gpu '" + gpu + "', cpu max " + maxMhz + " MHz, ram " + ramMb
-                + " MB -> resolution " + scale + "x, frameskip " + frameskip);
+                + " MB -> resolution " + scale + "x, frameskip " + frameskip + ", gx thread " + gxThread);
     }
 
     /** Render scale for a GL_RENDERER string; 1x when the GPU is unknown. */

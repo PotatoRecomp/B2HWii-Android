@@ -3,6 +3,7 @@
 
 #include "memory.h"
 #include "runtime_log.h"
+#include "thermal.h"
 
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/vi.h>
@@ -46,6 +47,11 @@ constexpr double kDynDownWaitMs = 2.0;        // ...or the game waits this long 
 constexpr double kDynDownWaitBusyMs = 13.0;  //    while the worker is at least this busy
 constexpr double kDynUpBusyMs = 11.5;         // predicted worker time at the next step up
 constexpr int kDynUpWindows = 3;              // calm windows in a row before stepping up
+// While the phone runs hot (Thermal::Hot, ten seconds ahead), at least this step: the GPU shares the
+// SoC's heat budget with the CPU, so fewer pixels keep the CPU clocks up in a long battle.
+constexpr int kDynHotStep = 2;                // 80%
+// ...but only while the GPU does a real share of the frame: a CPU-bound game gains nothing from it.
+constexpr double kDynHotBusyMs = 8.0;
 std::atomic<bool> g_dynEnabled{false};
 int g_dynStep = 0;
 int g_dynCalm = 0;
@@ -90,7 +96,7 @@ void ApplyRenderer(const Settings& settings) {
         AuroraSetViewportPolicy(AURORA_VIEWPORT_STRETCH);
     }
     const float lines = RenderLines(settings.renderScale, aspect);
-    const float factor = g_dynEnabled.load(std::memory_order_relaxed) ? kDynSteps[g_dynStep] : 1.0f;
+    const float factor = kDynSteps[g_dynStep];  // 0 (100%) unless dynamic resolution or the heat lowered it
     const float dynLines = factor < 1.0f && lines > 0.0f ? std::max(std::min(lines, kDynMinLines), lines * factor)
                                                          : lines;
     VISetFrameBufferLines(dynLines);
@@ -101,13 +107,24 @@ void ApplyRenderer(const Settings& settings) {
 
 // Once a window: steps the dynamic factor from the frame worker's time. Returns true when it changed.
 bool DynamicResolutionTick() {
-    if (!g_dynEnabled.load(std::memory_order_relaxed)) {
-        if (g_dynStep != 0) {
-            g_dynStep = 0;
-            g_dynCalm = 0;
-            return true;
-        }
+    const bool dynamic = g_dynEnabled.load(std::memory_order_relaxed);
+    const bool hot = Thermal::Hot();
+    if (!dynamic && !hot && g_dynStep == 0) {
+        g_dynFrames = 0;
+        g_dynSkipWindow = true;  // the worker totals since now are stale when this wakes up
         return false;
+    }
+    if (!dynamic && !hot) {
+        // Neither the player's dynamic resolution nor the heat: back to full, a step a window.
+        if (++g_dynFrames < kDynWindowFrames) {
+            return false;
+        }
+        g_dynFrames = 0;
+        RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (cool again)\n", kDynSteps[g_dynStep] * 100.0f,
+                kDynSteps[g_dynStep - 1] * 100.0f);
+        g_dynStep -= 1;
+        g_dynCalm = 0;
+        return true;
     }
     if (++g_dynFrames < kDynWindowFrames) {
         return false;
@@ -125,6 +142,7 @@ bool DynamicResolutionTick() {
     }
 
     int step = g_dynStep;
+    const char* reason = "";
     static const bool s_cycleTest = [] {
         const char* v = std::getenv("BASARA_DYNRES");
         return v && *v == '2';
@@ -134,9 +152,17 @@ bool DynamicResolutionTick() {
         static int s_dir = 1;
         if (step + s_dir < 0 || step + s_dir >= kDynStepCount) s_dir = -s_dir;
         step += s_dir;
-    } else if (busyMs > kDynDownBusyMs || (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs)) {
+    } else if (dynamic && (busyMs > kDynDownBusyMs || (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs))) {
         g_dynCalm = 0;
         step = std::min(step + 1, kDynStepCount - 1);
+    } else if (hot && step < kDynHotStep && busyMs >= kDynHotBusyMs) {
+        g_dynCalm = 0;
+        step += 1;
+        reason = ", running hot";
+    } else if (hot && step <= kDynHotStep) {
+        g_dynCalm = 0;  // hold: no step up while hot (CPU-bound: stays where it is, often 100%)
+    } else if (!dynamic) {
+        step -= 1;  // hot only: below the heat's step from an earlier dynamic run, back up to it
     } else if (step > 0) {
         // Render cost follows the pixel count, the square of the line factor.
         const float ratio = kDynSteps[step - 1] / kDynSteps[step];
@@ -150,8 +176,8 @@ bool DynamicResolutionTick() {
     if (step == g_dynStep) {
         return false;
     }
-    RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (worker %.2f ms a cycle, game waited %.2f ms a frame)\n",
-            kDynSteps[g_dynStep] * 100.0f, kDynSteps[step] * 100.0f, busyMs, waitMs);
+    RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (worker %.2f ms a cycle, game waited %.2f ms a frame%s)\n",
+            kDynSteps[g_dynStep] * 100.0f, kDynSteps[step] * 100.0f, busyMs, waitMs, reason);
     g_dynStep = step;
     g_dynSkipWindow = true;
     return true;

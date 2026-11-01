@@ -1,3 +1,4 @@
+#include "gx_thread.hpp"
 #include <cstdlib>
 #include "gx.hpp"
 
@@ -2366,6 +2367,7 @@ void shutdown() noexcept {
 
 // Read from another thread without a lock: sizes only, a torn value just makes one log line wrong.
 extern "C" void aurora_texture_memory_report(char* buffer, size_t size) {
+  AURORA_GX_SYNC(Other);
   using namespace aurora::gx;
   std::snprintf(buffer, size,
                 "live %lld (%lld MB est), texobj %zu, source %zu, content %zu (%zu MB), palette source %zu, "

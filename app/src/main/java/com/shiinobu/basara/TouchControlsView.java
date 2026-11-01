@@ -54,7 +54,8 @@ final class TouchControlsView extends View {
     private static final float MIN_SCALE = 0.5f, MAX_SCALE = 2f;
 
     // Layout editor toolbar, left to right.
-    private static final String[] TOOLS = {"Smaller", "Bigger", "Reset", "Done"};
+    private static final String[] TOOLS = {"Smaller", "Bigger", "Stick", "Reset", "Done"};
+    private static final int TOOL_STICK = 2, TOOL_RESET = 3;
 
     // One warm off-white for everything drawn and one vermilion for what is pressed: the colours
     // of ink and seal on paper, which leaves the game's own picture the loudest thing on screen.
@@ -73,7 +74,7 @@ final class TouchControlsView extends View {
          *  when it is lifted. The game's sliders follow it. */
         void onPointer(float x, float y, boolean held);
         /** The layout editor closed; layout is what setLayout takes ("" for the default). */
-        void onLayoutDone(String layout);
+        void onLayoutDone(String layout, boolean fixedStick);
     }
 
     private static final class Button {
@@ -157,6 +158,13 @@ final class TouchControlsView extends View {
     void setOpacity(float opacity) { this.opacity = opacity; invalidate(); }
 
     void setHaptics(boolean haptics) { this.haptics = haptics; }
+
+    /** Fixed: the left stick only answers on itself; floating: anywhere on the empty left side. */
+    private boolean fixedStick;
+    void setFixedStick(boolean fixed) {
+        fixedStick = fixed;
+        invalidate();
+    }
 
     private boolean touchCamera = true;
     void setTouchCamera(boolean on) {
@@ -458,13 +466,16 @@ final class TouchControlsView extends View {
                 custom.put(key, new float[] {b[0] / getWidth(), b[1] / getHeight(), scale});
             }
             layoutControls(getWidth(), getHeight());
-        } else if (t == 2) {
+        } else if (t == TOOL_STICK) {
+            fixedStick = !fixedStick;
+            invalidate();
+        } else if (t == TOOL_RESET) {
             custom.clear();
             selected = null;
             layoutControls(getWidth(), getHeight());
         } else {
             setEditMode(false);
-            if (listener != null) listener.onLayoutDone(encodeLayout());
+            if (listener != null) listener.onLayoutDone(encodeLayout(), fixedStick);
         }
     }
 
@@ -592,7 +603,7 @@ final class TouchControlsView extends View {
 
     /** The empty left side under the shoulder pills, where a thumb grabs the left stick. */
     private boolean inLeftStickZone(float x, float y) {
-        return showsControls() && leftStick.finger < 0 && x < getWidth() * 0.4f && y > getHeight() * 0.18f;
+        return !fixedStick && showsControls() && leftStick.finger < 0 && x < getWidth() * 0.4f && y > getHeight() * 0.18f;
     }
 
     /** The empty right side, where a drag turns the camera (the right stick when not held). */
@@ -770,12 +781,18 @@ final class TouchControlsView extends View {
             fill.setColor(t == TOOLS.length - 1 ? seal(230) : ink(220));
             canvas.drawRoundRect(r, r.height() / 4, r.height() / 4, fill);
             text.setColor(paper(255));
-            canvas.drawText(TOOLS[t], r.centerX(), r.centerY() - (text.descent() + text.ascent()) / 2, text);
+            final String label = t == TOOL_STICK ? (fixedStick ? "Stick: Fixed" : "Stick: Float") : TOOLS[t];
+            text.setTextSize(0.045f * h);
+            final float fit = 0.9f * r.width() / Math.max(1f, text.measureText(label));
+            if (fit < 1f) text.setTextSize(0.045f * h * fit);
+            canvas.drawText(label, r.centerX(), r.centerY() - (text.descent() + text.ascent()) / 2, text);
         }
         text.setTextSize(0.035f * h);
         text.setColor(paper(255));
         final String hint = selected == null
-            ? "Drag a control to move it. With none selected, Smaller and Bigger resize them all."
+            ? (fixedStick
+                ? "Drag a control to move it. Fixed stick: only a touch on the stick moves it."
+                : "Drag a control to move it. Floating stick: grabs anywhere on the empty left side.")
             : "Drag to move. Smaller and Bigger resize the outlined control.";
         canvas.drawText(hint, getWidth() / 2f, 0.36f * h, text);
     }

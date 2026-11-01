@@ -1,6 +1,7 @@
 #include <absl/container/flat_hash_set.h>
 #include <array>
 #include "command_processor.hpp"
+#include "gx_thread.hpp"
 
 #include "../gfx/common.hpp"
 #include "../dolphin/gx/__gx.h"
@@ -2269,6 +2270,11 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
     g_statDrawsTotal.fetch_add(1, std::memory_order_relaxed);
   }
   if (vertices == nullptr || vtxCount == 0 || vertexBytes == 0) {
+    return false;
+  }
+  // Consumes live decoded state on the calling thread; with the GX thread the caller falls back to
+  // its FIFO packet path.
+  if (thread::offload()) {
     return false;
   }
 

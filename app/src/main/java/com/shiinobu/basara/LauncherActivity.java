@@ -31,6 +31,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.File;
 import java.io.IOException;
@@ -62,6 +63,9 @@ public final class LauncherActivity extends Activity {
     /** Gone to allow "All files access" for the file browser: open it on the way back. */
     private boolean waitingFileAccess;
     private static final String STATE_WAITING_FILE_ACCESS = "waiting_file_access";
+    /** Gone to allow "All files access" before playing (the log goes to /sdcard): play on the way back. */
+    private boolean waitingPlayAccess;
+    private static final String STATE_WAITING_PLAY_ACCESS = "waiting_play_access";
 
     private int endedGame;  // the pid endGame just ended
     private TextView status;
@@ -128,6 +132,7 @@ public final class LauncherActivity extends Activity {
             // Android 11 ends this process when "Allow from this source" changes.
             waitingUpdate = Updater.Release.from(savedInstanceState.getBundle(STATE_WAITING_UPDATE));
             waitingFileAccess = savedInstanceState.getBoolean(STATE_WAITING_FILE_ACCESS, false);
+            waitingPlayAccess = savedInstanceState.getBoolean(STATE_WAITING_PLAY_ACCESS, false);
         }
         if (opened && (settings.autoUpdate() || BuildConfig.BETA)) {
             checkForUpdates(true);
@@ -179,6 +184,7 @@ public final class LauncherActivity extends Activity {
             if (settings.betaEnded() != null) {
                 showBetaEnded();
             } else if (AppFiles.gameReady(this)) {
+                if (!requirePlayAccess()) return;
                 // A game left for the Start Menu is still running: Continue brings it back.
                 startActivity(new Intent(this, GameActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
@@ -225,6 +231,20 @@ public final class LauncherActivity extends Activity {
         }
     }
 
+    /** Ends a running game (if any) and restarts the app into the launcher, so settings read once at start apply. */
+    boolean restartGame() {
+        endGame();
+        status.setText("Restarting...");
+        final Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (launch == null) return false;
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        main.postDelayed(() -> {
+            startActivity(launch);
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }, 500);
+        return true;
+    }
+
     /** Network play: the game asked to be started again into a LAN session. */
     private void restartGameIfAsked(Intent intent) {
         if (intent == null || !intent.getBooleanExtra(EXTRA_RESTART_GAME, false)) {
@@ -242,6 +262,7 @@ public final class LauncherActivity extends Activity {
             outState.putBundle(STATE_WAITING_UPDATE, waitingUpdate.toBundle());
         }
         outState.putBoolean(STATE_WAITING_FILE_ACCESS, waitingFileAccess);
+        outState.putBoolean(STATE_WAITING_PLAY_ACCESS, waitingPlayAccess);
     }
 
     @Override
@@ -262,6 +283,43 @@ public final class LauncherActivity extends Activity {
                 browseDisc();
             }
         }
+        if (waitingPlayAccess) {
+            waitingPlayAccess = false;
+            if (Environment.isExternalStorageManager() && AppFiles.gameReady(this)) {
+                startActivity(new Intent(this, GameActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            }
+        }
+    }
+
+    /**
+     * The log always goes to /sdcard/basara2heroes[-beta] (AppFiles.logDir), which needs "All files
+     * access": without it the game does not start, and this asks for it first.
+     */
+    private boolean requirePlayAccess() {
+        if (Environment.isExternalStorageManager()) return true;
+        new AlertDialog.Builder(this).setTitle("Allow file access first")
+                .setMessage("The game writes its log to the "
+                        + (BuildConfig.BETA ? "basara2heroes-beta" : "basara2heroes")
+                        + " folder on your phone's storage, so problems can be reported. Turn on "
+                        + "\"Allow access to manage all files\" for this app, then come back to play.")
+                .setPositiveButton("Open Settings", (d, w) -> {
+                    waitingPlayAccess = true;
+                    try {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (ActivityNotFoundException e) {
+                        waitingPlayAccess = false;
+                        try {
+                            startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                        } catch (ActivityNotFoundException ignored) {
+                            Toast.makeText(this, "Open Settings > Apps > special access > All files access",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null).show();
+        return false;
     }
 
     @Override

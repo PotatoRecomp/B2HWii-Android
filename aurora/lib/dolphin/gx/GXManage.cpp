@@ -1,4 +1,5 @@
 #include "gx.hpp"
+#include "../../gx/gx_thread.hpp"
 #include "__gx.h"
 
 #include "../../gx/fifo.hpp"
@@ -262,12 +263,14 @@ GXFifoObj* GXInit(void* base, u32 size) {
 }
 
 void GXDrawDone() {
+  AURORA_GX_SYNC(DrawDone);
   aurora::gx::fifo::drain();
   if (DrawDoneCB != nullptr)
     DrawDoneCB();
 }
 
 void GXSetDrawDone() {
+  AURORA_GX_SYNC(DrawDone);
   aurora::gx::fifo::drain();
   if (DrawDoneCB != nullptr)
     DrawDoneCB();

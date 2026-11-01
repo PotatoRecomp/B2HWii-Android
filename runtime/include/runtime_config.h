@@ -36,9 +36,11 @@ struct RuntimeUserConfig {
     std::optional<bool> forceAspect169;
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
-    std::optional<int32_t> frameskip;  // 0 off, 1 auto (skip drawing a frame while the game runs behind)
+    std::optional<int32_t> frameskip;  // 0 off, 1 auto (skip drawing a frame while the game runs behind), 2 30 fps lock
     std::optional<uint32_t> overlayItems;   // [video] overlay_items: what the FPS overlay shows (bit mask)
     std::optional<bool> dynamicResolution;  // lower the render lines while the GPU holds the game back
+    std::optional<bool> gxThread;  // run aurora GX on its own thread (BASARA_GX_THREAD)
+    std::optional<bool> thermalControl;  // lower the render lines while the phone runs hot (thermal.h)
     std::optional<bool> skipBoot;  // run the logos at full speed, undrawn, up to the save check
     std::optional<int32_t> fsr;  // 0 off, 1 light sharpen, 2 full FSR1 (picture drawn larger than rendered)
     std::optional<int32_t> windowPosX;
@@ -550,7 +552,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     if (auto value = FindConfigInt(document, "video", "gpu_compat"); value && *value >= 0 && *value <= 2) {
         config.gpuCompat = *value;
     }
-    if (auto value = FindConfigInt(document, "video", "frameskip"); value && *value >= 0 && *value <= 1) {
+    if (auto value = FindConfigInt(document, "video", "frameskip"); value && *value >= 0 && *value <= 2) {
         config.frameskip = *value;
     }
     if (auto value = FindConfigInt(document, "video", "fsr"); value && *value >= 0 && *value <= 2) {
@@ -593,7 +595,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
     config.skipBoot = FindConfigValue<bool>(document, "video", "skip_boot");
+    config.gxThread = FindConfigValue<bool>(document, "video", "gx_thread");
     config.dynamicResolution = FindConfigValue<bool>(document, "video", "dynamic_resolution");
+    config.thermalControl = FindConfigValue<bool>(document, "video", "thermal_control");
     config.overlayItems = FindConfigUint(document, "video", "overlay_items");
     config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
     config.vsync = FindConfigValue<bool>(document, "video", "vsync");
@@ -1018,6 +1022,16 @@ inline bool DynamicResolution() {
     // 2 = test: cycles every step (display_settings.cpp).
     if (const char* env = std::getenv("BASARA_DYNRES"); env && *env >= '0' && *env <= '2') return *env != '0';
     return Get().dynamicResolution.value_or(false);
+}
+
+inline bool ThermalControl() {
+    if (const char* env = std::getenv("BASARA_THERMAL"); env && *env) return *env != '0';
+    return Get().thermalControl.value_or(true);
+}
+
+inline bool GxThread() {
+    if (const char* env = std::getenv("BASARA_GX_THREAD"); env && *env) return *env != '0';
+    return Get().gxThread.value_or(false);
 }
 
 inline bool SkipBoot() {

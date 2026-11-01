@@ -35,10 +35,18 @@ final class AppSettings {
     boolean needsDeviceProfile() { return !prefs.getBoolean("device_profile_1", false); }
 
     /** The device profile's picks, for the settings the player never set; runs once. */
-    void applyDeviceProfile(float scale, boolean frameskip) {
-        final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true);
+    /** GX Thread was on by default for slower phones and flickers: turn it off once on every install. */
+    void resetGxThreadOnce() {
+        if (prefs.getBoolean("gx_thread_off_1", false)) return;
+        prefs.edit().putBoolean("gx_thread_off_1", true).putBoolean("gx_thread", false).commit();
+    }
+
+    void applyDeviceProfile(float scale, boolean frameskip, boolean gxThread) {
+        final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true)
+                .putBoolean("gx_thread_off_1", true);
         if (!prefs.contains("resolution_scale")) e.putFloat("resolution_scale", scale);
         if (!prefs.contains("frameskip")) e.putBoolean("frameskip", frameskip);
+        if (!prefs.contains("gx_thread")) e.putBoolean("gx_thread", gxThread);
         e.commit();
     }
 
@@ -54,6 +62,9 @@ final class AppSettings {
     /** Frameskip Auto: skip drawing a frame while the game runs behind (off by default). */
     boolean frameskip() { return prefs.getBoolean("frameskip", false); }
     void setFrameskip(boolean on) { prefs.edit().putBoolean("frameskip", on).commit(); }
+    /** 30 FPS Lock: draw every other frame, game logic and audio still at full speed (off by default). */
+    boolean fpsLock30() { return prefs.getBoolean("fps_lock_30", false); }
+    void setFpsLock30(boolean on) { prefs.edit().putBoolean("fps_lock_30", on).commit(); }
     /**
      * FSR1 upscaling when the game renders below the screen's resolution (on by default), in light
      * quality (sharpen the stretched picture) or full (FSR1's edge-aware upscale, heavier on the GPU).
@@ -105,11 +116,37 @@ final class AppSettings {
     void setTouchCamera(boolean on) { prefs.edit().putBoolean("touch_camera", on).commit(); }
 
     /** The touch controls as the player arranged them in the layout editor ("" is the default). */
+    boolean fixedStick() { return prefs.getBoolean("touch_fixed_stick", false); }
+    void setFixedStick(boolean on) { prefs.edit().putBoolean("touch_fixed_stick", on).commit(); }
+
     String touchLayout() { return prefs.getString("touch_layout", ""); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
 
     /** Skip Boot:the logos run at full speed, undrawn, up to the game's save check. */
     /** Lowers the render resolution while the GPU holds the game back (the chosen one is the ceiling). */
+    boolean gxThread() { return prefs.getBoolean("gx_thread", false); }
+    void setGxThread(boolean on) { prefs.edit().putBoolean("gx_thread", on).commit(); }
+    boolean thermalControl() { return prefs.getBoolean("thermal_control", true); }
+    void setThermalControl(boolean on) { prefs.edit().putBoolean("thermal_control", on).commit(); }
+
+    /**
+     * Whether the system reports a thermal headroom (Android 12+, and a thermal HAL that has the
+     * skin sensors it is computed from). Asked once a process: Android answers NaN to calls less
+     * than a second apart.
+     */
+    static boolean thermalSupported(android.content.Context context) {
+        if (thermalSupported == null) {
+            boolean ok = false;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                final android.os.PowerManager pm = context.getSystemService(android.os.PowerManager.class);
+                ok = pm != null && !Float.isNaN(pm.getThermalHeadroom(10));
+            }
+            thermalSupported = ok;
+        }
+        return thermalSupported;
+    }
+    private static Boolean thermalSupported;
+
     boolean dynamicResolution() { return prefs.getBoolean("dynamic_resolution", false); }
     void setDynamicResolution(boolean on) { prefs.edit().putBoolean("dynamic_resolution", on).commit(); }
     boolean skipBoot() { return prefs.getBoolean("skip_boot", true); }

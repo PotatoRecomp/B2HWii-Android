@@ -86,6 +86,7 @@
 #include "runtime_log.h"
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
+#include "thermal.h"
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
 #include <dolphin/gx/GXAurora.h>
@@ -1505,9 +1506,10 @@ int RuntimeMain(int argc, char** argv) {
                                        << ", display " << (std::getenv("BASARA_DISPLAY_HZ") ? std::getenv("BASARA_DISPLAY_HZ") : "?")
                                        << " Hz" << std::endl;
                 RT_LOG(RT_TAG_RUNTIME) << "settings: frameskip " << RuntimeConfigFile::Frameskip() << ", fsr "
-                                       << RuntimeConfigFile::Fsr() << ", skip boot " << RuntimeConfigFile::SkipBoot()
+                                       << RuntimeConfigFile::Fsr() << ", skip boot " << RuntimeConfigFile::SkipBoot() << ", gx thread " << RuntimeConfigFile::GxThread()
                                        << ", resolution " << RuntimeConfigFile::Get().resolutionMultiplier.value_or(-1.0f)
                                        << ", dynamic " << RuntimeConfigFile::DynamicResolution()
+                                       << ", thermal " << RuntimeConfigFile::ThermalControl()
                                        << ", vsync " << RuntimeConfigFile::VSync(true) << ", gpu compat "
                                        << RuntimeConfigFile::GpuCompat() << std::endl;
             }
@@ -1622,6 +1624,7 @@ int RuntimeMain(int argc, char** argv) {
         displaySettings.renderScale = RuntimeConfigFile::ResolutionMultiplier(1.0f);
         DisplaySettings::Initialize(displaySettings);
         DisplaySettings::SetDynamicResolution(RuntimeConfigFile::DynamicResolution());
+        Thermal::SetEnabled(RuntimeConfigFile::ThermalControl());
         const bool configWidescreen = DisplaySettings::GameWidescreen();
         auroraConfig.windowWidth = configWidescreen ? 854 : 640;
         auroraConfig.windowHeight = 480;
@@ -1708,6 +1711,15 @@ int RuntimeMain(int argc, char** argv) {
             }
         }
 #endif
+        // [video] gx_thread: aurora reads BASARA_GX_THREAD once, so set it before the first GX call.
+        // An env value already set (debug.basara.env, shell) wins.
+        if (std::getenv("BASARA_GX_THREAD") == nullptr && RuntimeConfigFile::GxThread()) {
+#if defined(_WIN32)
+            _putenv_s("BASARA_GX_THREAD", "1");
+#else
+            setenv("BASARA_GX_THREAD", "1", 0);
+#endif
+        }
 
 
         const AuroraInfo auroraInfo = aurora_initialize(0, nullptr, &auroraConfig);

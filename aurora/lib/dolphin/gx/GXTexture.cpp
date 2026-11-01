@@ -1,4 +1,5 @@
 #include "gx.hpp"
+#include "../../gx/gx_thread.hpp"
 #include "__gx.h"
 
 #include "../../gfx/texture.hpp"
@@ -9,6 +10,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 #include "tracy/Tracy.hpp"
@@ -174,6 +177,49 @@ void emit_loaded_tlut_metadata(const GXTlutObj_& obj, u32 idx) {
   GX_WRITE_U32(obj.tlutObjId);
   GX_WRITE_U32(obj.tlutDataVersion);
 }
+// BASARA_GX_TLUT_SNAPSHOT=0 turns the GX thread's palette copies off (bisecting).
+bool snapshot_tluts() {
+  static const bool on = [] {
+    const char* env = std::getenv("BASARA_GX_TLUT_SNAPSHOT");
+    return env == nullptr || env[0] != '0';
+  }();
+  return on;
+}
+
+// Interned by content: one stable copy per distinct palette, so the texture caches (keyed on the
+// palette pointer) keep hitting. Copies are never freed; past the cap the guest pointer is used.
+const void* snapshot_tlut(const void* data, u16 entries) {
+  constexpr size_t kMaxBytes = 32u << 20;
+  struct Copy {
+    const u8* bytes;
+    u32 size;
+  };
+  static absl::flat_hash_map<u64, Copy> s_copies;
+  static size_t s_total = 0;
+  const u32 size = static_cast<u32>(entries) * 2u;
+  if (size == 0) return data;
+  const auto* src = static_cast<const u8*>(data);
+  u64 h = 0x9E3779B97F4A7C15ull ^ size;
+  u32 i = 0;
+  for (; i + 8 <= size; i += 8) {
+    u64 w;
+    std::memcpy(&w, src + i, 8);
+    h = (h ^ w) * 0xFF51AFD7ED558CCDull;
+    h ^= h >> 29;
+  }
+  for (; i < size; ++i) h = (h ^ src[i]) * 0x100000001B3ull;
+  if (auto it = s_copies.find(h); it != s_copies.end()) {
+    const Copy& c = it->second;
+    return c.size == size && std::memcmp(c.bytes, src, size) == 0 ? c.bytes : data;
+  }
+  if (s_total + size > kMaxBytes) return data;
+  auto* dst = static_cast<u8*>(std::malloc((size + 31u) & ~31u));
+  if (dst == nullptr) return data;
+  std::memcpy(dst, src, size);
+  s_total += size;
+  s_copies.emplace(h, Copy{dst, size});
+  return dst;
+}
 } // namespace
 
 extern "C" {
@@ -310,6 +356,7 @@ void GXLoadTexObj(GXTexObj* obj_, GXTexMapID id) {
   __gx->bpSent = 1;
 
   emit_loaded_texobj_metadata(*obj, id);
+  aurora::gx::thread::sync_after(aurora::gx::thread::kSyncAfterLoadTexObj);
 }
 
 u32 GXGetTexBufferSize(u16 width, u16 height, u32 fmt, GXBool mips, u8 maxLod) {
@@ -408,7 +455,11 @@ void GXInitTlutObj(GXTlutObj* obj_, const void* data, GXTlutFmt format, u16 entr
 
   SET_REG_FIELD(0, obj->tlut, 2, 10, format);
   SET_REG_FIELD(0, obj->loadTlut0, 8, 24, 0x64);
-  aurora::gfx::texture_replacement::register_tlut(obj_, data, format, entries);
+  if (aurora::g_config.allowTextureReplacements && aurora::gx::thread::offload()) {
+    aurora::gx::thread::post([=] { aurora::gfx::texture_replacement::register_tlut(obj_, data, format, entries); });
+  } else {
+    aurora::gfx::texture_replacement::register_tlut(obj_, data, format, entries);
+  }
 }
 
 void GXInitTlutObjData(GXTlutObj* obj_, const void* data) {
@@ -429,7 +480,20 @@ void GXLoadTlut(const GXTlutObj* obj_, u32 idx) {
   GX_WRITE_RAS_REG(loadTlut1);
   __GXFlushTextureState();
 
-  aurora::gfx::texture_replacement::load_tlut(obj_, idx);
+  if (aurora::g_config.allowTextureReplacements && aurora::gx::thread::offload()) {
+    aurora::gx::thread::post([=] { aurora::gfx::texture_replacement::load_tlut(obj_, idx); });
+  } else {
+    aurora::gfx::texture_replacement::load_tlut(obj_, idx);
+  }
+  if (aurora::gx::thread::offload() && obj->data != nullptr && snapshot_tluts()) {
+    // The GX thread reads the palette at draw time, but games reuse one palette buffer for many
+    // palettes and rewrite it right after the load, which showed as flickering textures. Hand the
+    // GX thread a copy taken now.
+    GXTlutObj_ copy = *obj;
+    copy.data = snapshot_tlut(obj->data, obj->numEntries);
+    emit_loaded_tlut_metadata(copy, idx);
+    return;
+  }
   emit_loaded_tlut_metadata(*obj, idx);
 }
 

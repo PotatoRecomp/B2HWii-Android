@@ -6,6 +6,7 @@
 
 #include "__gx.h"
 #include "gx.hpp"
+#include "../../gx/gx_thread.hpp"
 #include "../../window.hpp"
 #include "../vi/vi_internal.hpp"
 
@@ -40,6 +41,7 @@ void GXInsertDebugMarker(const char* label) {
 }
 
 void AuroraSetViewportPolicy(AuroraViewportPolicy policy) {
+  AURORA_GX_SYNC(Settings);
   const bool changed = g_gxState.viewportPolicy != policy;
   if (changed) {
     // Finish commands using the old framebuffer mapping before changing it.
@@ -57,6 +59,7 @@ void AuroraSetViewportPolicy(AuroraViewportPolicy policy) {
 }
 
 void AuroraGetRenderSize(u32* width, u32* height) {
+  AURORA_GX_SYNC(Query);
   // The guest CPU thread uses this safe render-size value outside render passes.
   const auto renderSize = aurora::gfx::get_frame_buffer_size();
   if (width != nullptr) {
@@ -68,6 +71,7 @@ void AuroraGetRenderSize(u32* width, u32* height) {
 }
 
 void AuroraGetPictureSize(u32* width, u32* height) {
+  AURORA_GX_SYNC(Query);
   const auto renderSize = aurora::gfx::get_frame_buffer_size();
   const auto [baseWidth, baseHeight] = aurora::vi::configured_fb_size();
   const auto [visibleWidth, visibleHeight] = aurora::vi::visible_fb_size();
@@ -122,6 +126,8 @@ void WriteMappedRenderState(const aurora::gx::MappedRenderState& mapped) {
 } // namespace
 
 void GXSetViewportScissorRenderSafeArea(f32 aspect) {
+  // Reads decoded viewport state, then writes FIFO registers: both belong to the producer once idle.
+  AURORA_GX_SYNC(Query);
   const auto [targetWidth, targetHeight] = aurora::gfx::get_render_target_size();
   if (targetWidth == 0 || targetHeight == 0 || !std::isfinite(aspect) || aspect <= 0.0f) {
     return;
@@ -171,22 +177,26 @@ void GXSetViewportScissorRenderSafeArea(f32 aspect) {
 }
 
 void GXRestoreViewportScissorRender() {
+  AURORA_GX_SYNC(Query);
   // Run queued GX draws before leaving the direct layout safe area.
   aurora::gx::fifo::drain();
   WriteMappedRenderState(aurora::gx::map_logical_render_state());
 }
 
 void GXSetTexCopySrcRender(u16 left, u16 top, u16 wd, u16 ht) {
+  AURORA_GX_FORWARD(GXSetTexCopySrcRender(left, top, wd, ht));
   aurora::gx::g_gxState.texCopySrc = {left, top, wd, ht};
   aurora::gx::g_gxState.texCopySrcRenderSpace = true;
 }
 
 void GXCreateFrameBuffer(u32 width, u32 height) {
+  AURORA_GX_FORWARD(GXCreateFrameBuffer(width, height));
   aurora::gx::fifo::drain();
   aurora::gfx::begin_offscreen(width, height);
 }
 
 void GXRestoreFrameBuffer() {
+  AURORA_GX_FORWARD(GXRestoreFrameBuffer());
   aurora::gx::fifo::drain();
   aurora::gfx::end_offscreen();
 }

@@ -125,6 +125,24 @@ final class SettingsMenu {
         }
     }
 
+    /** GX Thread is read once when the game starts: either change needs a restart, or it goes back. */
+    private void confirmGxThreadRestart(boolean on) {
+        final String state = on ? "on" : "off";
+        final Runnable revert = () -> {
+            settings.setGxThread(!on);
+            changed();
+        };
+        new Sheet(activity, "Restart Required", "GX Thread takes effect when the game starts again.")
+                .action("Restart", "Restart the game now with GX Thread " + state, true, false, () -> {
+                    if (activity instanceof LauncherActivity && ((LauncherActivity) activity).restartGame()) {
+                        dialog.dismiss();
+                    }
+                })
+                .action("Cancel", "Keep GX Thread " + (on ? "off" : "on"), false, false, revert)
+                .onCancel(revert)
+                .show();
+    }
+
     /** After a change: save, and draw the section again with the new values. */
     private void changed() {
         save();
@@ -217,10 +235,28 @@ final class SettingsMenu {
                         + "choppier picture.",
                 new String[] {"Off", "Auto"}, settings.frameskip() ? 1 : 0, true,
                 which -> settings.setFrameskip(which == 1));
+        toggleRow("30 FPS Lock", "Draws every other frame, evenly paced: a steady 30 FPS while the game "
+                        + "and sound keep full speed. For phones that cannot hold 60. Replaces Frameskip "
+                        + "while on.",
+                settings.fpsLock30(), on -> settings.setFpsLock30(on));
         toggleRow("Dynamic Resolution", "Lowers the render resolution while the GPU holds the game back "
                         + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
                         + "highest it goes.",
                 settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
+        final boolean thermal = AppSettings.thermalSupported(activity);
+        toggleRow("Thermal Control", thermal
+                        ? "When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
+                        + "for at least a minute, and lowers the resolution if the GPU is the one working "
+                        + "hard. Back to normal once it cools down."
+                        : "Not available: needs Android 12 or newer with a thermal sensor report.",
+                settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
+        toggleRow("GX Thread (Experimental)", "Runs the graphics work on its own CPU core, so busy "
+                        + "battles run faster on slower phones. Known issue: textures and the sky can "
+                        + "flicker white. Turning it on restarts the game.",
+                settings.gxThread(), on -> {
+                    settings.setGxThread(on);
+                    confirmGxThreadRestart(on);
+                });
     }
 
     private void showControls() {
@@ -234,6 +270,9 @@ final class SettingsMenu {
                         ? "Move and resize the controls while playing: Back > Edit Controls Layout."
                         : "Arranged by you. Change it while playing: Back > Edit Controls Layout.",
                 settings.touchLayout().isEmpty() ? null : "Reset", () -> settings.setTouchLayout(""));
+        toggleRow("Fixed Left Stick", "On: the stick moves only when touched where it is drawn. "
+                        + "Off: a thumb anywhere on the empty left side grabs it.",
+                settings.fixedStick(), on -> settings.setFixedStick(on));
         toggleRow("Vibration", "A short buzz when a touch button is pressed.", settings.haptics(),
                 on -> settings.setHaptics(on));
         toggleRow("Touch camera", "Drag on the empty right side of the screen to turn the camera.",
@@ -298,6 +337,12 @@ final class SettingsMenu {
 
     /** The whole card toggles; the switch on the right shows On or Off. */
     private void toggleRow(String title, String about, boolean on, Toggle toggle) {
+        toggleRow(title, about, on, true, toggle);
+    }
+
+    /** Disabled: dimmed, shows Off and does nothing when tapped (the phone cannot do it). */
+    private void toggleRow(String title, String about, boolean on, boolean enabled, Toggle toggle) {
+        on = on && enabled;
         final LinearLayout track = new LinearLayout(activity);
         track.setGravity(on ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL);
         track.setPadding(dp(4), dp(4), dp(4), dp(4));
@@ -316,10 +361,12 @@ final class SettingsMenu {
         state.setPadding(0, 0, dp(10), 0);
         box.addView(state);
         box.addView(track, trackParams);
-        final LinearLayout card = card(title, about, box, false, true);
+        final LinearLayout card = card(title, about, box, false, enabled);
+        if (!enabled) return;
+        final boolean was = on;
         card.setClickable(true);
         card.setOnClickListener(v -> {
-            toggle.set(!on);
+            toggle.set(!was);
             changed();
         });
     }

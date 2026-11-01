@@ -1,3 +1,4 @@
+#include "gx/gx_thread.hpp"
 #include "imgui.hpp"
 
 #include <cstddef>
@@ -261,6 +262,7 @@ ImTextureID add_texture(uint32_t width, uint32_t height, const uint8_t* data) no
 // C bindings
 extern "C" {
 ImTextureID aurora_imgui_add_texture(uint32_t width, uint32_t height, const void* rgba8) {
+  AURORA_GX_SYNC(Other);
   return aurora::imgui::add_texture(width, height, static_cast<const uint8_t*>(rgba8));
 }
 }

@@ -24,6 +24,7 @@
 #include "host_suspend.h"
 #include "guest_profiler.h"
 #include "cpu_boost.h"
+#include "thermal.h"
 #include "audio_backend.h"
 #include "audio/ax_dsp.h"
 #include "system_stats.h"
@@ -68,6 +69,9 @@ extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
 extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* cpu);
 
 extern "C" uint32_t GX_HLE_TakeBreakPtCallback();
+extern "C" bool AuroraGxThreadEnabled();
+extern "C" void AuroraTakeGxThreadStats(uint64_t* chunks, uint64_t* closures, uint64_t* bytes, uint64_t* syncs,
+                                        uint32_t syncCount, uint64_t* producerWaitNanos, uint64_t* gxBusyNanos);
 extern "C" int g_gxFrameCount;
 extern "C" int32_t OS__DisableInterrupts_801a65ac();
 extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
@@ -1382,6 +1386,19 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                     aurora_texture_memory_report(texReport, sizeof(texReport));
                     RT_LOGF(RT_TAG_VI, "textures: %s\n", texReport);
                 }
+                if (AuroraGxThreadEnabled()) {
+                    // BASARA_GX_THREAD=1: what the producer handed over a frame, why it waited for the GX
+                    // thread (draw done, begin/end frame, queries, copies, settings, other) and for how long.
+                    uint64_t chunks = 0, closures = 0, bytes = 0, waitNanos = 0, busyNanos = 0;
+                    uint64_t syncs[7] = {};
+                    AuroraTakeGxThreadStats(&chunks, &closures, &bytes, syncs, 7, &waitNanos, &busyNanos);
+                    RT_LOGF(RT_TAG_VI, "gx thread: busy %.2f ms, game waited %.2f ms a frame; %.1f chunks (%.0f KB), "
+                            "%.1f calls a frame; syncs a frame: drawdone %.1f, begin %.1f, end %.1f, query %.1f, "
+                            "copy %.1f, settings %.1f, other %.1f\n",
+                            busyNanos / 1e6 / n, waitNanos / 1e6 / n, chunks / double(n), bytes / 1024.0 / n,
+                            closures / double(n), syncs[0] / double(n), syncs[1] / double(n), syncs[2] / double(n),
+                            syncs[3] / double(n), syncs[4] / double(n), syncs[5] / double(n), syncs[6] / double(n));
+                }
                 const SystemStats sys = SampleSystemStats();
                 std::string clusters;
                 for (const int mhz : sys.clusterMHz) {
@@ -1394,9 +1411,11 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                 const int cpu = -1;
 #endif
                 RT_LOGF(RT_TAG_VI, "system: game thread on cpu %d, process cpu %.0f%% of %d cores, clusters %s MHz, "
-                        "cpu %.0f C, gpu %d%% %d MHz %.0f C, ram free %.2f GB, battery %.0f C\n",
+                        "cpu %.0f C, gpu %d%% %d MHz %.0f C, ram free %.2f GB, battery %.0f C, "
+                        "thermal headroom %.2f status %d%s\n",
                         cpu, sys.processCpuPercent, sys.cores, clusters.c_str(), sys.cpuTempC, sys.gpuBusyPercent,
-                        sys.gpuMHz, sys.gpuTempC, sys.ramAvailableBytes / 1073741824.0, sys.batteryTempC);
+                        sys.gpuMHz, sys.gpuTempC, sys.ramAvailableBytes / 1073741824.0, sys.batteryTempC,
+                        Thermal::Headroom(), Thermal::Status(), Thermal::Hot() ? " (hot)" : "");
             }
             g_mainWaits.clear();
             g_idleByEnder.fill(0);

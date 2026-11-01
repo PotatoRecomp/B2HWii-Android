@@ -14,6 +14,7 @@
 
 #include "input.hpp"
 #include "internal.hpp"
+#include "gx/gx_thread.hpp"
 #include "window.hpp"
 
 #include <SDL3/SDL_filesystem.h>
@@ -414,6 +415,9 @@ bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::micr
   lock.unlock();
   // Both phases service the guest's alarm/retrace pump identically; the
   // producer must keep its own timing alive however long it waits.
+  if (gx::thread::on_gx_thread()) {
+    return false;
+  }
   if (const auto callback = g_frameWorkerWaitCallback.load(std::memory_order_acquire)) {
     callback();
   }
@@ -1837,9 +1841,10 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
   // Stage times of a cycle, logged when it runs long (the producer waits on it in GXDrawDone).
   using WorkerClock = std::chrono::steady_clock;
   const auto cycleStart = WorkerClock::now();
-  WorkerClock::time_point sealed{}, encoded{};
+  WorkerClock::time_point locked{}, sealed{}, encoded{};
   {
     std::lock_guard gpuLock(g_rendererGpuMutex);
+    locked = WorkerClock::now();
     seal_frame_locked(sealedFrame, ctx);
     sealed = WorkerClock::now();
     // NSMBW: overlap the encode with the producer's next frame without interpolation too. Encoding
@@ -1895,9 +1900,9 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
       s_logged = 0;
     }
     if (busy >= 16.7 && s_logged++ < 30) {
-      Log.info("Slow render frame: {:.1f} ms (seal {:.1f}, encode {:.1f}, publish {:.1f}, prepare next {:.1f}; "
+      Log.info("Slow render frame: {:.1f} ms (lock {:.1f}, seal {:.1f}, encode {:.1f}, publish {:.1f}, prepare next {:.1f}; "
                "{} pipelines queued)",
-               busy, msOf(sealed - cycleStart), msOf(encoded - sealed), msOf(published - encoded),
+               busy, msOf(locked - cycleStart), msOf(sealed - locked), msOf(encoded - sealed), msOf(published - encoded),
                msOf(prepareEnd - prepareStart), gfx::g_stats.queuedPipelines);
     }
   }
@@ -1965,7 +1970,7 @@ void end_frame_impl(bool pumpEvents, bool drainFifo) {
 #endif
 }
 
-bool begin_frame() noexcept {
+bool begin_frame(bool pumpEvents = true) noexcept {
 #ifdef AURORA_ENABLE_GX
   // The asynchronous fast path below can return a logically prepared frame
   // without entering begin_frame_impl(), so loss must be checked before it.
@@ -1977,8 +1982,11 @@ bool begin_frame() noexcept {
 
   ensure_frame_worker_started();
   // SDL needs event pumping on the window-owning producer thread, and the worker passes
-  // pumpEvents=false, so keep it here even when the fast path returns early.
-  window::pump_events();
+  // pumpEvents=false, so keep it here even when the fast path returns early. With the GX thread the
+  // producer pumps before posting the rest here.
+  if (pumpEvents) {
+    window::pump_events();
+  }
   bool waitForSurfacePreparation = false;
 #ifdef AURORA_ENABLE_GX
   // A surface mutation can legitimately fail preparation, and optimistic success would let GX/ImGui
@@ -2057,6 +2065,40 @@ void end_frame() {
   }
   g_frameWorker.cv.notify_one();
 }
+
+// BASARA_GX_THREAD: the frame's begin and end run on the GX thread, after the GX work queued
+// before them, so the producer starts the next frame without waiting for this one to be decoded.
+// The latest fenced begin/end; producer only.
+uint64_t g_lastFrameFence = 0;
+
+bool frame_ops_offloaded() noexcept {
+#ifdef AURORA_ENABLE_GX
+  return gx::thread::offload() && frame_worker_requested();
+#else
+  return false;
+#endif
+}
+
+// Producer half of begin_frame() with the GX thread on. False when the surface is changing: the
+// caller then syncs and begins on this thread, which reports the real preparation result.
+bool begin_frame_offloaded() noexcept {
+#ifdef AURORA_ENABLE_GX
+  webgpu::fail_if_device_lost();
+  window::pump_events();
+  const bool surfaceChanging =
+      g_surfaceReconfigurePending.load(std::memory_order_acquire) || webgpu::vsync_change_pending() ||
+      !window::is_presentable() || !g_surface || window::native_resize_pending() || window::is_paused() ||
+      !window::native_window_size_matches(webgpu::g_graphicsConfig.surfaceConfiguration.width,
+                                          webgpu::g_graphicsConfig.surfaceConfiguration.height);
+  if (surfaceChanging) {
+    return false;
+  }
+  g_lastFrameFence = gx::thread::post_fenced([] { begin_frame(false); }, "begin_frame");
+  return true;
+#else
+  return false;
+#endif
+}
 } // namespace
 
 void wait_for_frame_worker() noexcept { wait_for_frame_worker_private(FrameWorkerPhase::Done); }
@@ -2082,14 +2124,41 @@ void submit_staging_commands(const wgpu::CommandBuffer& commands) {
 AuroraInfo aurora_initialize(int argc, char* argv[], const AuroraConfig* config) {
   return aurora::initialize(argc, argv, *config);
 }
-void aurora_shutdown() { aurora::shutdown(); }
+void aurora_shutdown() {
+  AURORA_GX_SYNC(Other);
+  aurora::gx::thread::shutdown();
+  aurora::shutdown();
+}
 const AuroraEvent* aurora_update() { return aurora::update(); }
-bool aurora_begin_frame() { return aurora::begin_frame(); }
-void aurora_end_frame() { aurora::end_frame(); }
+bool aurora_begin_frame() {
+  if (aurora::frame_ops_offloaded() && aurora::begin_frame_offloaded()) {
+    return true;
+  }
+  AURORA_GX_SYNC(BeginFrame);
+  return aurora::begin_frame();
+}
+void aurora_end_frame() {
+  if (aurora::frame_ops_offloaded()) {
+    aurora::g_lastFrameFence = aurora::gx::thread::post_fenced([] { aurora::end_frame(); }, "end_frame");
+    return;
+  }
+  AURORA_GX_SYNC(EndFrame);
+  aurora::end_frame();
+}
 void aurora_set_frame_worker_wait_callback(AuroraFrameWorkerWaitCallback callback) {
   aurora::g_frameWorkerWaitCallback.store(callback, std::memory_order_release);
 }
-void aurora_wait_for_frame_worker() { aurora::wait_for_frame_worker(); }
+void aurora_wait_for_frame_worker() {
+  if (aurora::frame_ops_offloaded()) {
+    // ImGui callers only need the last posted begin/end to have run and the worker to be DONE; the
+    // GX work queued after them can keep decoding.
+    aurora::gx::thread::wait_fence(aurora::g_lastFrameFence, aurora::gx::thread::SyncReason::EndFrame);
+    aurora::wait_for_frame_worker();
+    return;
+  }
+  AURORA_GX_SYNC(Other);
+  aurora::wait_for_frame_worker();
+}
 void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals) {
   totals->cycles = aurora::g_workerCycles.load(std::memory_order_relaxed);
   totals->busyNanos = aurora::g_workerBusyNanos.load(std::memory_order_relaxed);
@@ -2142,6 +2211,7 @@ void aurora_request_frame_capture(uint32_t frame, const char* outputPath) {
   aurora::g_captureFrame.store(frame, std::memory_order_release);
 }
 bool aurora_flush_efb_copies_to_ram() {
+  AURORA_GX_SYNC(Copy);
 #ifdef AURORA_ENABLE_GX
   if (!aurora::gfx::efb_ram::has_pending()) {
     return true;
@@ -2178,6 +2248,7 @@ bool aurora_flush_efb_copies_to_ram() {
 #endif
 }
 bool aurora_flush_efb_copy_to_ram(void* dest) {
+  AURORA_GX_SYNC(Copy);
 #ifdef AURORA_ENABLE_GX
   if (dest == nullptr || !aurora::gfx::efb_ram::has_pending(dest)) {
     return false;

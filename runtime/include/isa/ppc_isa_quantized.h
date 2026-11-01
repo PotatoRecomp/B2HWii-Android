@@ -152,113 +152,6 @@ inline void PpcStorePairPsqFloatToHostInline(uint8_t* host, double value)
 #endif
 }
 
-template <typename SignedType>
-inline SignedType PpcScaleAndClampPsqInline(float value, uint32_t scale)
-{
-    if (scale == 0u)
-    {
-        constexpr float kMin = static_cast<float>(std::numeric_limits<SignedType>::min());
-        constexpr float kMax = static_cast<float>(std::numeric_limits<SignedType>::max());
-        return static_cast<SignedType>(std::clamp(value, kMin, kMax));
-    }
-
-    const float factor = scale < 32u
-        ? std::ldexp(1.0f, static_cast<int>(scale))
-        : std::ldexp(1.0f, -(64 - static_cast<int>(scale)));
-    const float scaled = value * factor;
-    constexpr float kMin = static_cast<float>(std::numeric_limits<SignedType>::min());
-    constexpr float kMax = static_cast<float>(std::numeric_limits<SignedType>::max());
-    return static_cast<SignedType>(std::clamp(scaled, kMin, kMax));
-}
-
-template <typename SignedType>
-inline float PpcDequantizePsqInline(SignedType value, uint32_t scale)
-{
-    if (scale == 0u)
-    {
-        return static_cast<float>(value);
-    }
-
-    const float factor = scale < 32u
-        ? std::ldexp(1.0f, -static_cast<int>(scale))
-        : std::ldexp(1.0f, static_cast<int>(64u - scale));
-    return static_cast<float>(value) * factor;
-}
-
-template <typename T>
-inline T PpcReadUnpairedPsqInline(uint32_t addr)
-{
-    if constexpr (sizeof(T) == 1)
-    {
-        return static_cast<T>(Memory::Read8(addr));
-    }
-    else if constexpr (sizeof(T) == 2)
-    {
-        return static_cast<T>(Memory::Read16(addr));
-    }
-    else
-    {
-        return static_cast<T>(Memory::Read32(addr));
-    }
-}
-
-template <typename T>
-inline std::pair<T, T> PpcReadPairPsqInline(uint32_t addr)
-{
-    if constexpr (sizeof(T) == 1)
-    {
-        const uint16_t packed = Memory::Read16(addr);
-        return { static_cast<T>(packed >> 8), static_cast<T>(packed) };
-    }
-    else if constexpr (sizeof(T) == 2)
-    {
-        const uint32_t packed = Memory::Read32(addr);
-        return { static_cast<T>(packed >> 16), static_cast<T>(packed) };
-    }
-    else
-    {
-        const uint64_t packed = Memory::Read64(addr);
-        return { static_cast<T>(packed >> 32), static_cast<T>(packed) };
-    }
-}
-
-template <typename T>
-inline void PpcWriteUnpairedPsqInline(uint32_t addr, T value)
-{
-    if constexpr (sizeof(T) == 1)
-    {
-        Memory::Write8(addr, static_cast<uint8_t>(value));
-    }
-    else if constexpr (sizeof(T) == 2)
-    {
-        Memory::Write16(addr, static_cast<uint16_t>(value));
-    }
-    else
-    {
-        Memory::Write32(addr, static_cast<uint32_t>(value));
-    }
-}
-
-template <typename T>
-inline void PpcWritePairPsqInline(uint32_t addr, T first, T second)
-{
-    if constexpr (sizeof(T) == 1)
-    {
-        const uint16_t packed = (static_cast<uint16_t>(first) << 8) | static_cast<uint16_t>(second);
-        Memory::Write16(addr, packed);
-    }
-    else if constexpr (sizeof(T) == 2)
-    {
-        const uint32_t packed = (static_cast<uint32_t>(first) << 16) | static_cast<uint32_t>(second);
-        Memory::Write32(addr, packed);
-    }
-    else
-    {
-        const uint64_t packed = (static_cast<uint64_t>(first) << 32) | static_cast<uint64_t>(second);
-        Memory::Write64(addr, packed);
-    }
-}
-
 // The flat reservation makes every 32-bit guest address a host address; a pending-deferred
 // (EFB) page is PAGE_NOACCESS so the load faults through the vectored handler instead of
 // reading stale bytes, and unmapped pages commit on demand, same as MemoryInline::Flat* loads.
@@ -286,6 +179,160 @@ MKW_PPC_FORCE_INLINE uint8_t* PpcTryGetPsqWritableHostInline(uint32_t addr)
     return MKW_FLAT_GUEST_BASE + addr;
 }
 
+// 2^exponent for the psq scale range (-32..32): every value is a normal single, so building the
+// bits is exact and equal to std::ldexp(1.0f, exponent), without the libm call per element.
+inline float PpcPsqPow2Inline(int exponent)
+{
+    return PpcBitCastToFloatInline(static_cast<uint32_t>(127 + exponent) << 23);
+}
+
+template <typename SignedType>
+inline SignedType PpcScaleAndClampPsqInline(float value, uint32_t scale)
+{
+    if (scale == 0u)
+    {
+        constexpr float kMin = static_cast<float>(std::numeric_limits<SignedType>::min());
+        constexpr float kMax = static_cast<float>(std::numeric_limits<SignedType>::max());
+        return static_cast<SignedType>(std::clamp(value, kMin, kMax));
+    }
+
+    const float factor = scale < 32u
+        ? PpcPsqPow2Inline(static_cast<int>(scale))
+        : PpcPsqPow2Inline(-(64 - static_cast<int>(scale)));
+    const float scaled = value * factor;
+    constexpr float kMin = static_cast<float>(std::numeric_limits<SignedType>::min());
+    constexpr float kMax = static_cast<float>(std::numeric_limits<SignedType>::max());
+    return static_cast<SignedType>(std::clamp(scaled, kMin, kMax));
+}
+
+template <typename SignedType>
+inline float PpcDequantizePsqInline(SignedType value, uint32_t scale)
+{
+    if (scale == 0u)
+    {
+        return static_cast<float>(value);
+    }
+
+    const float factor = scale < 32u
+        ? PpcPsqPow2Inline(-static_cast<int>(scale))
+        : PpcPsqPow2Inline(static_cast<int>(64u - scale));
+    return static_cast<float>(value) * factor;
+}
+
+template <typename T>
+inline T PpcReadUnpairedPsqInline(uint32_t addr)
+{
+    if (const uint8_t* host = PpcTryGetPsqReadableHostInline(addr)) [[likely]]
+    {
+        if constexpr (sizeof(T) == 1) return static_cast<T>(host[0]);
+        else if constexpr (sizeof(T) == 2) return static_cast<T>(BigEndian::Read16(host));
+        else return static_cast<T>(BigEndian::Read32(host));
+    }
+    if constexpr (sizeof(T) == 1)
+    {
+        return static_cast<T>(Memory::Read8(addr));
+    }
+    else if constexpr (sizeof(T) == 2)
+    {
+        return static_cast<T>(Memory::Read16(addr));
+    }
+    else
+    {
+        return static_cast<T>(Memory::Read32(addr));
+    }
+}
+
+template <typename T>
+inline std::pair<T, T> PpcReadPairPsqInline(uint32_t addr)
+{
+    if (const uint8_t* host = PpcTryGetPsqReadableHostInline(addr)) [[likely]]
+    {
+        if constexpr (sizeof(T) == 1) return { static_cast<T>(host[0]), static_cast<T>(host[1]) };
+        else if constexpr (sizeof(T) == 2)
+            return { static_cast<T>(BigEndian::Read16(host)), static_cast<T>(BigEndian::Read16(host + 2)) };
+        else
+            return { static_cast<T>(BigEndian::Read32(host)), static_cast<T>(BigEndian::Read32(host + 4)) };
+    }
+    if constexpr (sizeof(T) == 1)
+    {
+        const uint16_t packed = Memory::Read16(addr);
+        return { static_cast<T>(packed >> 8), static_cast<T>(packed) };
+    }
+    else if constexpr (sizeof(T) == 2)
+    {
+        const uint32_t packed = Memory::Read32(addr);
+        return { static_cast<T>(packed >> 16), static_cast<T>(packed) };
+    }
+    else
+    {
+        const uint64_t packed = Memory::Read64(addr);
+        return { static_cast<T>(packed >> 32), static_cast<T>(packed) };
+    }
+}
+
+template <typename T>
+inline void PpcWriteUnpairedPsqInline(uint32_t addr, T value)
+{
+    if (uint8_t* host = PpcTryGetPsqWritableHostInline(addr)) [[likely]]
+    {
+        if constexpr (sizeof(T) == 1) host[0] = static_cast<uint8_t>(value);
+        else if constexpr (sizeof(T) == 2) BigEndian::Write16(host, static_cast<uint16_t>(value));
+        else BigEndian::Write32(host, static_cast<uint32_t>(value));
+        return;
+    }
+    if constexpr (sizeof(T) == 1)
+    {
+        Memory::Write8(addr, static_cast<uint8_t>(value));
+    }
+    else if constexpr (sizeof(T) == 2)
+    {
+        Memory::Write16(addr, static_cast<uint16_t>(value));
+    }
+    else
+    {
+        Memory::Write32(addr, static_cast<uint32_t>(value));
+    }
+}
+
+template <typename T>
+inline void PpcWritePairPsqInline(uint32_t addr, T first, T second)
+{
+    if (uint8_t* host = PpcTryGetPsqWritableHostInline(addr)) [[likely]]
+    {
+        if constexpr (sizeof(T) == 1)
+        {
+            host[0] = static_cast<uint8_t>(first);
+            host[1] = static_cast<uint8_t>(second);
+        }
+        else if constexpr (sizeof(T) == 2)
+        {
+            BigEndian::Write16(host, static_cast<uint16_t>(first));
+            BigEndian::Write16(host + 2, static_cast<uint16_t>(second));
+        }
+        else
+        {
+            BigEndian::Write32(host, static_cast<uint32_t>(first));
+            BigEndian::Write32(host + 4, static_cast<uint32_t>(second));
+        }
+        return;
+    }
+    if constexpr (sizeof(T) == 1)
+    {
+        const uint16_t packed = (static_cast<uint16_t>(first) << 8) | static_cast<uint16_t>(second);
+        Memory::Write16(addr, packed);
+    }
+    else if constexpr (sizeof(T) == 2)
+    {
+        const uint32_t packed = (static_cast<uint32_t>(first) << 16) | static_cast<uint32_t>(second);
+        Memory::Write32(addr, packed);
+    }
+    else
+    {
+        const uint64_t packed = (static_cast<uint64_t>(first) << 32) | static_cast<uint64_t>(second);
+        Memory::Write64(addr, packed);
+    }
+}
+
 inline double PpcLoadPairPsqFloatFastInline(uint32_t addr)
 {
     const uint8_t* host = PpcTryGetPsqReadableHostInline(addr);
@@ -308,27 +355,11 @@ inline double PpcLoadSinglePsqFloatFastInline(uint32_t addr)
 template <typename ValueType>
 inline double PpcLoadPairPsqIntegerFastInline(uint32_t addr, uint32_t scale = 0u)
 {
-    if constexpr (sizeof(ValueType) == 1)
-    {
-        const uint16_t packed = Memory::Read16(addr);
-        return PpcMakePairedResultInline(
-            PpcDequantizePsqInline(static_cast<ValueType>(packed >> 8), scale),
-            PpcDequantizePsqInline(static_cast<ValueType>(packed), scale)).d;
-    }
-    else if constexpr (sizeof(ValueType) == 2)
-    {
-        const uint32_t packed = Memory::Read32(addr);
-        return PpcMakePairedResultInline(
-            PpcDequantizePsqInline(static_cast<ValueType>(packed >> 16), scale),
-            PpcDequantizePsqInline(static_cast<ValueType>(packed), scale)).d;
-    }
-    else
-    {
-        const uint64_t packed = Memory::Read64(addr);
-        return PpcMakePairedResultInline(
-            PpcDequantizePsqInline(static_cast<ValueType>(packed >> 32), scale),
-            PpcDequantizePsqInline(static_cast<ValueType>(packed), scale)).d;
-    }
+    using UnsignedType = std::make_unsigned_t<ValueType>;
+    const auto [first, second] = PpcReadPairPsqInline<UnsignedType>(addr);
+    return PpcMakePairedResultInline(
+        PpcDequantizePsqInline(static_cast<ValueType>(first), scale),
+        PpcDequantizePsqInline(static_cast<ValueType>(second), scale)).d;
 }
 
 template <typename SignedType>
@@ -806,6 +837,17 @@ return PpcLoadPairPsqIntegerFastInline<int16_t>(addr);
         default:
             break;
         }
+        // Scaled quantized pairs (skinning keeps s16 with a scale): decode here instead of
+        // going through PPC_PsqL, which re-reads the GQR from the TLS context.
+        const uint32_t scale = (gqr >> 24) & 0x3Fu;
+        switch ((gqr >> 16) & 0x7u)
+        {
+        case 4u: return PpcLoadPairPsqIntegerFastInline<uint8_t>(addr, scale);
+        case 5u: return PpcLoadPairPsqIntegerFastInline<uint16_t>(addr, scale);
+        case 6u: return PpcLoadPairPsqIntegerFastInline<int8_t>(addr, scale);
+        case 7u: return PpcLoadPairPsqIntegerFastInline<int16_t>(addr, scale);
+        default: break;
+        }
     }
     else
     {
@@ -1116,6 +1158,16 @@ PpcStorePairPsqQuantizedFastInline<uint8_t>(addr, value, 61u);
             return;
         default:
             break;
+        }
+        // Scaled quantized pairs: see PPC_PsqLGeneric.
+        const uint32_t scale = (gqr >> 8) & 0x3Fu;
+        switch (gqr & 0x7u)
+        {
+        case 4u: PpcStorePairPsqQuantizedFastInline<uint8_t>(addr, value, scale); return;
+        case 5u: PpcStorePairPsqQuantizedFastInline<uint16_t>(addr, value, scale); return;
+        case 6u: PpcStorePairPsqQuantizedFastInline<int8_t>(addr, value, scale); return;
+        case 7u: PpcStorePairPsqQuantizedFastInline<int16_t>(addr, value, scale); return;
+        default: break;
         }
     }
     else

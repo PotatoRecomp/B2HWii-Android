@@ -1,10 +1,12 @@
 #include "gx.hpp"
+#include "../../gx/gx_thread.hpp"
 #include "__gx.h"
 
 #include "../../gx/command_processor.hpp"
 #include "../../gx/fifo.hpp"
 
 #include <cstring>
+#include <vector>
 
 static __GXData_struct sSavedGXData;
 
@@ -64,6 +66,14 @@ void GXCallDisplayList(const void* data, u32 nbytes) {
     return;
   }
 
+  // GX thread: copy the list into the FIFO stream; the GX thread decodes it in order.
+  if (aurora::gx::thread::offload()) {
+    aurora::gx::fifo::write_data(data, nbytes);
+    aurora::gx::fifo::drain();
+    aurora::gx::thread::sync_after(aurora::gx::thread::kSyncAfterDisplayList);
+    return;
+  }
+
   // Decode the display list immediately while its borrowed resources are valid.
   aurora::gx::fifo::drain();
   aurora::gx::fifo::process(static_cast<const u8*>(data), nbytes, true);
@@ -78,6 +88,14 @@ void GXCallDisplayListLE(const void* data, u32 nbytes) {
   // Flush pending primitives
   if (*reinterpret_cast<u32*>(&__gx->vNum) != 0) {
     __GXSendFlushPrim();
+  }
+
+  if (aurora::gx::thread::offload()) {
+    std::vector<u8> copy(static_cast<const u8*>(data), static_cast<const u8*>(data) + nbytes);
+    aurora::gx::thread::post([copy = std::move(copy)] {
+      aurora::gx::fifo::process(copy.data(), static_cast<u32>(copy.size()), false);
+    });
+    return;
   }
 
   // Decode little-endian lists separately after finishing the normal FIFO work.

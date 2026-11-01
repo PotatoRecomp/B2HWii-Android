@@ -18,6 +18,9 @@ extern uint32_t sDlWritePos;
 
 void init();
 
+// Decodes one run of big-endian FIFO bytes (drain's body; the GX thread calls it per chunk).
+void process_chunk(const uint8_t* data, uint32_t size);
+
 // Out-of-line slow path: grows internal buffer then appends data
 void write_data_grow(const void* data, uint32_t length);
 

@@ -41,6 +41,7 @@ if (AURORA_ENABLE_GX)
     ../lib/dolphin/gx/GXVert.cpp
     # FIFO/command processor (encoder + decoder)
     ../lib/gx/fifo.cpp
+    ../lib/gx/gx_thread.cpp
     ../lib/gx/command_processor.cpp
     ../lib/gx/shader_info.cpp
     ../lib/gx/frame_interpolation.cpp

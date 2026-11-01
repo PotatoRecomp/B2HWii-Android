@@ -73,6 +73,8 @@ void InvalidateEfbCopyDestinationsForRange(uint32_t addr, uint32_t size) {
 // Display Copy Source/Destination
 // ============================================================================
 
+extern "C" bool AuroraGxThreadEnabled();
+
 extern "C" void GX__SetDispCopySrc_8016f438(uint32_t l, uint32_t t, uint32_t w, uint32_t h) {
     // Basara's 448x392 frame ends in a dark column, hidden by overscan on a TV; in a window it shows
     // as a dark line on the right, so the picture is taken without it.
@@ -127,8 +129,9 @@ PPC_NATIVE_OVERRIDE_VOID(803828b0, GX__SetDispCopyGamma_8016fc24, (uint32_t g), 
 extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
     EnsureAuroraFrameActive();
     // GX copies are FIFO-ordered on hardware. Drain submitted draws before
-    // resolving the EFB so high-level copies see the same contents.
-    GXDrawDone();
+    // resolving the EFB so high-level copies see the same contents. The GX thread
+    // runs the copy after the queued draws anyway.
+    if (!AuroraGxThreadEnabled()) GXDrawDone();
     GXCopyDisp(GuestToHostPtr(da), (GXBool)c);
     // No second GXDrawDone here: the frame-worker wait below is for the DONE
     // phase, which strictly subsumes the drain this call would perform.
@@ -149,8 +152,9 @@ PPC_NATIVE_OVERRIDE_VOID(803828c4, GX__CopyDisp_8016fc38, (uint32_t da, uint32_t
 
 extern "C" void GX__CopyTex_8016fd74(uint32_t da, uint32_t c) {
     EnsureAuroraFrameActive();
-    // Match GX FIFO ordering: texture copies observe all prior draws.
-    GXDrawDone();
+    // Match GX FIFO ordering: texture copies observe all prior draws (the GX thread's queue
+    // keeps that order by itself).
+    if (!AuroraGxThreadEnabled()) GXDrawDone();
     const uint16_t rawSrcLeft = g_texCopyState.srcLeft;
     const uint16_t rawSrcTop = g_texCopyState.srcTop;
     const uint16_t rawSrcWidth = g_texCopyState.srcWidth;

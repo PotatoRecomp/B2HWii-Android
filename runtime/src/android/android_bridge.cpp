@@ -7,6 +7,7 @@
 #include "runtime_config.h"
 #include "settings_overlay.h"
 #include "system_stats.h"
+#include "thermal.h"
 #include "virtual_remote.h"
 
 #include "netplay/net_socket.h"
@@ -69,8 +70,9 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetTouchStick
 // widescreen mode only at the next start, since the game reads it at boot.
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyDisplaySettings(
     JNIEnv*, jclass, jint aspect, jfloat renderScale, jboolean showFps, jboolean dynamicResolution,
-    jint overlayItems, jboolean frameGraph)
+    jint overlayItems, jboolean frameGraph, jboolean thermalControl)
 {
+    Thermal::SetEnabled(thermalControl == JNI_TRUE);
     settings_overlay::SetOverlayItems(static_cast<uint32_t>(overlayItems));
     settings_overlay::SetFrameGraph(frameGraph == JNI_TRUE);
     // Through the settings overlay, so the game's own settings window shows the same choice. A scale

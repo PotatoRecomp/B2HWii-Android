@@ -1,10 +1,12 @@
 #include "gx.hpp"
+#include "../../gx/gx_thread.hpp"
 
 #include "../../gfx/depth_peek.hpp"
 
 #include <dolphin/gx/GXCpu2Efb.h>
 
 void GXPeekZ(u16 x, u16 y, u32* z) {
+  AURORA_GX_SYNC(Query);
   aurora::gfx::depth_peek::poll();
 
   if (z != nullptr) {

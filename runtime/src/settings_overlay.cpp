@@ -1398,6 +1398,9 @@ struct GameFrameStats {
     float renderMs = 0.0f;
     float prepareMs = 0.0f;
     float waitMs = 0.0f;
+    // Share of wall time the frame worker was busy (recording plus waiting on the GPU). Stands in for
+    // GPU load where the driver's own counter is unreadable (Mali/MediaTek sysfs is denied to apps).
+    float renderLoadPercent = -1.0f;
 };
 
 const GameFrameStats& SampleGameFrameStats() {
@@ -1432,6 +1435,8 @@ const GameFrameStats& SampleGameFrameStats() {
         s_stats.renderMs = cycles ? static_cast<float>((worker.busyNanos - s_lastWorker.busyNanos) / 1e6 / cycles) : 0.0f;
         s_stats.prepareMs =
             cycles ? static_cast<float>((worker.prepareNanos - s_lastWorker.prepareNanos) / 1e6 / cycles) : 0.0f;
+        s_stats.renderLoadPercent = static_cast<float>(
+            std::min(100.0, static_cast<double>(worker.busyNanos - s_lastWorker.busyNanos) * 100.0 / wallNs));
     }
     s_last = now;
     s_lastFrames = frames;
@@ -1505,10 +1510,18 @@ void DrawPerformanceStats(bool& first, float presentedFps) {
         StatGroup(first, "CPU", kCpuLabel, cpu >= 0.0f ? LoadColor(cpu) : kSoft, v, temps ? sys.cpuTempC : -1.0f);
     }
     if (items & kOverlayGpu) {
-        if (sys.gpuBusyPercent >= 0) std::snprintf(v, sizeof(v), "%d%%", sys.gpuBusyPercent);
-        else std::snprintf(v, sizeof(v), "--");
-        StatGroup(first, "GPU", kGpuLabel, sys.gpuBusyPercent >= 0 ? LoadColor(sys.gpuBusyPercent) : kSoft, v,
-                  temps ? sys.gpuTempC : -1.0f);
+        // "~" marks the frame worker's estimate when the driver's counter is unreadable.
+        float gpu = -1.0f;
+        if (sys.gpuBusyPercent >= 0) {
+            gpu = static_cast<float>(sys.gpuBusyPercent);
+            std::snprintf(v, sizeof(v), "%d%%", sys.gpuBusyPercent);
+        } else if (game.renderLoadPercent >= 0.0f) {
+            gpu = game.renderLoadPercent;
+            std::snprintf(v, sizeof(v), "~%.0f%%", gpu);
+        } else {
+            std::snprintf(v, sizeof(v), "--");
+        }
+        StatGroup(first, "GPU", kGpuLabel, gpu >= 0.0f ? LoadColor(gpu) : kSoft, v, temps ? sys.gpuTempC : -1.0f);
     }
     if ((items & kOverlayBattery) && sys.batteryPercent >= 0) {
         std::snprintf(v, sizeof(v), "%d%%", sys.batteryPercent);

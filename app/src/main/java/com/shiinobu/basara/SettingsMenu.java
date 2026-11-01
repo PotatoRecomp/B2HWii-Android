@@ -221,10 +221,27 @@ final class SettingsMenu {
                         : "Turn FSR1 Upscaling on to choose.",
                 new String[] {"Light", "Full"}, settings.fsrFull() ? 1 : 0, settings.fsrOn(),
                 which -> settings.setFsrFull(which == 1));
+        choiceRow("Texture Detail", "Keeps the ground, walls and characters sharp at low Render "
+                        + "Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU.",
+                new String[] {"Original", "Sharp", "Sharpest"}, settings.textureFilter(), true,
+                which -> settings.setTextureFilter(which));
         choiceRow("Graphics Compatibility", "Fixes for phone GPUs whose drivers break the 3D models "
                         + "(scrambled textures, stretched characters). Auto uses them where needed.",
                 new String[] {"Auto", "On", "Off"}, settings.gpuCompat(), true,
                 which -> settings.setGpuCompat(which));
+        final String folder = BuildConfig.BETA ? "basara2heroes-beta/textures" : "basara2heroes/textures";
+        final boolean files = android.os.Environment.isExternalStorageManager();
+        toggleRow("Custom Textures", files
+                        ? "Uses your own textures (tex1_*.png, Dolphin-style names) from " + folder
+                                + " in place of the game's. Takes effect when the game starts again."
+                        : "Needs \"All files access\" for this app, to read " + folder + ".",
+                settings.customTextures(), files, on -> settings.setCustomTextures(on));
+        toggleRow("Dump Textures", settings.customTextures()
+                        ? "Saves each texture the game uses to " + folder + "/dump, named the way its "
+                                + "replacement must be: edit one and put it in " + folder + ". Slows loading "
+                                + "and fills storage, so turn it off when done."
+                        : "Turn Custom Textures on to choose.",
+                settings.dumpTextures(), settings.customTextures(), on -> settings.setDumpTextures(on));
     }
 
     private void showPerformance() {

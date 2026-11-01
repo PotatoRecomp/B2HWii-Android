@@ -2429,6 +2429,10 @@ static bool supports_wgpu_aniso(wgpu::FilterMode magFilter, wgpu::FilterMode min
          mipFilter == wgpu::MipmapFilterMode::Linear;
 }
 
+namespace aurora::gx {
+extern int g_textureFilterMode;  // shader_info.cpp
+}
+
 wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcept {
   auto [minFilter, mipFilter] = wgpu_filter_mode(texObj.min_filter());
   const auto [magFilter, _] = wgpu_filter_mode(texObj.mag_filter());
@@ -2446,6 +2450,17 @@ wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcep
     maxLod = 0.f;
   }
   u16 maxAnisotropy = wgpu_aniso(texObj.max_aniso());
+  // Texture Detail: mipmapped textures (the 3D world; menus are not mipmapped) are filtered
+  // trilinear + anisotropic, so ground and walls seen at an angle stay sharp.
+  if (aurora::gx::g_textureFilterMode > 0 && ref && !ref->isReplacement && !ref->hasArbitraryMips &&
+      ref->mipCount > 1 && mipFilter != wgpu::MipmapFilterMode::Undefined && maxLod > 0.f &&
+      magFilter == wgpu::FilterMode::Linear) {
+    minFilter = wgpu::FilterMode::Linear;
+    mipFilter = wgpu::MipmapFilterMode::Linear;
+    const u16 want = aurora::gx::g_textureFilterMode >= 2 ? 16 : 4;
+    maxAnisotropy = std::max<u16>(maxAnisotropy,
+                                  std::min<u16>(want, std::max<u16>(aurora::webgpu::g_graphicsConfig.textureAnisotropy, 1)));
+  }
   if (maxAnisotropy > 1 && !supports_wgpu_aniso(magFilter, minFilter, mipFilter)) {
     maxAnisotropy = 1;
   }

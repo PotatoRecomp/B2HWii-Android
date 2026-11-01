@@ -11,6 +11,7 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 
 #include "memory.h"
@@ -446,7 +447,39 @@ uint32_t WatchWord(uint32_t address) {
     return _byteswap_ulong(*reinterpret_cast<const uint32_t*>(g_base + address));
 }
 
+// Diagnostic (BASARA_SCAN_TPL=SECONDS): after that many seconds, logs where TPL textures (magic
+// 0020AF30) sit in guest RAM, so a write watch on one finds the code that unpacked it.
+void StartTplScan() {
+    const char* spec = std::getenv("BASARA_SCAN_TPL");
+    if (spec == nullptr || *spec == '\0') return;
+    const int seconds = std::atoi(spec);
+    std::thread([seconds] {
+        std::this_thread::sleep_for(std::chrono::seconds(seconds));
+        for (const uint32_t start : {0x80000000u, 0x90000000u}) {
+            const uint32_t end = start + (start == 0x80000000u ? 0x1800000u : 0x4000000u);
+            int hits = 0;
+            for (uint32_t a = start; a < end && hits < 60; a += 32) {
+                MEMORY_BASIC_INFORMATION mbi{};
+                if ((a & 0xFFFF) == 0 && (!VirtualQuery(g_base + a, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+                                          (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0)) {
+                    a += 0x10000 - 32;
+                    continue;
+                }
+                if (WatchWord(a) != 0x0020AF30u) continue;
+                const uint32_t table = WatchWord(a + 8);
+                const uint32_t image = WatchWord(a + table);
+                const uint32_t wh = WatchWord(a + image);
+                RT_LOG(RT_TAG_MEMORY) << "tpl at 0x" << std::hex << a << " images " << std::dec << WatchWord(a + 4)
+                                      << " " << (wh & 0xFFFF) << "x" << (wh >> 16) << " fmt "
+                                      << WatchWord(a + image + 4) << std::endl;
+                ++hits;
+            }
+        }
+    }).detach();
+}
+
 void ArmWriteWatch() {
+    StartTplScan();
     const char* spec = std::getenv("BASARA_WATCH_WRITE");
     if (spec == nullptr || *spec == '\0') return;
     char* end = nullptr;

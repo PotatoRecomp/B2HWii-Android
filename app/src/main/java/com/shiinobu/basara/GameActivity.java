@@ -32,7 +32,8 @@ public final class GameActivity extends SDLActivity
 
     /** The Display menu: aspect, render scale (480 lines per 1x), FPS counter (DisplaySettings). */
     static native void nativeApplyDisplaySettings(int aspect, float renderScale, boolean showFps,
-            boolean dynamicResolution, int overlayItems, boolean frameGraph, boolean thermalControl);
+            boolean dynamicResolution, int overlayItems, boolean frameGraph, boolean thermalControl,
+            int textureFilter);
 
     /** "GPU name\n1|0": the GPU the game draws with and whether its compatibility fixes are on. */
     static native String nativeGraphicsInfo();
@@ -88,6 +89,8 @@ public final class GameActivity extends SDLActivity
             Os.setenv("WIICOMPILED_DATA_DIR", AppFiles.dataDir(this).getAbsolutePath(), true);
             final java.io.File logs = AppFiles.logDir();
             if (logs != null) Os.setenv("BASARA_LOG_DIR", logs.getAbsolutePath(), true);
+            final java.io.File textures = settings.customTextures() ? AppFiles.textureDir() : null;
+            if (textures != null) Os.setenv("BASARA_TEXTURE_DIR", textures.getAbsolutePath(), true);
             try {
                 // For the log's device line: the screen's refresh rate.
                 Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round(getDisplay().getRefreshRate())), true);
@@ -210,7 +213,7 @@ public final class GameActivity extends SDLActivity
             // Back from the Start Menu (Continue): what was changed there applies now.
             nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
                     settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
-                    settings.thermalControl());
+                    settings.thermalControl(), settings.textureFilter());
         }
         applyControlSettings();
         menuPoll.removeCallbacks(pollMenu);

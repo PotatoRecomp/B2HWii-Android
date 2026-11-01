@@ -34,13 +34,13 @@ final class AppSettings {
     /** DeviceProfile has not run yet on this install. */
     boolean needsDeviceProfile() { return !prefs.getBoolean("device_profile_1", false); }
 
-    /** The device profile's picks, for the settings the player never set; runs once. */
     /** GX Thread was on by default for slower phones and flickers: turn it off once on every install. */
     void resetGxThreadOnce() {
         if (prefs.getBoolean("gx_thread_off_1", false)) return;
         prefs.edit().putBoolean("gx_thread_off_1", true).putBoolean("gx_thread", false).commit();
     }
 
+    /** The device profile's picks, for the settings the player never set; runs once. */
     void applyDeviceProfile(float scale, boolean frameskip, boolean gxThread) {
         final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true)
                 .putBoolean("gx_thread_off_1", true);
@@ -75,6 +75,13 @@ final class AppSettings {
     void setFsrFull(boolean full) { prefs.edit().putBoolean("fsr_full", full).commit(); }
     /** The config value: 0 off, 1 light, 2 full. */
     int fsr() { return fsrOn() ? (fsrFull() ? 2 : 1) : 0; }
+
+    /**
+     * Texture Detail for the 3D world: 0 original (as the game asks), 1 sharp (default: the Wii's
+     * mip level even below its resolution + 4x anisotropic), 2 sharpest (16x anisotropic).
+     */
+    int textureFilter() { return Math.max(0, Math.min(2, prefs.getInt("texture_filter", 1))); }
+    void setTextureFilter(int mode) { prefs.edit().putInt("texture_filter", mode).commit(); }
 
     /** Auto Update: opening the app installs the latest GitHub release (off by default). */
     boolean autoUpdate() { return prefs.getBoolean("auto_update", false); }
@@ -122,8 +129,7 @@ final class AppSettings {
     String touchLayout() { return prefs.getString("touch_layout", ""); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
 
-    /** Skip Boot:the logos run at full speed, undrawn, up to the game's save check. */
-    /** Lowers the render resolution while the GPU holds the game back (the chosen one is the ceiling). */
+    /** GX Thread (experimental): GX work on its own thread; read when the game starts. */
     boolean gxThread() { return prefs.getBoolean("gx_thread", false); }
     void setGxThread(boolean on) { prefs.edit().putBoolean("gx_thread", on).commit(); }
     boolean thermalControl() { return prefs.getBoolean("thermal_control", true); }
@@ -147,8 +153,17 @@ final class AppSettings {
     }
     private static Boolean thermalSupported;
 
+    /** Replacement textures (Dolphin-style tex1_*.png) from /sdcard/basara2heroes[-beta]/textures. */
+    boolean customTextures() { return prefs.getBoolean("custom_textures", false); }
+    void setCustomTextures(boolean on) { prefs.edit().putBoolean("custom_textures", on).commit(); }
+    /** With custom textures: every texture the game uses goes to textures/dump, named for its replacement. */
+    boolean dumpTextures() { return prefs.getBoolean("dump_textures", false); }
+    void setDumpTextures(boolean on) { prefs.edit().putBoolean("dump_textures", on).commit(); }
+
+    /** Lowers the render resolution while the GPU holds the game back (the chosen one is the ceiling). */
     boolean dynamicResolution() { return prefs.getBoolean("dynamic_resolution", false); }
     void setDynamicResolution(boolean on) { prefs.edit().putBoolean("dynamic_resolution", on).commit(); }
+    /** Skip Boot: the logos run at full speed, undrawn, up to the game's save check. */
     boolean skipBoot() { return prefs.getBoolean("skip_boot", true); }
     void setSkipBoot(boolean on) { prefs.edit().putBoolean("skip_boot", on).commit(); }
 

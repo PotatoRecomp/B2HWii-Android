@@ -42,6 +42,7 @@ struct RuntimeUserConfig {
     std::optional<bool> gxThread;  // run aurora GX on its own thread (BASARA_GX_THREAD)
     std::optional<bool> thermalControl;  // lower the render lines while the phone runs hot (thermal.h)
     std::optional<bool> skipBoot;  // run the logos at full speed, undrawn, up to the save check
+    std::optional<int32_t> textureFilter;  // 0 as the game asks, 1 sharp, 2 sharpest (aurora_set_texture_filter)
     std::optional<int32_t> fsr;  // 0 off, 1 light sharpen, 2 full FSR1 (picture drawn larger than rendered)
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
@@ -558,6 +559,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     if (auto value = FindConfigInt(document, "video", "fsr"); value && *value >= 0 && *value <= 2) {
         config.fsr = *value;
     }
+    if (auto value = FindConfigInt(document, "video", "texture_filter"); value && *value >= 0 && *value <= 2) {
+        config.textureFilter = *value;
+    }
     config.windowPosX = FindConfigInt(document, "video", "window_x");
     config.windowPosY = FindConfigInt(document, "video", "window_y");
     if (auto value = FindConfigUint(document, "video", "window_width"); value && *value != 0) {
@@ -1037,6 +1041,11 @@ inline bool GxThread() {
 inline bool SkipBoot() {
     if (const char* env = std::getenv("BASARA_SKIP_BOOT"); env && (*env == '0' || *env == '1')) return *env == '1';
     return Get().skipBoot.value_or(false);
+}
+
+inline int32_t TextureFilter() {
+    if (const char* env = std::getenv("BASARA_TEX_FILTER"); env && *env >= '0' && *env <= '2') return *env - '0';
+    return Get().textureFilter.value_or(1);
 }
 
 inline int32_t Fsr() {

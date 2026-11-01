@@ -406,6 +406,10 @@ set(MKW_PGO "off" CACHE STRING "Profile-guided optimization: off, generate or us
 set_property(CACHE MKW_PGO PROPERTY STRINGS off generate use)
 set(MKW_PGO_PROFILE "" CACHE FILEPATH "Merged .profdata for MKW_PGO=use")
 option(MKW_THINLTO "ThinLTO across the translated code and the runtime" OFF)
+# With a profile: cold blocks split out of hot functions (.text.split) and the linker keeps the
+# hot/unlikely/split prefixes as their own groups, so a battle's code sits in a few MB of the
+# ~100 MB library instead of spread over all of it (fewer i-cache and iTLB misses).
+option(MKW_SPLIT_CODE "Hot/cold code layout from the PGO profile (MKW_PGO=use)" ON)
 set(MKW_OPT_TARGETS mkw_runtime_common mkw_base_shared mkw_base_sensitive WiiCompiled)
 if(MKW_PGO STREQUAL "generate")
     set(MKW_PGO_FLAGS -fprofile-generate)
@@ -426,6 +430,8 @@ foreach(target IN LISTS MKW_OPT_TARGETS)
         endif()
         if(MKW_THINLTO)
             target_compile_options(${target} PRIVATE -flto=thin)
+        elseif(MKW_SPLIT_CODE AND MKW_PGO STREQUAL "use")
+            target_compile_options(${target} PRIVATE -fsplit-machine-functions)
         endif()
     endif()
 endforeach()
@@ -437,5 +443,12 @@ if(TARGET WiiCompiled)
         # Every backend job holds a share of a ~1 GB library: all cores at once runs a 16 GB PC dry.
         set(MKW_THINLTO_JOBS 4 CACHE STRING "Parallel ThinLTO backend jobs at link time")
         target_link_options(WiiCompiled PRIVATE -flto=thin "-Wl,--thinlto-jobs=${MKW_THINLTO_JOBS}")
+        if(MKW_SPLIT_CODE AND MKW_PGO STREQUAL "use")
+            # ThinLTO generates code at link time, so the splitter is set on the linker's codegen.
+            target_link_options(WiiCompiled PRIVATE "-Wl,-mllvm,-enable-split-machine-functions")
+        endif()
+    endif()
+    if(MKW_SPLIT_CODE AND MKW_PGO STREQUAL "use")
+        target_link_options(WiiCompiled PRIVATE "-Wl,-z,keep-text-section-prefix")
     endif()
 endif()

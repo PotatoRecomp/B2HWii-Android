@@ -9,6 +9,7 @@
 #include <dolphin/vi.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <mutex>
 
+#include <aurora/aurora.h>
 #include <aurora/gfx.h>
 
 namespace DisplaySettings {
@@ -47,6 +49,8 @@ constexpr double kDynDownWaitMs = 2.0;        // ...or the game waits this long 
 constexpr double kDynDownWaitBusyMs = 13.0;  //    while the worker is at least this busy
 constexpr double kDynUpBusyMs = 11.5;         // predicted worker time at the next step up
 constexpr int kDynUpWindows = 3;              // calm windows in a row before stepping up
+constexpr int kDynUpWindowsMax = 24;          // ...raised up to this while steps up keep bouncing back
+constexpr int kDynBounceWindows = 5;          // a step down this soon after a step up is a bounce
 // While the phone runs hot (Thermal::Hot, ten seconds ahead), at least this step: the GPU shares the
 // SoC's heat budget with the CPU, so fewer pixels keep the CPU clocks up in a long battle.
 constexpr int kDynHotStep = 2;                // 80%
@@ -55,6 +59,8 @@ constexpr double kDynHotBusyMs = 8.0;
 std::atomic<bool> g_dynEnabled{false};
 int g_dynStep = 0;
 int g_dynCalm = 0;
+int g_dynUpNeed = kDynUpWindows;              // calm windows needed now (grows on bounces)
+int g_dynSinceUp = 1 << 20;                   // windows since the last step up
 uint32_t g_dynFrames = 0;
 bool g_dynSkipWindow = true;                  // the window after a resize carries its stall
 AuroraFrameWorkerTotals g_dynLast{};
@@ -136,6 +142,12 @@ bool DynamicResolutionTick() {
     const double waitMs = (now.producerWaitNanos - g_dynLast.producerWaitNanos) / 1e6 / g_dynFrames;
     g_dynLast = now;
     g_dynFrames = 0;
+    if (g_dynSinceUp < (1 << 20)) {
+        ++g_dynSinceUp;
+        if (g_dynSinceUp % 30 == 0 && g_dynUpNeed > kDynUpWindows) {
+            g_dynUpNeed = std::max(g_dynUpNeed / 2, kDynUpWindows);  // the steps up hold again
+        }
+    }
     if (g_dynSkipWindow || cycles == 0) {
         g_dynSkipWindow = false;
         return false;
@@ -155,6 +167,9 @@ bool DynamicResolutionTick() {
     } else if (dynamic && (busyMs > kDynDownBusyMs || (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs))) {
         g_dynCalm = 0;
         step = std::min(step + 1, kDynStepCount - 1);
+        if (step != g_dynStep && g_dynSinceUp <= kDynBounceWindows) {
+            g_dynUpNeed = std::min(g_dynUpNeed * 2, kDynUpWindowsMax);  // the last step up did not hold
+        }
     } else if (hot && step < kDynHotStep && busyMs >= kDynHotBusyMs) {
         g_dynCalm = 0;
         step += 1;
@@ -164,12 +179,16 @@ bool DynamicResolutionTick() {
     } else if (!dynamic) {
         step -= 1;  // hot only: below the heat's step from an earlier dynamic run, back up to it
     } else if (step > 0) {
-        // Render cost follows the pixel count, the square of the line factor.
+        // Predicted worker time one step up. Measured on Mali (G81, ~9,000 draws) the worker grows about
+        // linearly with the line factor, not with the pixel count: most of it is per draw, not per pixel
+        // (50% 8 ms, 100% 16.7 ms). The square kept it at 50% for good (8.2 ms -> 11.8 > 11.5).
         const float ratio = kDynSteps[step - 1] / kDynSteps[step];
-        if (busyMs * ratio * ratio < kDynUpBusyMs && ++g_dynCalm >= kDynUpWindows) {
+        const double predicted = busyMs * ratio;
+        if (predicted < kDynUpBusyMs && ++g_dynCalm >= g_dynUpNeed) {
             g_dynCalm = 0;
             step -= 1;
-        } else if (busyMs * ratio * ratio >= kDynUpBusyMs) {
+            g_dynSinceUp = 0;
+        } else if (predicted >= kDynUpBusyMs) {
             g_dynCalm = 0;
         }
     }
@@ -222,6 +241,20 @@ void Request(const Settings& settings) {
 }
 
 void OnFrameBoundary(uint32_t surfaceWidth, uint32_t surfaceHeight) {
+    // BASARA_TEX_FILTER_FILE=path (test): the digit in that file (0-2) is the Texture Detail mode,
+    // read every 10 frames, so one scene can be compared with and without it.
+    static const char* s_texFilterFile = std::getenv("BASARA_TEX_FILTER_FILE");
+    static uint32_t s_texFilterFrames = 0;
+    if (s_texFilterFile && *s_texFilterFile && ++s_texFilterFrames % 10 == 0) {
+        if (FILE* f = std::fopen(s_texFilterFile, "rb")) {
+            const int c = std::fgetc(f);
+            std::fclose(f);
+            if (c >= '0' && c <= '2' && aurora_get_texture_filter() != c - '0') {
+                aurora_set_texture_filter(c - '0');
+                RT_LOGF(RT_TAG_VI, "texture filter test: mode %d\n", c - '0');
+            }
+        }
+    }
     Settings settings;
     bool renderer = false;
     {

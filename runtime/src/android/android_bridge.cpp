@@ -1,6 +1,8 @@
 // android_bridge.cpp - JNI entry points the Android app (com.shiinobu.basara) calls into libmain.so.
 #if defined(__ANDROID__)
 
+#include <aurora/aurora.h>
+
 #include "display_settings.h"
 #include "host_suspend.h"
 #include "graphics_info.h"
@@ -70,8 +72,9 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetTouchStick
 // widescreen mode only at the next start, since the game reads it at boot.
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyDisplaySettings(
     JNIEnv*, jclass, jint aspect, jfloat renderScale, jboolean showFps, jboolean dynamicResolution,
-    jint overlayItems, jboolean frameGraph, jboolean thermalControl)
+    jint overlayItems, jboolean frameGraph, jboolean thermalControl, jint textureFilter)
 {
+    aurora_set_texture_filter(static_cast<int>(textureFilter));
     Thermal::SetEnabled(thermalControl == JNI_TRUE);
     settings_overlay::SetOverlayItems(static_cast<uint32_t>(overlayItems));
     settings_overlay::SetFrameGraph(frameGraph == JNI_TRUE);

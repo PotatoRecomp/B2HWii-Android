@@ -2305,6 +2305,11 @@ void aurora_set_display_mode(AuroraDisplayMode mode) { aurora::window::set_displ
 AuroraDisplayMode aurora_get_display_mode() { return aurora::window::get_display_mode(); }
 void aurora_set_metalfx_spatial(bool enabled) { aurora::g_metalfxRequested.store(enabled); }
 bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
+namespace aurora::gx {
+extern int g_textureFilterMode;  // shader_info.cpp
+}
+void aurora_set_texture_filter(int mode) { aurora::gx::g_textureFilterMode = std::clamp(mode, 0, 2); }
+int aurora_get_texture_filter() { return aurora::gx::g_textureFilterMode; }
 void aurora_set_fsr(int mode) { aurora::webgpu::fsr::set_mode(mode); }
 int aurora_get_fsr() { return aurora::webgpu::fsr::mode(); }
 bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }

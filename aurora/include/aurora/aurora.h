@@ -102,6 +102,9 @@ typedef struct {
   bool pauseOnFocusLost;
   bool allowTextureReplacements;
   bool allowTextureDumps;
+  // Folder of the replacement textures (dumps go to its "dump" subfolder). Null: <userPath>/texture_replacements
+  // and <cachePath>/texture_dumps.
+  const char* textureRoot;
   bool disableCopyFilter;
   // When false, Aurora centers the first window. When true, windowPosX/Y are restored verbatim,
   // including negative coordinates on monitors left of or above the primary display.
@@ -201,6 +204,10 @@ AuroraMetalFXStatus aurora_get_metalfx_status();
 // 0 off, 1 light (bilinear + RCAS sharpen, one pass), 2 full (EASU upscale + RCAS).
 void aurora_set_fsr(int mode);
 int aurora_get_fsr();
+// Texture Detail for mipmapped (3D world) textures: 0 as the game asks, 1 sharp (the Wii's mip
+// level even when rendering below its resolution + 4x anisotropic), 2 sharpest (+ 16x anisotropic).
+void aurora_set_texture_filter(int mode);
+int aurora_get_texture_filter();
 
 AuroraBackend aurora_get_backend();
 const AuroraBackend* aurora_get_available_backends(size_t* count);

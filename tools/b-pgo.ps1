@@ -11,6 +11,8 @@ param(
     [string[]]$Profraw = @('/sdcard/basara2heroes-beta/libmain.profraw',
         '/sdcard/Android/data/com.shiinobu.basara.beta/files/libmain.profraw'),
     [switch]$NoLto,
+    [int]$Jobs = 6,
+    [int]$TranslatedJobs = 3,
     [string]$Ndk = (Join-Path $env:LOCALAPPDATA 'Android\Sdk\ndk\28.2.13676358')
 )
 $ErrorActionPreference = 'Stop'
@@ -22,9 +24,9 @@ New-Item -ItemType Directory -Force $pgoDir | Out-Null
 
 switch ($Step) {
     'gen' {
-        & $android -Mode configure -BuildDir 'generated\android-build-pgogen' -Extra '-DMKW_PGO=generate'
+        & $android -Mode configure -BuildDir 'generated\android-build-pgogen' -Extra '-DMKW_PGO=generate' -TranslatedJobs $TranslatedJobs
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-        & $android -Mode build -BuildDir 'generated\android-build-pgogen'
+        & $android -Mode build -BuildDir 'generated\android-build-pgogen' -Jobs $Jobs
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         & $android -Mode stage -BuildDir 'generated\android-build-pgogen'
         'Instrumented libmain.so staged; build the APK, play, then: tools\b-pgo.ps1 -Step pull'
@@ -51,12 +53,12 @@ switch ($Step) {
         if (-not (Test-Path $profdata)) { throw "missing $profdata (run -Step pull)" }
         $p = [IO.Path]::GetFullPath($profdata).Replace('\', '/')
         $lto = if ($NoLto) { 'OFF' } else { 'ON' }
-        & $android -Mode configure -Extra @('-DMKW_PGO=use', "-DMKW_PGO_PROFILE=$p", "-DMKW_THINLTO=$lto")
+        & $android -Mode configure -Extra @('-DMKW_PGO=use', "-DMKW_PGO_PROFILE=$p", "-DMKW_THINLTO=$lto") -TranslatedJobs $TranslatedJobs
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         # ninja does not track the .profdata: objects left from an older profile carry another
         # ProfileSummary and ThinLTO refuses to link them with the new ones.
         & (Join-Path $root 'third_party\ninja\ninja.exe') -C (Join-Path $root 'generated\android-build') -t clean | Out-Null
-        & $android -Mode build
+        & $android -Mode build -Jobs $Jobs
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         & $android -Mode stage
     }

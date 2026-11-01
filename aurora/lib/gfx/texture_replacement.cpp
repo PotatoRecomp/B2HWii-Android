@@ -509,8 +509,13 @@ void build_index() noexcept {
   auto userPath = fs_path_from_string(g_config.userPath);
   auto cachePath = fs_path_from_string(g_config.cachePath);
 
-  s_replacementRoot = userPath / "texture_replacements";
-  s_dumpRoot = cachePath / "texture_dumps";
+  if (g_config.textureRoot != nullptr && *g_config.textureRoot != '\0') {
+    s_replacementRoot = fs_path_from_string(g_config.textureRoot);
+    s_dumpRoot = s_replacementRoot / "dump";  // skipped by the index below
+  } else {
+    s_replacementRoot = userPath / "texture_replacements";
+    s_dumpRoot = cachePath / "texture_dumps";
+  }
 
   if (!ensure_directory(s_replacementRoot)) {
     return;
@@ -663,8 +668,10 @@ bool dump_editable_texture_dds(const RuntimeTextureKey& key, const GXTexObj_& ob
     return false;
   }
 
-  const auto path = s_dumpRoot / format_replacement_filename(key);
-  return dds::write_rgba8_dds(path, texWidth, texHeight, pixels.data);
+  // PNG: opens in any image editor, and the index takes .png and .dds under the same name.
+  auto path = s_dumpRoot / format_replacement_filename(key);
+  path.replace_extension(".png");
+  return png::write_rgba8_png(path, texWidth, texHeight, pixels.data.data());
 }
 
 bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noexcept {

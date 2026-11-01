@@ -51,6 +51,16 @@ final class AppFiles {
         return dir.isDirectory() && dir.canWrite() ? dir : null;
     }
 
+    /** Custom textures: <logDir>/textures (dumps in its dump/ folder), or null without "All files access". */
+    static File textureDir() {
+        final File logs = logDir();
+        if (logs == null) return null;
+        final File dir = new File(logs, "textures");
+        //noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        return dir.isDirectory() ? dir : null;
+    }
+
     static File gameDir(Context context) { return new File(dataDir(context), "game"); }
 
     static File runtimeDir(Context context) { return new File(context.getFilesDir(), "runtime"); }
@@ -137,6 +147,7 @@ final class AppFiles {
                 + "gpu_compat = " + settings.gpuCompat() + "\n"
                 + "frameskip = " + (settings.fpsLock30() ? 2 : settings.frameskip() ? 1 : 0) + "\n"
                 + "fsr = " + settings.fsr() + "\n"
+                + "texture_filter = " + settings.textureFilter() + "\n"
                 + "resolution_multiplier = " + String.format(Locale.ROOT, "%.2f", settings.resolutionScale()) + "\n"
                 + "frame_interpolation_fps = 0\n"
                 + "graphics_api = \"auto\"\n"
@@ -151,8 +162,8 @@ final class AppFiles {
                 + "frame_graph = " + settings.frameGraph() + "\n"
                 + "overlay_items = " + settings.overlayItems() + "\n"
                 + "vsync = " + settings.vsync() + "\n"
-                + "texture_replacements = false\n"
-                + "texture_dumps = false\n"
+                + "texture_replacements = " + settings.customTextures() + "\n"
+                + "texture_dumps = " + (settings.customTextures() && settings.dumpTextures()) + "\n"
                 + (hasTable(config, "audio") ? "" : "\n[audio]\n"
                 + "volume = 1.0\n"
                 + "muted = false\n"

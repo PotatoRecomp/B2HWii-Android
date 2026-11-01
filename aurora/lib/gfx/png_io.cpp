@@ -1,6 +1,8 @@
 #include "png_io.hpp"
 
 #include <fstream>
+#include <system_error>
+#include <vector>
 
 #include "dds_io.hpp"
 #include "png.h"
@@ -100,3 +102,42 @@ load_png_file(const std::filesystem::path& path) noexcept {
   };
 }
 }
+namespace aurora::gfx::png {
+bool write_rgba8_png(const std::filesystem::path& path, uint32_t width, uint32_t height, const uint8_t* pixels) noexcept {
+  png_image image{};
+  image.version = PNG_IMAGE_VERSION;
+  image.width = width;
+  image.height = height;
+  image.format = PNG_FORMAT_RGBA;
+  // To memory, then through std::ofstream: wide paths on Windows (png_image_write_to_file takes a narrow one).
+  png_alloc_size_t size = 0;
+  if (!png_image_write_to_memory(&image, nullptr, &size, 0, pixels, 0, nullptr) || size == 0) {
+    png_image_free(&image);
+    return false;
+  }
+  std::vector<uint8_t> bytes(size);
+  if (!png_image_write_to_memory(&image, bytes.data(), &size, 0, pixels, 0, nullptr)) {
+    png_image_free(&image);
+    return false;
+  }
+  auto temp = path;
+  temp += ".tmp";
+  {
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      return false;
+    }
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(size));
+    if (!out) {
+      return false;
+    }
+  }
+  std::error_code ec;
+  std::filesystem::rename(temp, path, ec);
+  if (ec) {
+    std::filesystem::remove(temp, ec);
+    return false;
+  }
+  return true;
+}
+} // namespace aurora::gfx::png

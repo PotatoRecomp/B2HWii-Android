@@ -1506,7 +1506,7 @@ int RuntimeMain(int argc, char** argv) {
                                        << ", display " << (std::getenv("BASARA_DISPLAY_HZ") ? std::getenv("BASARA_DISPLAY_HZ") : "?")
                                        << " Hz" << std::endl;
                 RT_LOG(RT_TAG_RUNTIME) << "settings: frameskip " << RuntimeConfigFile::Frameskip() << ", fsr "
-                                       << RuntimeConfigFile::Fsr() << ", skip boot " << RuntimeConfigFile::SkipBoot() << ", gx thread " << RuntimeConfigFile::GxThread()
+                                       << RuntimeConfigFile::Fsr() << ", texture filter " << RuntimeConfigFile::TextureFilter() << ", skip boot " << RuntimeConfigFile::SkipBoot() << ", gx thread " << RuntimeConfigFile::GxThread()
                                        << ", resolution " << RuntimeConfigFile::Get().resolutionMultiplier.value_or(-1.0f)
                                        << ", dynamic " << RuntimeConfigFile::DynamicResolution()
                                        << ", thermal " << RuntimeConfigFile::ThermalControl()
@@ -1641,12 +1641,18 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.allowTextureReplacements = RuntimeConfigFile::TextureReplacements(false);
         auroraConfig.allowTextureDumps = auroraConfig.allowTextureReplacements &&
                                          RuntimeConfigFile::TextureDumps(false);
+        // Android: /sdcard/basara2heroes[-beta]/textures (GameActivity), so a file manager can fill it.
+        if (const char* textureDir = std::getenv("BASARA_TEXTURE_DIR"); textureDir && *textureDir) {
+            auroraConfig.textureRoot = textureDir;
+        }
         // No vsync knob: aurora always configures a non-blocking present mode.
         auroraConfig.desiredBackend = BACKEND_AUTO;
         // GPU driver workarounds: picked from the graphics adapter unless the player forced them.
         auroraConfig.gpuCompat = static_cast<AuroraGpuCompat>(RuntimeConfigFile::GpuCompat());
         // FSR1 sharpens the picture when it is drawn larger than the game rendered it.
         aurora_set_fsr(RuntimeConfigFile::Fsr());
+        // Texture Detail: the Wii's mip level below native resolution + anisotropic filtering.
+        aurora_set_texture_filter(RuntimeConfigFile::TextureFilter());
         // DisplaySettings applies the viewport policy and render height at the first frame boundary.
         // One table for both directions. RuntimeConfigFile::IsSupportedGraphicsApi
         // whitelists exactly these config names, so an unrecognised value has

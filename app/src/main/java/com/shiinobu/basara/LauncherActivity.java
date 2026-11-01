@@ -2,7 +2,6 @@ package com.shiinobu.basara;
 
 import android.app.Activity;
 import android.app.ActivityManager;
-import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
@@ -68,6 +67,7 @@ public final class LauncherActivity extends Activity {
     private static final String STATE_WAITING_PLAY_ACCESS = "waiting_play_access";
 
     private int endedGame;  // the pid endGame just ended
+    private LinearLayout activeSettings;
     private TextView status;
     private Button play;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -76,6 +76,7 @@ public final class LauncherActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         settings = new AppSettings(this);
+        Tr.init(this);
         DeviceProfile.applyOnce(this, settings);
         // Updates are checked on a fresh start, not when the game sent the player here or is
         // restarting itself into a LAN session.
@@ -84,32 +85,41 @@ public final class LauncherActivity extends Activity {
                 || launch.getBooleanExtra(EXTRA_RESTART_GAME, false));
         final boolean opened = savedInstanceState == null && !asked;
 
-        gameFile = tile("Game File", "", v -> pickDisc());
-        final Tile settingsTile = tile("Settings", "Display and controls", v -> SettingsMenu.show(this));
+        gameFile = tile(Tr.t("Game File"), "", v -> pickDisc());
+        final Tile settingsTile = tile(Tr.t("Settings"), Tr.t("Display, controls, experimental"),
+                v -> SettingsMenu.show(this, this::refresh));
         // Online play isn't ready yet: shown, but off.
-        final Tile devices = tile("Tailscale & LAN Devices", "Coming soon", null);
+        final Tile devices = tile(Tr.t("Tailscale & LAN Devices"), Tr.t("Coming soon"), null);
         devices.view.setClickable(false);
         devices.view.setAlpha(0.4f);
-        autoUpdate = tile("Auto Update", "Update on launch", v -> {
+        autoUpdate = tile(Tr.t("Auto Update"), Tr.t("Update on launch"), v -> {
             settings.setAutoUpdate(!settings.autoUpdate());
             updateAutoUpdateButton();
         });
         updateAutoUpdateButton();
-        skip = tile("Skip Boot", "Skip the logos, straight to the save check", v -> {
+        skip = tile(Tr.t("Skip Boot"), Tr.t("Skip the logos, straight to the save check"), v -> {
             settings.setSkipBoot(!settings.skipBoot());
             updateSkipButton();
         });
         updateSkipButton();
-        updateCheck = tile("Check for Updates", "Installed: " + Updater.installedVersion(this),
+        updateCheck = tile(Tr.t("Check for Updates"), Tr.t("Installed: ") + Updater.displayVersion(this),
                 v -> checkForUpdates(false));
-        final Tile help = tile("Help", "Getting started", v -> showHelp());
+        final Tile help = tile(Tr.t("Help"), Tr.t("Getting started"), v -> showHelp());
+        final Tile notes = tile(Tr.t("What's New"), Tr.t("Features and fixes in each version"),
+                v -> ReleaseNotes.showAll(this));
+
+        if (!BuildConfig.ONLINE_UPDATES) {
+            // Updates are handed out by hand for now: Auto Update is shown, but off.
+            autoUpdate.view.setClickable(false);
+            autoUpdate.view.setAlpha(0.4f);
+        }
 
         final LinearLayout tiles = new LinearLayout(this);
         tiles.setOrientation(LinearLayout.VERTICAL);
-        tiles.addView(tileRow(gameFile), tileRowParams(0));
+        tiles.addView(tileRow(gameFile, help), tileRowParams(0));
         tiles.addView(tileRow(settingsTile, devices), tileRowParams(GAP));
         tiles.addView(tileRow(autoUpdate, skip), tileRowParams(GAP));
-        tiles.addView(tileRow(updateCheck, help), tileRowParams(GAP));
+        tiles.addView(tileRow(updateCheck, notes), tileRowParams(GAP));
         // Fills the height where there's room, and scrolls on a short screen or with a large font.
         final ScrollView tilesScroll = new ScrollView(this);
         tilesScroll.setFillViewport(true);
@@ -137,6 +147,8 @@ public final class LauncherActivity extends Activity {
         if (opened && (settings.autoUpdate() || BuildConfig.BETA)) {
             checkForUpdates(true);
         }
+        // After an install or update: what this version brings, once.
+        if (savedInstanceState == null) main.post(() -> ReleaseNotes.showIfNew(this, settings));
     }
 
     /** The left side: which game this is, whether it's ready, and the one big button. */
@@ -157,11 +169,11 @@ public final class LauncherActivity extends Activity {
         header.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(56)));
         final LinearLayout names = new LinearLayout(this);
         names.setOrientation(LinearLayout.VERTICAL);
-        final TextView title = text("Basara 2 Heroes", 24);
+        final TextView title = text(Tr.t("Basara 2 Heroes"), 24);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.START);
         names.addView(title);
-        final TextView subtitle = text("Wii, recompiled to run natively", 13);
+        final TextView subtitle = text(Tr.t("Wii, recompiled to run natively"), 13);
         subtitle.setGravity(Gravity.START);
         subtitle.setTextColor(MUTED);
         names.addView(subtitle);
@@ -171,6 +183,16 @@ public final class LauncherActivity extends Activity {
         header.addView(names, namesParams);
         hero.addView(header, matchWidth(0));
 
+        final TextView inUse = text(Tr.t("IN USE"), 11);
+        inUse.setGravity(Gravity.START);
+        inUse.setTextColor(FAINT);
+        inUse.setTypeface(Typeface.DEFAULT_BOLD);
+        inUse.setLetterSpacing(0.08f);
+        hero.addView(inUse, matchWidth(dp(16)));
+        activeSettings = new LinearLayout(this);
+        activeSettings.setOrientation(LinearLayout.VERTICAL);
+        hero.addView(activeSettings, matchWidth(dp(4)));
+
         final View space = new View(this);
         hero.addView(space, new LinearLayout.LayoutParams(0, 0, 1f));
 
@@ -179,7 +201,7 @@ public final class LauncherActivity extends Activity {
         status.setCompoundDrawablePadding(dp(10));
         hero.addView(status, matchWidth(0));
 
-        play = button("Play");
+        play = button(Tr.t("Play"));
         play.setOnClickListener(v -> {
             if (settings.betaEnded() != null) {
                 showBetaEnded();
@@ -194,7 +216,7 @@ public final class LauncherActivity extends Activity {
         });
         hero.addView(play, matchWidth(dp(12)));
 
-        final TextView version = text("Basara " + versionText(), 12);
+        final TextView version = text(Tr.t("Basara ") + versionText(), 12);
         version.setTextColor(FAINT);
         hero.addView(version, matchWidth(dp(10)));
         return hero;
@@ -234,7 +256,7 @@ public final class LauncherActivity extends Activity {
     /** Ends a running game (if any) and restarts the app into the launcher, so settings read once at start apply. */
     boolean restartGame() {
         endGame();
-        status.setText("Restarting...");
+        status.setText(Tr.t("Restarting..."));
         final Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
         if (launch == null) return false;
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
@@ -251,7 +273,7 @@ public final class LauncherActivity extends Activity {
             return;
         }
         intent.removeExtra(EXTRA_RESTART_GAME);
-        status.setText("Starting the LAN game...");
+        status.setText(Tr.t("Starting the LAN game..."));
         main.postDelayed(() -> startActivity(new Intent(this, GameActivity.class)), 700);
     }
 
@@ -298,12 +320,12 @@ public final class LauncherActivity extends Activity {
      */
     private boolean requirePlayAccess() {
         if (Environment.isExternalStorageManager()) return true;
-        new AlertDialog.Builder(this).setTitle("Allow file access first")
-                .setMessage("The game writes its log to the "
-                        + (BuildConfig.BETA ? "basara2heroes-beta" : "basara2heroes")
-                        + " folder on your phone's storage, so problems can be reported. Turn on "
-                        + "\"Allow access to manage all files\" for this app, then come back to play.")
-                .setPositiveButton("Open Settings", (d, w) -> {
+        new Sheet(this, Tr.t("Allow file access first"), Tr.t("The game writes its log to the ")
+                + (BuildConfig.BETA ? "basara2heroes-beta" : "basara2heroes")
+                + Tr.t(" folder on your phone's storage, so problems can be reported."))
+                .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
+                .step("2", Tr.t("Come back"), Tr.t("The game starts by itself."))
+                .action(Tr.t("Open Settings"), null, true, false, () -> {
                     waitingPlayAccess = true;
                     try {
                         startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -313,13 +335,40 @@ public final class LauncherActivity extends Activity {
                         try {
                             startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
                         } catch (ActivityNotFoundException ignored) {
-                            Toast.makeText(this, "Open Settings > Apps > special access > All files access",
+                            Toast.makeText(this, Tr.t("Open Settings > Apps > special access > All files access"),
                                     Toast.LENGTH_LONG).show();
                         }
                     }
                 })
-                .setNegativeButton("Cancel", null).show();
+                .action(Tr.t("Cancel"), null, false, false, null)
+                .show();
         return false;
+    }
+
+    /** A short message in the Sheet look, with one button. */
+    private void message(String title, String body) {
+        new Sheet(this, title, body).action(Tr.t("OK"), null, true, false, null).show();
+    }
+
+    /** A determinate progress bar in the accent colour. */
+    private ProgressBar progressBar() {
+        final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(RAISED));
+        bar.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        bar.setMax(1000);
+        return bar;
+    }
+
+    /** A progress bar and a line under it, for a Sheet. */
+    private LinearLayout progressBox(ProgressBar bar, TextView label) {
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(bar, matchWidth(dp(4)));
+        label.setGravity(Gravity.START);
+        label.setTextColor(MUTED);
+        box.addView(label, matchWidth(dp(6)));
+        return box;
     }
 
     @Override
@@ -347,6 +396,14 @@ public final class LauncherActivity extends Activity {
 
     /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
     private void checkForUpdates(boolean automatic) {
+        if (!BuildConfig.ONLINE_UPDATES) {
+            if (!automatic) {
+                message(Tr.t("Updates are sent by hand for now"),
+                        Tr.t("New versions come straight from the developer. Install the new APK over this one; "
+                                + "your settings and saves stay."));
+            }
+            return;
+        }
         if (BuildConfig.BETA) {
             checkBeta(automatic);  // the Beta isn't updated: it ends, and testers move to the release
             return;
@@ -356,7 +413,7 @@ public final class LauncherActivity extends Activity {
         }
         updating = true;
         updateCheck.view.setEnabled(false);
-        updateCheck.name.setText("Checking…");
+        updateCheck.name.setText(Tr.t("Checking…"));
         new Thread(() -> {
             Updater.Release found = null;
             String failure = null;
@@ -370,15 +427,21 @@ public final class LauncherActivity extends Activity {
             main.post(() -> {
                 updating = false;
                 updateCheck.view.setEnabled(true);
-                updateCheck.name.setText("Check for Updates");
+                updateCheck.name.setText(Tr.t("Check for Updates"));
                 final String installed = Updater.installedVersion(this);
                 if (release != null && release.apkUrl != null && Updater.isNewer(release.version, installed)) {
                     startUpdate(release);
                 } else if (!automatic) {
-                    final String message = error != null ? "Couldn't check for updates: " + error
-                            : release == null || release.apkUrl == null ? "The latest release has no Android download."
-                            : "You have the latest version (" + installed + ").";
-                    new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
+                    if (error != null) {
+                        message(Tr.t("Couldn't check for updates"), error);
+                    } else if (release == null || release.apkUrl == null) {
+                        message(Tr.t("No Android download"), Tr.t("The latest release has no Android download."));
+                    } else {
+                        new Sheet(this, Tr.t("You're up to date"), Tr.t("Basara ") + installed + Tr.t(" is the latest version."))
+                                .action(Tr.t("OK"), null, true, false, null)
+                                .action(Tr.t("What's New"), null, false, false, () -> ReleaseNotes.showAll(this))
+                                .show();
+                    }
                 }
             });
         }, "update-check").start();
@@ -386,37 +449,35 @@ public final class LauncherActivity extends Activity {
 
     private void startUpdate(Updater.Release release) {
         if (!Updater.canInstall(this)) {
-            new AlertDialog.Builder(this)
-                    .setTitle("Basara " + release.version + " is available")
-                    .setMessage("To install updates, let Basara install apps: turn on Allow from this source "
-                            + "on the next screen, then come back here.")
-                    .setPositiveButton("Open Settings", (d, w) -> {
+            new Sheet(this, Tr.t("Basara ") + release.version + Tr.t(" is available"),
+                    Tr.t("To install updates, let Basara install apps."))
+                    .step("1", Tr.t("Open Settings"), Tr.t("Turn on Allow from this source."))
+                    .step("2", Tr.t("Come back"), Tr.t("The update carries on by itself."))
+                    .action(Tr.t("Open Settings"), null, true, false, () -> {
                         waitingUpdate = release;
                         startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                 Uri.parse("package:" + getPackageName())));
                     })
-                    .setNegativeButton("Not Now", null)
+                    .action(Tr.t("Not Now"), null, false, false, null)
                     .show();
             return;
         }
-        final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        final TextView label = text("Downloading…", 14);
-        final LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(24), dp(16), dp(24), dp(8));
-        box.addView(bar);
-        box.addView(label);
-        final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Updating to Basara " + release.version).setView(box).setCancelable(false).show();
+        final ProgressBar bar = progressBar();
+        bar.setIndeterminate(true);
+        final TextView label = text(Tr.t("Downloading…"), 14);
+        final Sheet sheet = new Sheet(this, Tr.t("Updating to Basara ") + release.version,
+                Tr.t("Your saves and settings stay."))
+                .view(progressBox(bar, label))
+                .cancelable(false);
+        sheet.show();
         new Thread(() -> {
             String failure = null;
             try {
                 Updater.downloadAndInstall(getApplicationContext(), release, (done, total) -> main.post(() -> {
                     bar.setIndeterminate(total <= 0);
                     if (total > 0) {
-                        bar.setMax(1000);
                         bar.setProgress((int) (done * 1000 / total));
-                        label.setText(String.format(Locale.US, "Downloading… %d of %d MB",
+                        label.setText(String.format(Locale.US, Tr.t("Downloading… %d of %d MB"),
                                 done >> 20, total >> 20));
                     }
                 }));
@@ -425,18 +486,17 @@ public final class LauncherActivity extends Activity {
             }
             final String error = failure;
             main.post(() -> {
-                dialog.dismiss();
+                sheet.dismiss();
                 if (error != null) {
-                    new AlertDialog.Builder(this).setMessage("The update failed: " + error)
-                            .setPositiveButton("OK", null).show();
+                    message(Tr.t("The update failed"), error);
                 } else {
-                    status.setText("Installing Basara " + release.version + "…");
+                    status.setText(Tr.t("Installing Basara ") + release.version + "…");
                 }
             });
         }, "update-download").start();
     }
 
-    // --- Beta ----------------------------------------------------------------------------------
+        // --- Beta ----------------------------------------------------------------------------------
 
     /** Beta: may it still run (BetaGate)? `automatic`: at app start, quiet unless it has ended. */
     private void checkBeta(boolean automatic) {
@@ -445,51 +505,64 @@ public final class LauncherActivity extends Activity {
         }
         updating = true;
         updateCheck.view.setEnabled(false);
-        updateCheck.name.setText("Checking…");
+        updateCheck.name.setText(Tr.t("Checking…"));
         new Thread(() -> {
             String ended = null;
             String failure = null;
+            Updater.Release found = null;
             try {
                 ended = BetaGate.check();
+                if (ended == null) found = Updater.latestBeta();
             } catch (Exception e) {
                 failure = e.getMessage();
             }
             final String reason = ended;
             final String error = failure;
+            final Updater.Release beta = found;
             main.post(() -> {
                 updating = false;
                 updateCheck.view.setEnabled(true);
-                updateCheck.name.setText("Check for Updates");
+                updateCheck.name.setText(Tr.t("Check for Updates"));
                 if (reason != null) {
                     settings.setBetaEnded(reason);
                     showBetaEnded();
+                } else if (beta != null && beta.beta > Updater.installedBeta(this)) {
+                    // Every Beta updates itself, at start and from Check for Updates.
+                    startUpdate(beta);
                 } else if (!automatic) {
-                    final String message = error != null ? "Couldn't check for updates: " + error
-                            : "This Beta is still open. Thanks for testing!";
-                    new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
+                    if (error != null) {
+                        message(Tr.t("Couldn't check for updates"), error);
+                    } else {
+                        new Sheet(this, Tr.t("You're up to date"), "Basara " + Updater.displayVersion(this)
+                                + Tr.t(" is the latest Beta. Thanks for testing!"))
+                                .action(Tr.t("OK"), null, true, false, null)
+                                .action(Tr.t("What's New"), null, false, false, () -> ReleaseNotes.showAll(this))
+                                .show();
+                    }
                 }
             });
         }, "beta-check").start();
     }
 
-    private AlertDialog betaEndedDialog;
+    private boolean betaEndedShowing;
 
     /** Beta, once it has ended: the only way on is the release. Shown again each time the app returns. */
     private void showBetaEnded() {
         final String reason = settings.betaEnded();
-        if (reason == null || (betaEndedDialog != null && betaEndedDialog.isShowing())) {
+        if (reason == null || betaEndedShowing) {
             return;
         }
-        betaEndedDialog = new AlertDialog.Builder(this)
-                .setTitle("The Beta has ended")
-                .setMessage(reason + "\n\nThanks for testing! Download Basara " + BetaGate.RELEASE_VERSION
-                        + " or later from the project's Releases page. It installs as its own app: load your "
-                        + "disc there again, then uninstall this Beta.")
-                .setCancelable(false)
-                .setPositiveButton("Download", (d, w) -> openWeb(PROJECT_URL + "/releases/latest"))
-                .setNegativeButton("Uninstall Beta", (d, w) -> startActivity(new Intent(
+        betaEndedShowing = true;
+        new Sheet(this, Tr.t("The Beta has ended"), reason)
+                .paragraph(Tr.t("Thanks for testing! Download Basara ") + BetaGate.RELEASE_VERSION
+                        + Tr.t(" or later from the project's Releases page. It installs as its own app: load your "
+                        + "disc there again, then uninstall this Beta."))
+                .cancelable(false)
+                .action(Tr.t("Download"), null, true, false, () -> openWeb(PROJECT_URL + "/releases/latest"))
+                .action(Tr.t("Uninstall Beta"), null, false, true, () -> startActivity(new Intent(
                         Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))))
-                .setNeutralButton("Close", (d, w) -> finish())
+                .action(Tr.t("Close"), null, false, false, this::finish)
+                .onDismiss(() -> betaEndedShowing = false)
                 .show();
     }
 
@@ -502,37 +575,73 @@ public final class LauncherActivity extends Activity {
         final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
         final boolean ready = present && problem == null;
         if (!present) {
-            showStatus("No game loaded yet", AMBER);
+            showStatus(Tr.t("No game loaded yet"), AMBER);
         } else if (problem != null) {
-            showStatus("The game can't be played. " + problem, ACCENT);
+            showStatus(Tr.t("The game can't be played. ") + problem, ACCENT);
         } else {
-            showStatus("Ready to play", GREEN);
+            showStatus(Tr.t("Ready to play"), GREEN);
         }
-        play.setText(ready ? (gameProcess() != 0 ? "Continue" : "Play") : "Choose Game File");
-        gameFile.about.setText(ready ? "Loaded (RBSJ08)"
-                : "Your ISO or RVZ (RBSJ08)");
-        showAction(gameFile.pill, ready ? "Change" : "Choose");
+        play.setText(ready ? (gameProcess() != 0 ? Tr.t("Continue") : Tr.t("Play")) : Tr.t("Choose Game File"));
+        gameFile.about.setText(ready ? Tr.t("Loaded (RBSJ08)")
+                : Tr.t("Your ISO or RVZ (RBSJ08)"));
+        showAction(gameFile.pill, ready ? Tr.t("Change") : Tr.t("Choose"));
+        showActiveSettings();
+    }
+
+    /** The left panel's summary of the settings in use, with the experimental ones on their own line. */
+    private void showActiveSettings() {
+        if (activeSettings == null) return;
+        settings = new AppSettings(this);  // the settings screen and the game write the same file
+        activeSettings.removeAllViews();
+        final String[] aspects = {"4:3", "16:9", Tr.t("Fill")};
+        final String[] fsr = {Tr.t("FSR Off"), Tr.t("FSR Light"), Tr.t("FSR Full")};
+        final String[] detail = {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")};
+        settingLine(AppSettings.resolutionLabel(settings.resolutionScale()) + "  ·  "
+                + aspects[Math.max(0, Math.min(2, settings.aspectMode()))] + "  ·  " + fsr[settings.fsr()], Color.WHITE);
+        settingLine((settings.fpsLock30() ? Tr.t("30 FPS Lock") : Tr.t("Frameskip ") + (settings.frameskip() ? Tr.t("Auto") : Tr.t("Off")))
+                + Tr.t("  ·  V-Sync ") + (settings.vsync() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Textures ")
+                + detail[settings.textureFilter()], MUTED);
+        settingLine(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Overlay ")
+                + (settings.showFps() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Thermal ") + (settings.thermalControl() ? Tr.t("On") : Tr.t("Off")),
+                MUTED);
+        final java.util.List<String> experimental = new java.util.ArrayList<>();
+        if (settings.hdTextures() != 0) experimental.add(Tr.t("HD Textures"));
+        if (settings.gxThread()) experimental.add(Tr.t("GX Thread"));
+        if (settings.dynamicResolution()) experimental.add(Tr.t("Dynamic Resolution"));
+        if (settings.customTextures()) experimental.add(settings.dumpTextures() ? Tr.t("Custom + Dump Textures") : Tr.t("Custom Textures"));
+        if (settings.textureKeyReport()) experimental.add(Tr.t("Texture Keys"));
+        if (!experimental.isEmpty()) {
+            settingLine(Tr.t("⚠  Experimental: ") + String.join(", ", experimental), Sheet.WARNING_TEXT);
+        }
+    }
+
+    private void settingLine(String value, int color) {
+        final TextView line = text(value, 12);
+        line.setGravity(Gravity.START);
+        line.setTextColor(color);
+        line.setPadding(0, dp(2), 0, 0);
+        activeSettings.addView(line, matchWidth(0));
     }
 
     /** Getting Started. */
     private void showHelp() {
-        new Sheet(this, "Getting Started", "Three steps from your disc to the battlefield.")
-                .step("1", "Copy your game to the phone",
-                        "An ISO or RVZ of your own Sengoku Basara 2 Heroes disc (Japan, RBSJ08), e.g. in Download.")
-                .step("2", "Tap Game File and choose it",
-                        "It is unpacked once (about 4 GB free needed). Afterwards you can delete the ISO or RVZ.")
-                .step("3", "Tap Play",
-                        "Swipe Back while playing for the menu: Start Menu, Edit Controls Layout or Quit Game.")
-                .heading("Tips")
-                .step("?", "Slow or choppy?",
-                        "Settings > Display: a lower Render Resolution. Settings > Performance: Frameskip Auto.")
-                .step("?", "Turning the camera",
-                        "Drag on the empty right side of the screen, or use the right stick.")
-                .step("?", "Saving",
-                        "Save from the game's own menu (各種設定 > セーブ). Your saves stay when the app updates.")
-                .note("Basara " + versionText())
-                .action("Got it", null, true, false, null)
-                .action("Project page on GitHub", null, false, false, () -> openWeb(PROJECT_URL))
+        new Sheet(this, Tr.t("Getting Started"), Tr.t("Three steps from your disc to the battlefield."))
+                .step("1", Tr.t("Copy your game to the phone"),
+                        Tr.t("An ISO or RVZ of your own Sengoku Basara 2 Heroes disc (Japan, RBSJ08), e.g. in Download."))
+                .step("2", Tr.t("Tap Game File and choose it"),
+                        Tr.t("It is unpacked once (about 4 GB free needed). Afterwards you can delete the ISO or RVZ."))
+                .step("3", Tr.t("Tap Play"),
+                        Tr.t("Swipe Back while playing for the menu: Start Menu, Edit Controls Layout or Quit Game."))
+                .heading(Tr.t("Tips"))
+                .step("?", Tr.t("Slow or choppy?"),
+                        Tr.t("Settings > Display: a lower Render Resolution. Settings > Performance: Frameskip Auto."))
+                .step("?", Tr.t("Turning the camera"),
+                        Tr.t("Drag on the empty right side of the screen, or use the right stick."))
+                .step("?", Tr.t("Saving"),
+                        Tr.t("Save from the game's own menu (各種設定 > セーブ). Your saves stay when the app updates."))
+                .note(Tr.t("Basara ") + versionText())
+                .action(Tr.t("Got it"), null, true, false, null)
+                .action(Tr.t("Project page on GitHub"), null, false, false, () -> openWeb(PROJECT_URL))
                 .show();
     }
 
@@ -552,14 +661,14 @@ public final class LauncherActivity extends Activity {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
         } catch (ActivityNotFoundException e) {
-            new AlertDialog.Builder(this).setMessage(url).setPositiveButton("OK", null).show();
+            message(Tr.t("Open this page in a browser"), url);
         }
     }
 
     private String versionText() {
         try {
             final PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-            return info.versionName + " · Build " + info.getLongVersionCode();
+            return BuildConfig.BETA ? info.versionName + " · Beta " + info.getLongVersionCode() : info.versionName;
         } catch (PackageManager.NameNotFoundException e) {
             return "";
         }
@@ -577,10 +686,10 @@ public final class LauncherActivity extends Activity {
             browseDisc();
             return;
         }
-        new AlertDialog.Builder(this).setTitle("Allow file access")
-                .setMessage("To list the folders on this phone and find your ISO or RVZ, turn on "
-                        + "\"Allow access to manage all files\" for this app, then come back.")
-                .setPositiveButton("Open Settings", (d, w) -> {
+        new Sheet(this, Tr.t("Allow file access"), Tr.t("To list the folders on this phone and find your ISO or RVZ."))
+                .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
+                .step("2", Tr.t("Come back"), Tr.t("The file browser opens by itself."))
+                .action(Tr.t("Open Settings"), null, true, false, () -> {
                     waitingFileAccess = true;
                     try {
                         startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
@@ -590,8 +699,10 @@ public final class LauncherActivity extends Activity {
                         pickWithSystem();
                     }
                 })
-                .setNeutralButton("Use System Picker", (d, w) -> pickWithSystem())
-                .setNegativeButton("Cancel", null).show();
+                .action(Tr.t("Use System Picker"), Tr.t("The phone's own file picker, without the permission"), false, false,
+                        this::pickWithSystem)
+                .action(Tr.t("Cancel"), null, false, false, null)
+                .show();
     }
 
     private void browseDisc() {
@@ -621,24 +732,20 @@ public final class LauncherActivity extends Activity {
     }
 
     private void loadGame(Uri disc) {
-        final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        final ProgressBar bar = progressBar();
         bar.setIndeterminate(true);
-        final TextView label = text("Looking at the game file…", 14);
-        final LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(24), dp(16), dp(24), dp(8));
-        box.addView(bar);
-        box.addView(label);
-        final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Loading your game").setView(box).setCancelable(false)
-                .setNegativeButton("Cancel", null).show();
+        final TextView label = text(Tr.t("Looking at the game file…"), 14);
         final AtomicBoolean cancel = new AtomicBoolean();
-        // Set here rather than in the builder, or the button would close the dialog while the work goes on.
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+        final Sheet dialog = new Sheet(this, Tr.t("Loading your game"),
+                Tr.t("Unpacked once, about 4 GB. Keep the app open until it is done."))
+                .view(progressBox(bar, label))
+                .cancelable(false);
+        dialog.actionStay(Tr.t("Cancel"), true, name -> {
             cancel.set(true);
-            v.setEnabled(false);
-            label.setText("Stopping…");
+            name.setText(Tr.t("Stopping…"));
+            label.setText(Tr.t("Stopping…"));
         });
+        dialog.show();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         new Thread(() -> {
@@ -650,9 +757,8 @@ public final class LauncherActivity extends Activity {
                             return;
                         }
                         bar.setIndeterminate(false);
-                        bar.setMax(1000);
                         bar.setProgress((int) (done * 1000 / Math.max(total, 1)));
-                        label.setText(String.format(Locale.ROOT, "%.1f of %.1f GB",
+                        label.setText(String.format(Locale.ROOT, Tr.t("%.1f of %.1f GB"),
                                 done / (double) (1 << 30), total / (double) (1 << 30)));
                     });
                     return !cancel.get();
@@ -667,9 +773,7 @@ public final class LauncherActivity extends Activity {
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 refresh();
                 if (failure != null && !failure.equals(DiscImport.CANCELLED)) {
-                    new AlertDialog.Builder(this).setTitle("Couldn't load the game")
-                            .setMessage(failure + "\n\nNothing was changed.")
-                            .setPositiveButton("OK", null).show();
+                    message(Tr.t("Couldn't load the game"), failure + Tr.t("\n\nNothing was changed."));
                 }
             });
         }, "game-import").start();
@@ -680,12 +784,12 @@ public final class LauncherActivity extends Activity {
     /** Into the staging folder, checked, then swapped in; saves stay. Null, or what went wrong. */
     private String unpack(Uri disc, DiscImport.Listener listener) throws IOException {
         try (ParcelFileDescriptor file = getContentResolver().openFileDescriptor(disc, "r")) {
-            if (file == null) throw new IOException("Couldn't open that file.");
+            if (file == null) throw new IOException(Tr.t("Couldn't open that file."));
             final String problem = AppFiles.headerProblem(DiscImport.readHeader(file.getFd()));
             if (problem != null) return problem;
             final File staging = stagingDir();
             AppFiles.deleteRecursively(staging);
-            if (!staging.mkdirs()) throw new IOException("Couldn't create " + staging);
+            if (!staging.mkdirs()) throw new IOException(Tr.t("Couldn't create ") + staging);
             final String failure = DiscImport.extract(file.getFd(), staging.getPath(),
                     AppFiles.dataDir(this).getUsableSpace(), listener);
             final String result = failure != null ? failure : install(staging);
@@ -700,7 +804,7 @@ public final class LauncherActivity extends Activity {
         if (problem != null) return problem;
         final File game = AppFiles.gameDir(this);
         AppFiles.deleteRecursively(game);
-        if (!root.renameTo(game)) throw new IOException("Couldn't move the game into place.");
+        if (!root.renameTo(game)) throw new IOException(Tr.t("Couldn't move the game into place."));
         return null;
     }
 
@@ -729,6 +833,7 @@ public final class LauncherActivity extends Activity {
     static final int ACCENT = Color.rgb(229, 57, 53);
     static final int HERO_GLOW = Color.rgb(84, 24, 26);
     static final int SURFACE = Color.rgb(24, 31, 38);
+    static final int BACKGROUND = Color.rgb(16, 20, 24);
     static final int RAISED = Color.rgb(38, 48, 58);
     static final int MUTED = Color.rgb(170, 178, 186);
     static final int FAINT = Color.rgb(120, 128, 136);
@@ -835,7 +940,7 @@ public final class LauncherActivity extends Activity {
 
     private void showToggle(TextView pill, boolean on) {
         pill.setVisibility(View.VISIBLE);
-        pill.setText(on ? "On" : "Off");
+        pill.setText(on ? Tr.t("On") : Tr.t("Off"));
         pill.setTextColor(on ? Color.WHITE : MUTED);
         showPill(pill, on ? ACCENT : RAISED);
     }

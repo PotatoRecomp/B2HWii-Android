@@ -57,6 +57,9 @@ struct RuntimeUserConfig {
     std::optional<bool> disableCopyFilter;
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
+    std::optional<int32_t> hdTextures;     // [video] hd_textures: 0 off, 1 live upscale (experimental)
+    std::optional<uint32_t> hdCacheMb;     // [video] hd_cache_mb: disk budget of the HD texture cache
+    std::optional<bool> textureKeyReport;  // [video] texture_key_report: log each texture's replacement name
     std::optional<bool> showFps;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
@@ -611,6 +614,11 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
+    if (auto value = FindConfigInt(document, "video", "hd_textures"); value && *value >= 0 && *value <= 1) {
+        config.hdTextures = *value;
+    }
+    config.hdCacheMb = FindConfigUint(document, "video", "hd_cache_mb");
+    config.textureKeyReport = FindConfigValue<bool>(document, "video", "texture_key_report");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
         value && (*value & ~0x10u) == 0) {
         config.disabledPostProcessingPaths = *value & 0x10u;
@@ -1211,6 +1219,18 @@ inline bool TextureReplacements(bool fallback = false) {
 // gates it on TextureReplacements() as well.
 inline bool TextureDumps(bool fallback = false) {
     return Get().textureDumps.value_or(fallback);
+}
+
+inline int HdTextures() {
+    return Get().hdTextures.value_or(0);
+}
+
+inline uint32_t HdCacheMb() {
+    return Get().hdCacheMb.value_or(1024);
+}
+
+inline bool TextureKeyReport() {
+    return Get().textureKeyReport.value_or(false);
 }
 
 inline uint32_t DisabledPostProcessingPaths(uint32_t fallback = 0) {

@@ -61,6 +61,25 @@ final class AppFiles {
         return dir.isDirectory() ? dir : null;
     }
 
+    /** HD Textures' upscaled textures: <logDir>/hd-cache, or null without "All files access". */
+    static File hdCacheDir() {
+        final File logs = logDir();
+        if (logs == null) return null;
+        final File dir = new File(logs, "hd-cache");
+        //noinspection ResultOfMethodCallIgnored
+        dir.mkdirs();
+        return dir.isDirectory() ? dir : null;
+    }
+
+    /** Bytes in a folder and everything under it. */
+    static long folderSize(File dir) {
+        final File[] children = dir == null ? null : dir.listFiles();
+        if (children == null) return 0;
+        long total = 0;
+        for (File child : children) total += child.isDirectory() ? folderSize(child) : child.length();
+        return total;
+    }
+
     static File gameDir(Context context) { return new File(dataDir(context), "game"); }
 
     static File runtimeDir(Context context) { return new File(context.getFilesDir(), "runtime"); }
@@ -164,6 +183,9 @@ final class AppFiles {
                 + "vsync = " + settings.vsync() + "\n"
                 + "texture_replacements = " + settings.customTextures() + "\n"
                 + "texture_dumps = " + (settings.customTextures() && settings.dumpTextures()) + "\n"
+                + "hd_textures = " + settings.hdTextures() + "\n"
+                + "hd_cache_mb = " + settings.hdCacheMb() + "\n"
+                + "texture_key_report = " + settings.textureKeyReport() + "\n"
                 + (hasTable(config, "audio") ? "" : "\n[audio]\n"
                 + "volume = 1.0\n"
                 + "muted = false\n"

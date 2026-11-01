@@ -1510,6 +1510,7 @@ int RuntimeMain(int argc, char** argv) {
                                        << ", resolution " << RuntimeConfigFile::Get().resolutionMultiplier.value_or(-1.0f)
                                        << ", dynamic " << RuntimeConfigFile::DynamicResolution()
                                        << ", thermal " << RuntimeConfigFile::ThermalControl()
+                                       << ", hd textures " << RuntimeConfigFile::HdTextures() << ", texture keys " << RuntimeConfigFile::TextureKeyReport()
                                        << ", vsync " << RuntimeConfigFile::VSync(true) << ", gpu compat "
                                        << RuntimeConfigFile::GpuCompat() << std::endl;
             }
@@ -1638,12 +1639,21 @@ int RuntimeMain(int argc, char** argv) {
         // once during aurora_initialize, so both knobs only take effect on the next launch.
         // Dumps name each unmatched texture the way its replacement would have to be named,
         // which is only useful while the index is live - hence the conjunction.
-        auroraConfig.allowTextureReplacements = RuntimeConfigFile::TextureReplacements(false);
-        auroraConfig.allowTextureDumps = auroraConfig.allowTextureReplacements &&
+        // HD Textures and the texture key report both work through the replacement index.
+        auroraConfig.hdTextureMode = static_cast<uint8_t>(RuntimeConfigFile::HdTextures());
+        auroraConfig.hdCacheMegabytes = RuntimeConfigFile::HdCacheMb();
+        auroraConfig.reportTextureKeys = RuntimeConfigFile::TextureKeyReport();
+        auroraConfig.allowTextureReplacements = RuntimeConfigFile::TextureReplacements(false) ||
+                                                auroraConfig.hdTextureMode != 0 ||
+                                                auroraConfig.reportTextureKeys;
+        auroraConfig.allowTextureDumps = RuntimeConfigFile::TextureReplacements(false) &&
                                          RuntimeConfigFile::TextureDumps(false);
         // Android: /sdcard/basara2heroes[-beta]/textures (GameActivity), so a file manager can fill it.
         if (const char* textureDir = std::getenv("BASARA_TEXTURE_DIR"); textureDir && *textureDir) {
             auroraConfig.textureRoot = textureDir;
+        }
+        if (const char* hdDir = std::getenv("BASARA_HD_CACHE_DIR"); hdDir && *hdDir) {
+            auroraConfig.hdCacheRoot = hdDir;
         }
         // No vsync knob: aurora always configures a non-blocking present mode.
         auroraConfig.desiredBackend = BACKEND_AUTO;

@@ -105,6 +105,16 @@ typedef struct {
   // Folder of the replacement textures (dumps go to its "dump" subfolder). Null: <userPath>/texture_replacements
   // and <cachePath>/texture_dumps.
   const char* textureRoot;
+  // HD Textures (experimental): 0 off, 1 live (each texture the game uses is upscaled 2x on a
+  // background thread and saved to <textureRoot>/hd-cache, used from then on). Needs
+  // allowTextureReplacements.
+  uint8_t hdTextureMode;
+  // Folder of the HD cache (null: <textureRoot>/hd-cache). Indexed with the replacements.
+  const char* hdCacheRoot;
+  // Disk budget of hd-cache in MB (0: 1024); no new textures are made once it is full.
+  uint32_t hdCacheMegabytes;
+  // Log the replacement name of each texture the game uses, once (for matching packs to the game).
+  bool reportTextureKeys;
   bool disableCopyFilter;
   // When false, Aurora centers the first window. When true, windowPosX/Y are restored verbatim,
   // including negative coordinates on monitors left of or above the primary display.

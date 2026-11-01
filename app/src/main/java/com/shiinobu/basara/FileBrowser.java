@@ -1,19 +1,18 @@
 package com.shiinobu.basara;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Environment;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
@@ -23,26 +22,22 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * A plain file explorer for choosing the game file, like a phone's own file manager: folders first,
- * then the ISO and RVZ files with their sizes. It reads the storage directly, so it needs "All files
- * access" (Environment.isExternalStorageManager); LauncherActivity asks for it first.
+ * A plain file explorer for choosing the game file, in the launcher's card style: folders first, then
+ * the ISO and RVZ files with their sizes. It reads the storage directly, so it needs "All files access"
+ * (Environment.isExternalStorageManager); LauncherActivity asks for it first.
  */
 final class FileBrowser {
     interface Listener { void onChosen(File file); }
 
-    private static final int MUTED = Color.rgb(170, 178, 186);
-    private static final int RAISED = Color.rgb(38, 48, 58);
-    private static final int FOLDER = Color.rgb(255, 183, 77);
-    private static final int GAME = Color.rgb(102, 187, 106);
+    private static final int FOLDER = LauncherActivity.AMBER;
+    private static final int GAME = LauncherActivity.GREEN;
 
     private final Activity activity;
     private final Listener listener;
     private final List<File> roots = new ArrayList<>();
     private final LinearLayout list;
     private final TextView path;
-    private final ScrollView scroll;
-    private final AlertDialog dialog;
-    private File current;  // null: the list of storage volumes
+    private final Sheet sheet;
 
     private FileBrowser(Activity activity, File start, Listener listener) {
         this.activity = activity;
@@ -54,25 +49,26 @@ final class FileBrowser {
         }
         if (roots.isEmpty()) roots.add(Environment.getExternalStorageDirectory());
 
-        path = new TextView(activity);
-        path.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        path.setTextColor(MUTED);
-        path.setSingleLine(true);
-        path.setEllipsize(TextUtils.TruncateAt.START);
-        path.setPadding(dp(24), dp(4), dp(24), dp(8));
-        list = new LinearLayout(activity);
-        list.setOrientation(LinearLayout.VERTICAL);
-        scroll = new ScrollView(activity);
-        scroll.addView(list);
         final LinearLayout column = new LinearLayout(activity);
         column.setOrientation(LinearLayout.VERTICAL);
+        path = text("", 13, LauncherActivity.MUTED);
+        path.setSingleLine(true);
+        path.setEllipsize(TextUtils.TruncateAt.START);
+        path.setPadding(dp(14), dp(8), dp(14), dp(8));
+        path.setBackground(rounded(LauncherActivity.BACKGROUND, dp(14)));
         column.addView(path);
-        column.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        list = new LinearLayout(activity);
+        list.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        listParams.topMargin = dp(4);
+        column.addView(list, listParams);
 
-        dialog = new AlertDialog.Builder(activity).setTitle("Choose your ISO or RVZ").setView(column)
-                .setNegativeButton("Cancel", null).create();
+        sheet = new Sheet(activity, Tr.t("Choose your game file"), Tr.t("An ISO or RVZ of your own disc (RBSJ08)."))
+                .view(column)
+                .action(Tr.t("Cancel"), null, false, false, null);
         open(start != null && start.isDirectory() ? start : null);
-        dialog.show();
+        sheet.show();
     }
 
     /** Opens on `start` (a folder), or the storage list when it is null. */
@@ -85,16 +81,16 @@ final class FileBrowser {
     }
 
     private void open(File dir) {
-        current = dir;
         list.removeAllViews();
+        if (sheet != null) sheet.scrollToTop();
         if (dir == null) {
-            path.setText("Storage");
+            path.setText(Tr.t("Storage"));
             for (File root : roots) {
-                row(volumeName(root), null, FOLDER, () -> open(root));
+                row("▸", volumeName(root), null, FOLDER, () -> open(root));
             }
         } else {
             path.setText(dir.getPath());
-            row("←  Up", null, MUTED, () -> open(isRoot(dir) ? null : dir.getParentFile()));
+            row("‹", Tr.t("Up"), null, LauncherActivity.MUTED, () -> open(isRoot(dir) ? null : dir.getParentFile()));
             final File[] children = dir.listFiles();
             final List<File> folders = new ArrayList<>(), games = new ArrayList<>();
             if (children != null) {
@@ -105,22 +101,22 @@ final class FileBrowser {
                     else if (isGameFile(child)) games.add(child);
                 }
             }
-            for (File folder : folders) {
-                row(folder.getName(), null, FOLDER, () -> open(folder));
-            }
+            // Game files first: they are what the player came for.
             for (File game : games) {
-                row(game.getName(), size(game.length()), GAME, () -> {
-                    dialog.dismiss();
+                row("●", game.getName(), size(game.length()), GAME, () -> {
+                    sheet.dismiss();
                     listener.onChosen(game);
                 });
             }
+            for (File folder : folders) {
+                row("▸", folder.getName(), null, FOLDER, () -> open(folder));
+            }
             if (folders.isEmpty() && games.isEmpty()) {
-                final TextView empty = text("No folders or ISO / RVZ files here.", 14, MUTED);
-                empty.setPadding(dp(24), dp(16), dp(24), dp(16));
+                final TextView empty = text(Tr.t("No folders or ISO / RVZ files here."), 14, LauncherActivity.MUTED);
+                empty.setPadding(dp(14), dp(16), dp(14), dp(8));
                 list.addView(empty);
             }
         }
-        scroll.scrollTo(0, 0);
     }
 
     private boolean isRoot(File dir) {
@@ -131,7 +127,7 @@ final class FileBrowser {
     }
 
     private String volumeName(File root) {
-        return root.equals(Environment.getExternalStorageDirectory()) ? "Phone storage" : "SD card (" + root.getName() + ")";
+        return root.equals(Environment.getExternalStorageDirectory()) ? Tr.t("Phone storage") : Tr.t("SD card (") + root.getName() + ")";
     }
 
     static boolean isGameFile(File file) {
@@ -139,37 +135,49 @@ final class FileBrowser {
         return name.endsWith(".iso") || name.endsWith(".rvz");
     }
 
-    private void row(String title, String detail, int color, Runnable action) {
+    /** A rounded row: a coloured mark, the name, and on the right the size of a game file. */
+    private void row(String mark, String title, String detail, int color, Runnable action) {
         final LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(24), dp(12), dp(24), dp(12));
+        row.setPadding(dp(14), dp(10), dp(14), dp(10));
         row.setMinimumHeight(dp(52));
-        final TypedValue ripple = new TypedValue();
-        activity.getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
-        row.setBackgroundResource(ripple.resourceId);
+        row.setBackground(rounded(LauncherActivity.RAISED, dp(16)));
+        row.setClickable(true);
         row.setOnClickListener(v -> action.run());
-        final TextView name = text(title, 16, color == MUTED ? MUTED : Color.WHITE);
+        final TextView badge = text(mark, 15, color == GAME ? Color.WHITE : color);
+        badge.setGravity(Gravity.CENTER);
+        badge.setTypeface(Typeface.DEFAULT_BOLD);
+        if (color == GAME) {
+            final GradientDrawable circle = new GradientDrawable();
+            circle.setShape(GradientDrawable.OVAL);
+            circle.setColor(GAME);
+            badge.setBackground(circle);
+            badge.setText("");
+        }
+        row.addView(badge, new LinearLayout.LayoutParams(dp(color == GAME ? 12 : 20), dp(color == GAME ? 12 : 24)));
+        final TextView name = text(title, 15, color == LauncherActivity.MUTED ? LauncherActivity.MUTED : Color.WHITE);
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        if (color == GAME) name.setTypeface(Typeface.DEFAULT_BOLD);
-        row.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        name.setTypeface(color == GAME ? Typeface.DEFAULT_BOLD : LauncherActivity.MEDIUM);
+        final LinearLayout.LayoutParams nameParams =
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        nameParams.leftMargin = dp(12);
+        row.addView(name, nameParams);
         if (detail != null) {
-            final TextView size = text(detail, 14, MUTED);
-            size.setPadding(dp(16), 0, 0, 0);
-            row.addView(size);
+            final TextView size = text(detail, 13, Color.WHITE);
+            size.setTypeface(Typeface.DEFAULT_BOLD);
+            size.setPadding(dp(12), dp(4), dp(12), dp(4));
+            size.setBackground(rounded(Color.argb(60, 102, 187, 106), dp(12)));
+            final LinearLayout.LayoutParams sizeParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            sizeParams.leftMargin = dp(10);
+            row.addView(size, sizeParams);
         }
-        if (color == FOLDER || color == GAME) {
-            // A coloured mark at the start: amber for folders, green for a game file.
-            final TextView mark = new TextView(activity);
-            mark.setBackground(new ColorDrawable(color));
-            row.addView(mark, 0, new LinearLayout.LayoutParams(dp(4), dp(28)));
-            ((LinearLayout.LayoutParams) mark.getLayoutParams()).setMarginEnd(dp(14));
-        }
-        list.addView(row);
-        final TextView line = new TextView(activity);
-        line.setBackground(new ColorDrawable(RAISED));
-        list.addView(line, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(8);
+        list.addView(row, params);
     }
 
     private TextView text(String value, int sp, int color) {
@@ -180,9 +188,16 @@ final class FileBrowser {
         return view;
     }
 
+    private static GradientDrawable rounded(int color, int radius) {
+        final GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(radius);
+        shape.setColor(color);
+        return shape;
+    }
+
     private static String size(long bytes) {
-        if (bytes >= 1L << 30) return String.format(Locale.ROOT, "%.2f GB", bytes / (double) (1L << 30));
-        return String.format(Locale.ROOT, "%.0f MB", bytes / (double) (1L << 20));
+        if (bytes >= 1L << 30) return String.format(Locale.ROOT, Tr.t("%.2f GB"), bytes / (double) (1L << 30));
+        return String.format(Locale.ROOT, Tr.t("%.0f MB"), bytes / (double) (1L << 20));
     }
 
     private int dp(int value) {

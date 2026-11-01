@@ -1,0 +1,269 @@
+# Indonesian for the launcher: English<TAB>Indonesian, one pair a line. Missing text stays English.
+Game File	File Game
+Settings	Pengaturan
+Display, controls, experimental	Tampilan, kontrol, eksperimen
+Tailscale & LAN Devices	Tailscale & Perangkat LAN
+Coming soon	Segera hadir
+Auto Update	Update Otomatis
+Update on launch	Update saat dibuka
+Skip Boot	Lewati Boot
+Skip the logos, straight to the save check	Lewati logo, langsung ke cek save
+Check for Updates	Cek Update
+Installed: 	Terpasang: 
+Help	Bantuan
+Getting started	Cara mulai
+What's New	Yang Baru
+Features and fixes in each version	Fitur dan perbaikan tiap versi
+Wii, recompiled to run natively	Wii, dikompilasi ulang agar jalan native
+IN USE	DIPAKAI
+Play	Main
+Restarting...	Memulai ulang...
+Starting the LAN game...	Memulai game LAN...
+Allow file access first	Izinkan akses file dulu
+The game writes its log to the 	Game menulis log ke folder 
+ folder on your phone's storage, so problems can be reported.	 di penyimpanan HP, supaya masalah bisa dilaporkan.
+Open Settings	Buka Pengaturan
+Turn on "Allow access to manage all files" for this app.	Nyalakan "Izinkan akses untuk mengelola semua file" untuk aplikasi ini.
+Come back	Kembali ke sini
+The game starts by itself.	Game mulai dengan sendirinya.
+Open Settings > Apps > special access > All files access	Buka Setelan > Aplikasi > akses khusus > Akses semua file
+Cancel	Batal
+OK	OK
+Checking…	Memeriksa…
+Couldn't check for updates	Tidak bisa cek update
+No Android download	Tidak ada unduhan Android
+The latest release has no Android download.	Rilis terbaru tidak punya unduhan Android.
+You're up to date	Sudah versi terbaru
+ is the latest version.	 adalah versi terbaru.
+ is available	 tersedia
+To install updates, let Basara install apps.	Untuk memasang update, izinkan Basara memasang aplikasi.
+Turn on Allow from this source.	Nyalakan Izinkan dari sumber ini.
+The update carries on by itself.	Update lanjut dengan sendirinya.
+Not Now	Nanti Saja
+Downloading…	Mengunduh…
+Updating to Basara 	Update ke Basara 
+Your saves and settings stay.	Save dan pengaturanmu tetap ada.
+Downloading… %d of %d MB	Mengunduh… %d dari %d MB
+The update failed	Update gagal
+Installing Basara 	Memasang Basara 
+This Beta is still open	Beta ini masih dibuka
+Thanks for testing!	Terima kasih sudah menguji!
+The Beta has ended	Beta sudah berakhir
+Thanks for testing! Download Basara 	Terima kasih sudah menguji! Unduh Basara 
+ or later from the project's Releases page. It installs as its own app: load your disc there again, then uninstall this Beta.	 atau yang lebih baru dari halaman Releases proyek. Aplikasinya terpasang terpisah: muat disc-mu lagi di sana, lalu hapus Beta ini.
+Download	Unduh
+Uninstall Beta	Hapus Beta
+Close	Tutup
+No game loaded yet	Belum ada game dimuat
+The game can't be played. 	Game tidak bisa dimainkan. 
+Ready to play	Siap dimainkan
+Continue	Lanjutkan
+Choose Game File	Pilih File Game
+Loaded (RBSJ08)	Sudah dimuat (RBSJ08)
+Your ISO or RVZ (RBSJ08)	ISO atau RVZ milikmu (RBSJ08)
+Change	Ganti
+Choose	Pilih
+Fill	Penuh
+FSR Off	FSR Mati
+Original	Asli
+Sharp	Tajam
+Sharpest	Paling Tajam
+30 FPS Lock	Kunci 30 FPS
+Auto	Otomatis
+Off	Mati
+On	Nyala
+  ·  Textures 	  ·  Tekstur 
+Touch 	Sentuh 
+  ·  Thermal 	  ·  Termal 
+HD Textures	Tekstur HD
+Dynamic Resolution	Resolusi Dinamis
+Custom + Dump Textures	Tekstur Custom + Dump
+Custom Textures	Tekstur Custom
+Texture Keys	Kunci Tekstur
+⚠  Experimental: 	⚠  Eksperimen: 
+Getting Started	Cara Mulai
+Three steps from your disc to the battlefield.	Tiga langkah dari disc ke medan perang.
+Copy your game to the phone	Salin game ke HP
+An ISO or RVZ of your own Sengoku Basara 2 Heroes disc (Japan, RBSJ08), e.g. in Download.	ISO atau RVZ dari disc Sengoku Basara 2 Heroes milikmu sendiri (Jepang, RBSJ08), misalnya di Download.
+Tap Game File and choose it	Ketuk File Game lalu pilih file-nya
+It is unpacked once (about 4 GB free needed). Afterwards you can delete the ISO or RVZ.	Dibongkar sekali (perlu ruang kosong ±4 GB). Setelah itu ISO atau RVZ boleh dihapus.
+Tap Play	Ketuk Main
+Swipe Back while playing for the menu: Start Menu, Edit Controls Layout or Quit Game.	Usap Kembali saat main untuk membuka menu: Start Menu, Edit Controls Layout, atau Quit Game.
+Tips	Tips
+Slow or choppy?	Lambat atau patah-patah?
+Settings > Display: a lower Render Resolution. Settings > Performance: Frameskip Auto.	Pengaturan > Tampilan: turunkan Resolusi Render. Pengaturan > Performa: Frameskip Otomatis.
+Turning the camera	Memutar kamera
+Drag on the empty right side of the screen, or use the right stick.	Seret di sisi kanan layar yang kosong, atau pakai stik kanan.
+Saving	Menyimpan
+Save from the game's own menu (各種設定 > セーブ). Your saves stay when the app updates.	Simpan dari menu game sendiri (各種設定 > セーブ). Save tetap ada saat aplikasi di-update.
+Got it	Mengerti
+Project page on GitHub	Halaman proyek di GitHub
+Open this page in a browser	Buka halaman ini di browser
+Allow file access	Izinkan akses file
+To list the folders on this phone and find your ISO or RVZ.	Untuk menampilkan folder di HP ini dan menemukan ISO atau RVZ-mu.
+The file browser opens by itself.	Penjelajah file terbuka dengan sendirinya.
+Use System Picker	Pakai Pemilih Sistem
+The phone's own file picker, without the permission	Pemilih file bawaan HP, tanpa izin itu
+Looking at the game file…	Memeriksa file game…
+Loading your game	Memuat game
+Unpacked once, about 4 GB. Keep the app open until it is done.	Dibongkar sekali, ±4 GB. Biarkan aplikasi terbuka sampai selesai.
+Stopping…	Menghentikan…
+%.1f of %.1f GB	%.1f dari %.1f GB
+Couldn't load the game	Tidak bisa memuat game
+\n\nNothing was changed.	\n\nTidak ada yang diubah.
+Couldn't open that file.	Tidak bisa membuka file itu.
+Couldn't create 	Tidak bisa membuat 
+Couldn't move the game into place.	Tidak bisa memindahkan game ke tempatnya.
+Display	Tampilan
+Graphics	Grafis
+Performance	Performa
+Controls	Kontrol
+Experimental	Eksperimen
+Picture shape and size	Bentuk dan ukuran gambar
+Sharpness and GPU fixes	Ketajaman dan perbaikan GPU
+Smoothness and speed	Kelancaran dan kecepatan
+Touch controls and motion	Kontrol sentuh dan gerak
+Unfinished, for testers	Belum selesai, untuk tester
+Done	Selesai
+Restart Required	Perlu Mulai Ulang
+ takes effect when the game starts again.	 berlaku saat game dimulai lagi.
+Restart	Mulai Ulang
+Restart the game now with 	Mulai ulang game sekarang dengan 
+Keep 	Tetap 
+Language	Bahasa
+The launcher's language. Auto follows the phone's region: Indonesian in Indonesia, English elsewhere.	Bahasa launcher. Otomatis mengikuti region HP: Indonesia di Indonesia, Inggris di tempat lain.
+Aspect Ratio	Rasio Layar
+The shape of the picture.	Bentuk gambar.
+Original 4:3	Asli 4:3
+Fill Screen	Penuhi Layar
+Match screen	Sesuai layar
+Render Resolution	Resolusi Render
+Rendered at 	Dirender di 
+, more than this screen shows: several times the GPU work for little sharpness, so fps can drop. Match screen is sharp enough.	, lebih dari yang bisa ditampilkan layar ini: kerja GPU berlipat untuk ketajaman yang sedikit, jadi fps bisa turun. Sesuai layar sudah cukup tajam.
+. Lower is lighter on a slow phone; FSR1 keeps it sharp.	. Lebih rendah lebih ringan di HP lambat; FSR1 menjaganya tetap tajam.
+Performance Overlay	Overlay Performa
+A see-through bar at the top of the game with FPS and phone stats.	Bar transparan di atas game berisi FPS dan status HP.
+Battery	Baterai
+Temperature °C	Suhu °C
+Details (ms, draws, RAM)	Detail (ms, draw, RAM)
+Frametime Graph	Grafik Frametime
+Overlay Items	Isi Overlay
+Tap to show or hide each one. FPS counts the frames the game really draws a second. CPU is how busy the game's thread is: near 100% means the phone's CPU is the limit.	Ketuk untuk menampilkan atau menyembunyikan. FPS menghitung frame yang benar-benar digambar game per detik. CPU = seberapa sibuk thread game: mendekati 100% berarti CPU HP yang membatasi.
+Turn Performance Overlay on to choose.	Nyalakan Overlay Performa untuk memilih.
+FSR1 Upscaling	Upscaling FSR1
+Keeps a picture rendered below the screen's resolution sharp when it is stretched to fill it.	Menjaga gambar yang dirender di bawah resolusi layar tetap tajam saat diperbesar memenuhi layar.
+FSR1 Quality	Kualitas FSR1
+Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's edge-aware upscale: sharpest, but several ms on a small phone GPU.	Light menajamkan gambar yang diperbesar dan hampir tanpa biaya. Full menambah upscale FSR1 yang peka tepi: paling tajam, tetapi beberapa ms di GPU HP kecil.
+Turn FSR1 Upscaling on to choose.	Nyalakan Upscaling FSR1 untuk memilih.
+Texture Detail	Detail Tekstur
+Keeps the ground, walls and characters sharp at low Render Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU.	Menjaga tanah, dinding, dan karakter tetap tajam di Resolusi Render rendah dan saat dilihat miring. Paling Tajam sedikit lebih berat di GPU HP kecil.
+Graphics Compatibility	Kompatibilitas Grafis
+Fixes for phone GPUs whose drivers break the 3D models (scrambled textures, stretched characters). Auto uses them where needed.	Perbaikan untuk GPU HP yang driver-nya merusak model 3D (tekstur acak, karakter melar). Otomatis memakainya bila perlu.
+Frames go out in step with the display: smoother motion.	Frame dikirim seirama dengan layar: gerakan lebih halus.
+The game moves one step per drawn frame, so a slow phone plays in slow motion. Auto skips drawing a frame when it falls behind: closer to full speed, choppier picture.	Game maju satu langkah per frame yang digambar, jadi di HP lambat game jadi gerak lambat. Otomatis melewati gambar frame saat tertinggal: kecepatan mendekati penuh, gambar lebih patah-patah.
+Draws every other frame, evenly paced: a steady 30 FPS while the game and sound keep full speed. For phones that cannot hold 60. Replaces Frameskip while on.	Menggambar selang satu frame dengan jeda rata: 30 FPS stabil, sementara game dan suara tetap kecepatan penuh. Untuk HP yang tidak kuat 60. Menggantikan Frameskip selama nyala.
+Thermal Control	Kontrol Termal
+When the phone warms up, draws at 30 fps (the game itself keeps full speed) for at least a minute, and lowers the resolution if the GPU is the one working hard. Back to normal once it cools down.	Saat HP mulai panas, menggambar di 30 fps (game tetap kecepatan penuh) minimal satu menit, dan menurunkan resolusi bila GPU yang bekerja keras. Kembali normal setelah dingin.
+Not available: needs Android 12 or newer with a thermal sensor report.	Tidak tersedia: perlu Android 12 ke atas dengan laporan sensor termal.
+Touch Controls	Kontrol Sentuh
+The on-screen Classic Controller.	Classic Controller di layar.
+Touch Control Opacity	Transparansi Kontrol Sentuh
+How solid the controls look over the game.	Seberapa pekat kontrol terlihat di atas game.
+Touch Control Layout	Tata Letak Kontrol Sentuh
+Move and resize the controls while playing: Back > Edit Controls Layout.	Pindah dan ubah ukuran kontrol saat main: Kembali > Edit Controls Layout.
+Arranged by you. Change it while playing: Back > Edit Controls Layout.	Diatur olehmu. Ubah saat main: Kembali > Edit Controls Layout.
+Reset	Reset
+Fixed Left Stick	Stik Kiri Tetap
+On: the stick moves only when touched where it is drawn. Off: a thumb anywhere on the empty left side grabs it.	Nyala: stik hanya bergerak bila disentuh di tempat gambarnya. Mati: ibu jari di mana saja di sisi kiri yang kosong langsung memegangnya.
+Vibration	Getar
+A short buzz when a touch button is pressed.	Getar singkat saat tombol sentuh ditekan.
+Touch camera	Kamera sentuh
+Drag on the empty right side of the screen to turn the camera.	Seret di sisi kanan layar yang kosong untuk memutar kamera.
+Tilt	Miring
+Turn the phone like a steering wheel.	Putar HP seperti setir.
+Shake	Guncang
+Jolt the phone to shake the remote.	Hentakkan HP untuk mengguncang remote.
+Experimental features	Fitur eksperimen
+Unfinished and only partly tested. They can crash the game, glitch the picture, use much more RAM, storage and battery, or make the phone hot. Leave them off to play normally. If you test one, say which in your report and send the log (	Belum selesai dan baru sebagian diuji. Bisa membuat game crash, gambar rusak, memakai jauh lebih banyak RAM, penyimpanan, dan baterai, atau membuat HP panas. Biarkan mati untuk main normal. Bila menguji salah satunya, sebutkan di laporan dan kirim log-nya (
+This phone has little RAM or renders below 1x: likely to crash, and the gain is small.	HP ini RAM-nya kecil atau render di bawah 1x: kemungkinan crash, dan manfaatnya kecil.
+Uses more RAM (up to 4x per texture) and storage, and works on the CPU while you play.	Memakai lebih banyak RAM (sampai 4x per tekstur) dan penyimpanan, serta bekerja di CPU selama main.
+Makes the game's textures twice as sharp: each one is upscaled on a background thread the first time it appears, and kept for next time. It looks blurry, then sharp, while that happens. Prepare from disc (all at once, before playing) is coming later.	Membuat tekstur game dua kali lebih tajam: tiap tekstur di-upscale di thread latar saat pertama muncul, lalu disimpan untuk berikutnya. Selama itu terlihat buram lalu tajam. Siapkan dari disc (semua sekaligus, sebelum main) menyusul.
+HD Texture Storage	Penyimpanan Tekstur HD
+The most storage the sharper textures may take; once full, no new ones are made.	Batas penyimpanan untuk tekstur yang lebih tajam; bila penuh, tidak ada yang dibuat lagi.
+Turn HD Textures on to choose.	Nyalakan Tekstur HD untuk memilih.
+HD Texture Cache	Cache Tekstur HD
+Needs "All files access" for this app.	Perlu "Akses semua file" untuk aplikasi ini.
+%.0f MB in %s.	%.0f MB di %s.
+Clear	Hapus
+Writes to the log while you play.	Menulis ke log selama main.
+Report Texture Keys	Laporkan Kunci Tekstur
+Lists the name of every texture the game uses in the log (only the names, no pictures), so testers can check that texture packs match the game. Takes effect when the game starts again.	Mencatat nama tiap tekstur yang dipakai game di log (hanya nama, tanpa gambar), supaya tester bisa mengecek paket tekstur cocok dengan game. Berlaku saat game dimulai lagi.
+A wrong or very large pack can crash the game or use up RAM.	Paket yang salah atau sangat besar bisa membuat game crash atau menghabiskan RAM.
+Uses your own textures (tex1_*.png, Dolphin-style names) from 	Memakai tekstur buatanmu (tex1_*.png, nama gaya Dolphin) dari 
+ in place of the game's. Takes effect when the game starts again.	 sebagai pengganti tekstur game. Berlaku saat game dimulai lagi.
+Needs "All files access" for this app, to read 	Perlu "Akses semua file" untuk aplikasi ini, untuk membaca 
+Slows loading and fills storage quickly.	Memperlambat loading dan cepat memenuhi penyimpanan.
+Dump Textures	Dump Tekstur
+Saves each texture the game uses to 	Menyimpan tiap tekstur yang dipakai game ke 
+/dump, named the way its replacement must be: edit one and put it in 	/dump, dengan nama yang harus dipakai penggantinya: edit lalu taruh di 
+. Turn it off when done.	. Matikan bila sudah selesai.
+Turn Custom Textures on to choose.	Nyalakan Tekstur Custom untuk memilih.
+Can make the picture switch between sharp and soft during battles.	Gambar bisa berganti tajam dan lembut selama pertempuran.
+Lowers the render resolution while the GPU holds the game back (down to 0.5x) and raises it again when there is room. Render Resolution stays the highest it goes.	Menurunkan resolusi render saat GPU menahan game (sampai 0.5x) dan menaikkannya lagi bila ada ruang. Resolusi Render tetap jadi batas tertinggi.
+Known issue: textures and the sky can flicker white.	Masalah yang diketahui: tekstur dan langit bisa berkedip putih.
+Runs the graphics work on its own CPU core, so busy battles run faster on slower phones. Turning it on or off restarts the game.	Menjalankan kerja grafis di core CPU sendiri, jadi pertempuran ramai lebih cepat di HP lambat. Menyalakan atau mematikannya memulai ulang game.
+Clear HD Texture Cache?	Hapus Cache Tekstur HD?
+The sharper textures are made again while you play.	Tekstur tajam akan dibuat lagi selama main.
+Choose your game file	Pilih file game
+An ISO or RVZ of your own disc (RBSJ08).	ISO atau RVZ dari disc milikmu (RBSJ08).
+Storage	Penyimpanan
+Up	Naik
+No folders or ISO / RVZ files here.	Tidak ada folder atau file ISO / RVZ di sini.
+Phone storage	Memori HP
+SD card (	Kartu SD (
+This version · 	Versi ini · 
+Installed: Basara 	Terpasang: Basara 
+Got it	Mengerti
+All versions	Semua versi
+Known issue	Masalah yang diketahui
+Experimental features and What's New	Fitur eksperimen dan Yang Baru
+What's New: this screen, after every update, and the full history from the What's New tile.	Yang Baru: layar ini, muncul setiap update, dan riwayat lengkap dari tile Yang Baru.
+Settings > Experimental: every unfinished feature in one place, each with its warning.	Pengaturan > Eksperimen: semua fitur yang belum selesai di satu tempat, masing-masing dengan peringatan.
+HD Textures (Experimental): textures are made sharper while you play and kept for next time.	Tekstur HD (Eksperimen): tekstur dibuat lebih tajam selama main dan disimpan untuk berikutnya.
+Report Texture Keys (Experimental): lists the game's textures in the log for testers' reports.	Laporkan Kunci Tekstur (Eksperimen): mencatat tekstur game di log untuk laporan tester.
+The left panel shows the settings in use; the file browser and update screens have the new look.	Panel kiri menampilkan setelan yang dipakai; penjelajah file dan layar update memakai tampilan baru.
+Language: English or Indonesian, picked from the phone's region (Settings > Display).	Bahasa: Inggris atau Indonesia, dipilih dari region HP (Pengaturan > Tampilan).
+Custom textures now match the 3D models' palette textures (characters, HUD).	Tekstur custom kini cocok dengan tekstur palette model 3D (karakter, HUD).
+HD Textures: textures change from blurry to sharp the first time they appear; uses more RAM and storage.	Tekstur HD: tekstur berubah dari buram ke tajam saat pertama muncul; memakai lebih banyak RAM dan penyimpanan.
+GX Thread: the sky and some textures can flicker white.	GX Thread: langit dan beberapa tekstur bisa berkedip putih.
+Texture Detail and custom textures	Detail Tekstur dan tekstur custom
+Texture Detail (Settings > Graphics): sharper ground and walls at low render resolution.	Detail Tekstur (Pengaturan > Grafis): tanah dan dinding lebih tajam di resolusi render rendah.
+Custom Textures and Dump Textures, Dolphin-style names.	Tekstur Custom dan Dump Tekstur, nama gaya Dolphin.
+Dynamic Resolution steps back up when the GPU has room.	Resolusi Dinamis naik lagi bila GPU longgar.
+30 FPS Lock and Thermal Control	Kunci 30 FPS dan Kontrol Termal
+30 FPS Lock: a steady 30 FPS while the game and sound keep full speed.	Kunci 30 FPS: 30 FPS stabil, game dan suara tetap kecepatan penuh.
+Thermal Control: draws at 30 FPS and lowers resolution while the phone is hot.	Kontrol Termal: menggambar di 30 FPS dan menurunkan resolusi saat HP panas.
+GX Thread (Experimental): graphics work on its own CPU core.	GX Thread (Eksperimen): kerja grafis di core CPU sendiri.
+Faster skinned characters in battles.	Karakter di pertempuran diproses lebih cepat.
+GX Thread: textures and the sky can flicker white, so it is off by default.	GX Thread: tekstur dan langit bisa berkedip putih, jadi bawaannya mati.
+Device profiles and the new launcher	Profil perangkat dan launcher baru
+The first start picks a render resolution and Frameskip for your phone.	Saat pertama dibuka, resolusi render dan Frameskip dipilih sesuai HP-mu.
+Dynamic Resolution, a new Settings screen and the performance overlay bar.	Resolusi Dinamis, layar Pengaturan baru, dan bar overlay performa.
+Touch camera: drag on the empty right side.	Kamera sentuh: seret di sisi kanan yang kosong.
+Noise during spoken dialogue.	Noise saat dialog bersuara.
+The picture zoomed in or was cut off after changing resolution in game.	Gambar ter-zoom atau terpotong setelah ganti resolusi di dalam game.
+Frameskip, FSR1 and Continue	Frameskip, FSR1, dan Lanjutkan
+Frameskip Auto, FSR1 upscaling, Skip Boot and a faster start.	Frameskip Otomatis, upscaling FSR1, Lewati Boot, dan start lebih cepat.
+Continue: the game keeps running while you are in the launcher.	Lanjutkan: game tetap jalan selama kamu di launcher.
+Smaller touch controls and a layout editor.	Kontrol sentuh lebih kecil dan editor tata letak.
+First Android Beta	Beta Android pertama
+Load your own ISO or RVZ on the phone.	Muat ISO atau RVZ milikmu langsung di HP.
+Smoother sound on slow phones (audio stretching).	Suara lebih mulus di HP lambat (audio stretching).
+Crashes on phones with little RAM.	Crash di HP dengan RAM kecil.
+English	English
+Bahasa Indonesia	Bahasa Indonesia
+ is the latest Beta. Thanks for testing!	 adalah Beta terbaru. Terima kasih sudah menguji!
+New Beta numbering: 0.0.1 Beta 1. New Betas are sent by hand for now.	Penomoran Beta baru: 0.0.1 Beta 1. Beta baru sementara dikirim manual.
+Coming from the old Beta (0.9.0)? Uninstall it once first; later Betas install over each other.	Dari Beta lama (0.9.0)? Uninstall dulu sekali; Beta berikutnya terpasang menimpa yang lama.
+Updates are sent by hand for now	Update sementara dikirim manual
+New versions come straight from the developer. Install the new APK over this one; your settings and saves stay.	Versi baru dikirim langsung oleh pengembang. Pasang APK baru di atas yang ini; setelan dan save tetap aman.

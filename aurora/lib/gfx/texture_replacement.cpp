@@ -13,13 +13,27 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
+#include <thread>
+#include <vector>
+
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
+#include "texture_upscale.hpp"
 
 #include "png_io.hpp"
 #include "../fs_helper.hpp"
@@ -78,6 +92,96 @@ std::filesystem::path s_replacementRoot;
 std::filesystem::path s_dumpRoot;
 uint64_t s_replacementCacheBytes = 0;
 constexpr uint64_t kReplacementCacheBudgetBytes = 4294967296; // 4GB, reasonable for modern hardware?
+// With HD Textures on, every texture gets a 4x-sized replacement: keep fewer of them on the GPU.
+constexpr uint64_t kHdReplacementCacheBudgetBytes = 384ull << 20;
+
+uint64_t replacement_budget() noexcept {
+  return g_config.hdTextureMode != 0 ? kHdReplacementCacheBudgetBytes : kReplacementCacheBudgetBytes;
+}
+
+// --- HD Textures (live): upscale on a background thread, save to hd-cache, index when done -------
+
+std::string format_replacement_filename(const RuntimeTextureKey& key);
+
+struct HdJob {
+  RuntimeTextureKey key;
+  std::vector<uint8_t> rgba;
+  uint32_t width = 0, height = 0, mips = 1;
+  bool wrapS = false, wrapT = false;
+};
+
+std::filesystem::path s_hdRoot;
+std::mutex s_hdMutex;
+std::condition_variable s_hdWake;
+std::deque<HdJob> s_hdQueue;  // guarded by s_hdMutex
+std::vector<std::pair<RuntimeTextureKey, std::filesystem::path>> s_hdDone;  // guarded by s_hdMutex
+std::atomic<bool> s_hdHasDone{false};
+std::atomic<uint64_t> s_hdDiskBytes{0};
+std::atomic<uint32_t> s_hdMade{0};
+bool s_hdStop = false;  // guarded by s_hdMutex
+std::thread s_hdThread;
+constexpr size_t kHdMaxQueued = 128;
+
+uint64_t hd_disk_budget() noexcept {
+  return static_cast<uint64_t>(g_config.hdCacheMegabytes != 0 ? g_config.hdCacheMegabytes : 1024) << 20;
+}
+
+void hd_worker() noexcept {
+#if defined(__linux__)
+  // Below the game's threads: it only fills in textures, the game must not wait on it.
+  setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
+#endif
+  for (;;) {
+    HdJob job;
+    {
+      std::unique_lock lock(s_hdMutex);
+      s_hdWake.wait(lock, [] { return s_hdStop || !s_hdQueue.empty(); });
+      if (s_hdStop) return;
+      job = std::move(s_hdQueue.front());
+      s_hdQueue.pop_front();
+    }
+    if (s_hdDiskBytes.load() >= hd_disk_budget()) continue;
+
+    std::vector<uint8_t> level =
+        texture_upscale::upscale2x(job.rgba.data(), job.width, job.height, job.wrapS, job.wrapT);
+    uint32_t w = job.width * 2, h = job.height * 2;
+    auto base = s_hdRoot / format_replacement_filename(job.key);
+    base.replace_extension(".png");
+    // One more level than the game's, so the smallest matches it; written before the base image,
+    // which is what the index looks for, so a half-written set is never picked up.
+    std::vector<std::pair<std::filesystem::path, std::vector<uint8_t>>> levels;
+    const auto stem = fs_path_to_string(base.stem());
+    uint64_t bytes = 0;
+    bool ok = true;
+    {
+      std::vector<uint8_t> cur = level;
+      uint32_t cw = w, ch = h;
+      for (uint32_t mip = 1; mip <= job.mips && (cw > 1 || ch > 1); ++mip) {
+        cur = texture_upscale::half(cur.data(), cw, ch);
+        cw = std::max(cw / 2, 1u);
+        ch = std::max(ch / 2, 1u);
+        const auto path = s_hdRoot / fmt::format("{}_mip{}.png", stem, mip);
+        ok = ok && png::write_rgba8_png(path, cw, ch, cur.data());
+        std::error_code ec;
+        bytes += std::filesystem::file_size(path, ec);
+      }
+    }
+    ok = ok && png::write_rgba8_png(base, w, h, level.data());
+    if (!ok) continue;
+    std::error_code ec;
+    bytes += std::filesystem::file_size(base, ec);
+    s_hdDiskBytes += bytes;
+    const uint32_t made = ++s_hdMade;
+    if (made % 50 == 0) {
+      Log.info("hd textures: {} made this session, cache {} MB", made, s_hdDiskBytes.load() >> 20);
+    }
+    {
+      std::lock_guard lock(s_hdMutex);
+      s_hdDone.emplace_back(job.key, base);
+    }
+    s_hdHasDone = true;
+  }
+}
 constexpr uint64_t kReplacementWildcardTextureHash = 0xFFFFFFFFFFFFFFFFull;
 constexpr uint64_t kReplacementWildcardTlutHash = 0xFFFFFFFFFFFFFFFEull;
 
@@ -181,12 +285,41 @@ uint32_t texture_base_level_size(const GXTexObj_& obj) noexcept {
   }
 }
 
+// The palette the draw actually uses, set by find_replacement(obj, tlut). Basara repoints one palette
+// buffer for many textures (GXInitTlutObjData) and loads model palettes from display lists, so the
+// mirror filled by register_tlut/load_tlut is empty or stale for its 3D textures.
+thread_local const GXTlutObj_* s_drawTlut = nullptr;
+thread_local TlutMetadata s_drawTlutMeta;
+
+const TlutMetadata* active_tlut(const GXTexObj_& obj) noexcept {
+  if (!is_palette_format(obj.format())) {
+    return nullptr;
+  }
+  if (s_drawTlut != nullptr && s_drawTlut->data != nullptr && s_drawTlut->numEntries != 0) {
+    const size_t sz = static_cast<size_t>(s_drawTlut->numEntries) * 2;
+    if (s_drawTlutMeta.data.size() != sz) {
+      s_drawTlutMeta.data = ByteBuffer{sz};
+    }
+    std::memcpy(s_drawTlutMeta.data.data(), s_drawTlut->data, sz);
+    s_drawTlutMeta.size = static_cast<uint32_t>(sz);
+    s_drawTlutMeta.format = static_cast<uint32_t>(s_drawTlut->format);
+    s_drawTlutMeta.entries = s_drawTlut->numEntries;
+    s_drawTlutMeta.valid = true;
+    return &s_drawTlutMeta;
+  }
+  if (obj.tlut >= s_loadedTluts.size() || !s_loadedTluts[obj.tlut].valid) {
+    return nullptr;
+  }
+  return &s_loadedTluts[obj.tlut];
+}
+
 std::optional<uint64_t> compute_referenced_tlut_hash(const GXTexObj_& obj) noexcept {
-  if (!is_palette_format(obj.format()) || obj.tlut >= s_loadedTluts.size()) {
+  const TlutMetadata* active = active_tlut(obj);
+  if (active == nullptr) {
     return std::nullopt;
   }
 
-  const auto& tlut = s_loadedTluts[obj.tlut];
+  const auto& tlut = *active;
   const uint32_t textureSize = texture_base_level_size(obj);
   const auto* textureData = static_cast<const uint8_t*>(obj.data);
   if (!tlut.valid || textureData == nullptr || textureSize == 0) {
@@ -232,14 +365,7 @@ std::optional<uint64_t> compute_referenced_tlut_hash(const GXTexObj_& obj) noexc
   return XXH64(tlut.data.data() + tlutOffset, tlutSize, 0);
 }
 
-const TlutMetadata* get_loaded_tlut(const GXTexObj_& obj) noexcept {
-  if (!is_palette_format(obj.format()) || obj.tlut >= s_loadedTluts.size()) {
-    return nullptr;
-  }
-
-  const auto& tlut = s_loadedTluts[obj.tlut];
-  return tlut.valid ? &tlut : nullptr;
-}
+const TlutMetadata* get_loaded_tlut(const GXTexObj_& obj) noexcept { return active_tlut(obj); }
 
 bool ensure_directory(const std::filesystem::path& dir) noexcept {
   std::error_code ec;
@@ -486,7 +612,7 @@ void touch_cached_replacement(decltype(s_replacementCache)::iterator it) noexcep
 }
 
 void evict_replacement_cache_if_needed() noexcept {
-  while (s_replacementCacheBytes > kReplacementCacheBudgetBytes && !s_replacementLru.empty()) {
+  while (s_replacementCacheBytes > replacement_budget() && !s_replacementLru.empty()) {
     const RuntimeTextureKey key = s_replacementLru.back();
     s_replacementLru.pop_back();
 
@@ -501,32 +627,10 @@ void evict_replacement_cache_if_needed() noexcept {
   }
 }
 
-void build_index() noexcept {
-  if (!g_config.allowTextureReplacements) {
-    return;
-  }
-
-  auto userPath = fs_path_from_string(g_config.userPath);
-  auto cachePath = fs_path_from_string(g_config.cachePath);
-
-  if (g_config.textureRoot != nullptr && *g_config.textureRoot != '\0') {
-    s_replacementRoot = fs_path_from_string(g_config.textureRoot);
-    s_dumpRoot = s_replacementRoot / "dump";  // skipped by the index below
-  } else {
-    s_replacementRoot = userPath / "texture_replacements";
-    s_dumpRoot = cachePath / "texture_dumps";
-  }
-
-  if (!ensure_directory(s_replacementRoot)) {
-    return;
-  }
-  if (g_config.allowTextureDumps && !ensure_directory(s_dumpRoot)) {
-    return;
-  }
-
+void index_folder(const std::filesystem::path& root) noexcept {
   std::error_code ec;
   for (std::filesystem::recursive_directory_iterator it(
-           s_replacementRoot,
+           root,
            std::filesystem::directory_options::skip_permission_denied |
                std::filesystem::directory_options::follow_directory_symlink,
            ec);
@@ -559,6 +663,41 @@ void build_index() noexcept {
     }
 
     s_replacementIndex.try_emplace(*parsed, path);
+  }
+}
+
+void build_index() noexcept {
+  if (!g_config.allowTextureReplacements) {
+    return;
+  }
+
+  auto userPath = fs_path_from_string(g_config.userPath);
+  auto cachePath = fs_path_from_string(g_config.cachePath);
+
+  if (g_config.textureRoot != nullptr && *g_config.textureRoot != '\0') {
+    s_replacementRoot = fs_path_from_string(g_config.textureRoot);
+    s_dumpRoot = s_replacementRoot / "dump";  // skipped by the index below
+  } else {
+    s_replacementRoot = userPath / "texture_replacements";
+    s_dumpRoot = cachePath / "texture_dumps";
+  }
+  if (g_config.hdTextureMode != 0) {
+    s_hdRoot = g_config.hdCacheRoot != nullptr && *g_config.hdCacheRoot != '\0'
+                   ? fs_path_from_string(g_config.hdCacheRoot)
+                   : s_replacementRoot / "hd-cache";
+  }
+
+  if (!ensure_directory(s_replacementRoot)) {
+    return;
+  }
+  if (g_config.allowTextureDumps && !ensure_directory(s_dumpRoot)) {
+    return;
+  }
+
+  index_folder(s_replacementRoot);
+  // The HD cache, when it is not already inside the folder just indexed. Own packs come first.
+  if (!s_hdRoot.empty() && !is_relative_to(s_hdRoot, s_replacementRoot) && ensure_directory(s_hdRoot)) {
+    index_folder(s_hdRoot);
   }
 
   Log.info("Indexed {} texture replacements", s_replacementIndex.size());
@@ -644,7 +783,8 @@ void cache_replacement(const RuntimeTextureKey& key, const gfx::TextureHandle& h
   evict_replacement_cache_if_needed();
 }
 
-bool dump_editable_texture_dds(const RuntimeTextureKey& key, const GXTexObj_& obj) noexcept {
+/** The base level as RGBA8 (empty when it cannot be decoded, e.g. a palette texture without its palette). */
+std::optional<ConvertedTexture> decode_rgba(const GXTexObj_& obj) noexcept {
   const ArrayRef<uint8_t> texData{static_cast<const uint8_t*>(obj.data), UINT32_MAX};
   const uint32_t texWidth = obj.width();
   const uint32_t texHeight = obj.height();
@@ -653,7 +793,7 @@ bool dump_editable_texture_dds(const RuntimeTextureKey& key, const GXTexObj_& ob
   if (is_palette_format(obj.format())) {
     const TlutMetadata* tlut = get_loaded_tlut(obj);
     if (tlut == nullptr) {
-      return false;
+      return std::nullopt;
     }
     pixels =
         convert_texture_palette(obj.format(), texWidth, texHeight, 1, texData, static_cast<GXTlutFmt>(tlut->format),
@@ -663,15 +803,67 @@ bool dump_editable_texture_dds(const RuntimeTextureKey& key, const GXTexObj_& ob
   }
 
   const uint64_t rgbaBytes = calc_texture_size(wgpu::TextureFormat::RGBA8Unorm, texWidth, texHeight, 1);
-
   if (pixels.data.empty() || pixels.format != wgpu::TextureFormat::RGBA8Unorm || pixels.data.size() != rgbaBytes) {
+    return std::nullopt;
+  }
+  return pixels;
+}
+
+bool dump_editable_texture_dds(const RuntimeTextureKey& key, const GXTexObj_& obj) noexcept {
+  const auto pixels = decode_rgba(obj);
+  if (!pixels) {
     return false;
   }
-
   // PNG: opens in any image editor, and the index takes .png and .dds under the same name.
   auto path = s_dumpRoot / format_replacement_filename(key);
   path.replace_extension(".png");
-  return png::write_rgba8_png(path, texWidth, texHeight, pixels.data.data());
+  return png::write_rgba8_png(path, obj.width(), obj.height(), pixels->data.data());
+}
+
+bool is_power_of_two(uint32_t v) noexcept { return v != 0 && (v & (v - 1)) == 0; }
+
+/**
+ * Queues a texture for HD Textures. Only power-of-two sizes from 8 to 512: movie frames (512x448)
+ * are new textures every frame, and the smallest ones gain nothing.
+ */
+void queue_hd(const RuntimeTextureKey& key, const GXTexObj_& obj) noexcept {
+  if (g_config.hdTextureMode == 0 || !s_hdThread.joinable()) return;
+  const uint32_t w = obj.width(), h = obj.height();
+  if (!is_power_of_two(w) || !is_power_of_two(h) || std::min(w, h) < 8 || std::max(w, h) > 512) return;
+  if (s_hdDiskBytes.load() >= hd_disk_budget()) return;
+  {
+    std::lock_guard lock(s_hdMutex);
+    if (s_hdQueue.size() >= kHdMaxQueued) return;
+  }
+  auto pixels = decode_rgba(obj);
+  if (!pixels) return;
+  HdJob job{
+      .key = key,
+      .rgba = std::vector<uint8_t>(pixels->data.data(), pixels->data.data() + pixels->data.size()),
+      .width = w,
+      .height = h,
+      .mips = obj.mip_count(),
+      .wrapS = obj.wrap_s() != GX_CLAMP,
+      .wrapT = obj.wrap_t() != GX_CLAMP,
+  };
+  {
+    std::lock_guard lock(s_hdMutex);
+    s_hdQueue.push_back(std::move(job));
+  }
+  s_hdWake.notify_one();
+}
+
+/** Textures the HD worker finished since the last call go into the index. */
+void take_hd_done() noexcept {
+  if (!s_hdHasDone.exchange(false)) return;
+  std::vector<std::pair<RuntimeTextureKey, std::filesystem::path>> done;
+  {
+    std::lock_guard lock(s_hdMutex);
+    done.swap(s_hdDone);
+  }
+  for (auto& [key, path] : done) {
+    s_replacementIndex.try_emplace(key, ReplacementIndexEntry{std::move(path)});
+  }
 }
 
 bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noexcept {
@@ -679,15 +871,52 @@ bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noex
     return false;
   }
 
+  if (g_config.reportTextureKeys) {
+    Log.info("texture key {} ({}x{} fmt {})", format_replacement_filename(key), key.width, key.height, key.format);
+  }
   if (g_config.allowTextureDumps) {
     dump_editable_texture_dds(key, obj);
   }
+  queue_hd(key, obj);
   return true;
 }
 
-void initialize() noexcept { build_index(); }
+void start_hd() noexcept {
+  if (g_config.hdTextureMode == 0 || s_hdRoot.empty()) return;
+  if (!ensure_directory(s_hdRoot)) return;
+  uint64_t bytes = 0;
+  std::error_code ec;
+  for (std::filesystem::directory_iterator it(s_hdRoot, ec); !ec && it != std::filesystem::directory_iterator();
+       it.increment(ec)) {
+    if (it->is_regular_file(ec)) bytes += it->file_size(ec);
+  }
+  s_hdDiskBytes = bytes;
+  s_hdStop = false;
+  s_hdThread = std::thread(hd_worker);
+  Log.info("hd textures: live, cache {} MB of {} MB", bytes >> 20, hd_disk_budget() >> 20);
+}
+
+void stop_hd() noexcept {
+  if (!s_hdThread.joinable()) return;
+  {
+    std::lock_guard lock(s_hdMutex);
+    s_hdStop = true;
+    s_hdQueue.clear();
+    s_hdDone.clear();
+  }
+  s_hdWake.notify_all();
+  s_hdThread.join();
+  s_hdHasDone = false;
+  s_hdRoot.clear();
+}
+
+void initialize() noexcept {
+  build_index();
+  start_hd();
+}
 
 void shutdown() noexcept {
+  stop_hd();
   s_replacementIndex.clear();
   s_replacementCache.clear();
   s_failedKeys.clear();
@@ -775,6 +1004,7 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
     return std::nullopt;
   }
 
+  take_hd_done();
   const RuntimeTextureKey key = build_runtime_key(obj);
   const auto* path = find_replacement_path(key);
   if (path == nullptr) {
@@ -797,6 +1027,13 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
 
   cache_replacement(key, handle);
   return handle;
+}
+
+std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, const GXTlutObj_& tlut) noexcept {
+  s_drawTlut = &tlut;
+  auto result = find_replacement(obj);
+  s_drawTlut = nullptr;
+  return result;
 }
 
 std::string build_texture_replacement_name(const GXTexObj_& obj) noexcept {

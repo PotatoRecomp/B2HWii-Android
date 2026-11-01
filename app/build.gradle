@@ -19,14 +19,20 @@ android {
         targetSdk 34
         // -PbasaraVersionCode / -PbasaraVersionName: a newer build for testing the updater.
         versionCode((project.findProperty('basaraVersionCode') ?: '18') as int)
-        versionName(project.findProperty('basaraVersionName') ?: '0.2.2')
-        // -PbasaraBeta: the testers' Beta. Its own package (it installs next to the release) and
-        // it locks itself once the Beta is switched off or 1.0.0 is out (BetaGate).
+        versionName(project.findProperty('basaraVersionName') ?: '0.0.1')
+        // -PbasaraBeta: the testers' Beta. Its own package (it installs next to the release), it
+        // updates itself from the GitHub pre-releases "v<version>-beta.<N>" (Updater.latestBeta) and
+        // locks itself once the Beta is switched off or 1.0.0 is out (BetaGate).
+        // -PbasaraBetaNumber=N: the Beta's number, one up for every Beta released; it is the
+        // versionCode, so Android installs each Beta over the one before.
         if (beta) {
             applicationIdSuffix '.beta'
-            versionName(project.findProperty('basaraVersionName') ?: '0.9.0-beta')
+            versionCode((project.findProperty('basaraBetaNumber') ?: '1') as int)
         }
         buildConfigField 'boolean', 'BETA', beta.toString()
+        // -PbasaraOnlineUpdates: check GitHub for updates (and the Beta's lock). Off while the repo is
+        // private: GitHub answers 404 without a login, so APKs are handed out by hand.
+        buildConfigField 'boolean', 'ONLINE_UPDATES', project.hasProperty('basaraOnlineUpdates').toString()
         manifestPlaceholders = [appLabel: beta ? 'Basara Beta' : '@string/app_name']
         ndk {
             abiFilters 'arm64-v8a'
@@ -56,7 +62,7 @@ android {
             // libmain.so and the runtime's data files are staged by tools/b-android.ps1 -Mode stage from
             // the native build (generated/android-build); they are not checked in.
             jniLibs.srcDirs = ['../generated/android-native/jniLibs']
-            assets.srcDirs = ['../generated/android-native/assets']
+            assets.srcDirs = ['../generated/android-native/assets', 'src/main/assets']
         }
     }
 

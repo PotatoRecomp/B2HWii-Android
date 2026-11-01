@@ -10,7 +10,7 @@ import java.net.HttpURLConnection;
  * The testers' Beta (BuildConfig.BETA) stops once it is switched off or the release is out:
  * <ul>
  * <li>the latest GitHub release is RELEASE_VERSION or later, or</li>
- * <li>beta.json on the repo's main branch says {"enabled": false, "message": "..."}.</li>
+ * <li>beta-channel.json on the repo's main branch says {"enabled": false, "message": "..."}.</li>
  * </ul>
  * No beta.json, or no network, leaves the Beta playable until a check sees it end; LauncherActivity
  * keeps that answer (AppSettings.betaEnded), so going offline afterwards doesn't reopen it.
@@ -19,7 +19,9 @@ import java.net.HttpURLConnection;
 final class BetaGate {
     static final String RELEASE_VERSION = "1.0.0";
     private static final String BETA_STATUS =
-            "https://raw.githubusercontent.com/shiinobu/basara2heroes-android/main/beta.json";
+            // Not beta.json: that one is switched off for the old 0.9.0 Beta, which must be uninstalled
+            // once (its versionCode is above the new Betas', so Android cannot update it).
+            "https://raw.githubusercontent.com/shiinobu/basara2heroes-android/main/beta-channel.json";
 
     private BetaGate() {}
 
@@ -45,7 +47,7 @@ final class BetaGate {
             }
             return status.optString("message", "The Beta has been switched off.");
         } catch (JSONException e) {
-            throw new IOException("unreadable beta.json: " + e.getMessage());
+            throw new IOException("unreadable beta-channel.json: " + e.getMessage());
         } finally {
             connection.disconnect();
         }

@@ -32,6 +32,9 @@ final class Updater {
     private static final String LATEST_RELEASE =
             "https://api.github.com/repos/shiinobu/basara2heroes-android/releases/latest";
     private static final String APK_SUFFIX = "-android-arm64.apk";
+    /** Every release, newest first: the Beta looks for its pre-releases here. */
+    private static final String ALL_RELEASES =
+            "https://api.github.com/repos/shiinobu/basara2heroes-android/releases?per_page=30";
     private static final int TIMEOUT_MS = 15000;
 
     /** The latest release's Android download. */
@@ -40,6 +43,7 @@ final class Updater {
         String apkUrl;
         long size;
         String sha256;    // lowercase hex, or null when GitHub lists none
+        int beta;         // a Beta's number, from the tag "v0.0.1-beta.5" (0: not a Beta)
 
         Bundle toBundle() {
             final Bundle bundle = new Bundle();
@@ -47,6 +51,7 @@ final class Updater {
             bundle.putString("apkUrl", apkUrl);
             bundle.putLong("size", size);
             bundle.putString("sha256", sha256);
+            bundle.putInt("beta", beta);
             return bundle;
         }
 
@@ -59,6 +64,7 @@ final class Updater {
             release.apkUrl = bundle.getString("apkUrl");
             release.size = bundle.getLong("size", -1);
             release.sha256 = bundle.getString("sha256");
+            release.beta = bundle.getInt("beta", 0);
             return release;
         }
     }
@@ -107,6 +113,71 @@ final class Updater {
         } finally {
             connection.disconnect();
         }
+    }
+
+    /**
+     * The newest Beta pre-release ("v0.0.1-beta.5" with a "-beta-android-arm64.apk" download), or null
+     * when there is none. Network: call off the UI thread.
+     */
+    static Release latestBeta() throws IOException {
+        final HttpURLConnection connection = open(debugProperty("debug.basara.beta_releases_url", ALL_RELEASES));
+        connection.setRequestProperty("Accept", "application/vnd.github+json");
+        try {
+            final int code;
+            try {
+                code = connection.getResponseCode();
+            } catch (IOException e) {
+                throw new IOException("couldn't reach GitHub. Check the internet connection and try again.");
+            }
+            if (code == HttpURLConnection.HTTP_NOT_FOUND) return null;
+            if (code != HttpURLConnection.HTTP_OK) throw new IOException("GitHub answered " + code);
+            final JSONArray releases = new JSONArray(readAll(connection.getInputStream()));
+            Release best = null;
+            for (int r = 0; r < releases.length(); ++r) {
+                final JSONObject json = releases.getJSONObject(r);
+                if (json.optBoolean("draft", false)) continue;
+                final java.util.regex.Matcher tag = java.util.regex.Pattern
+                        .compile("^[vV]?([0-9.]+)-beta\\.([0-9]+)$").matcher(json.optString("tag_name", ""));
+                if (!tag.matches()) continue;
+                final int number = Integer.parseInt(tag.group(2));
+                if (best != null && number <= best.beta) continue;
+                final JSONArray assets = json.getJSONArray("assets");
+                for (int i = 0; i < assets.length(); ++i) {
+                    final JSONObject asset = assets.getJSONObject(i);
+                    if (!asset.getString("name").endsWith("-beta" + APK_SUFFIX)) continue;
+                    final Release release = new Release();
+                    release.version = tag.group(1) + " Beta " + number;
+                    release.beta = number;
+                    release.apkUrl = asset.getString("browser_download_url");
+                    release.size = asset.optLong("size", -1);
+                    final String digest = asset.optString("digest", "");
+                    release.sha256 = digest.startsWith("sha256:") ? digest.substring(7).toLowerCase() : null;
+                    best = release;
+                    break;
+                }
+            }
+            return best;
+        } catch (JSONException e) {
+            throw new IOException("unreadable answer from GitHub: " + e.getMessage());
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    /** The Beta's number (its versionCode), or 0 for the release. */
+    static int installedBeta(Context context) {
+        if (!BuildConfig.BETA) return 0;
+        try {
+            return (int) context.getPackageManager().getPackageInfo(context.getPackageName(), 0).getLongVersionCode();
+        } catch (PackageManager.NameNotFoundException e) {
+            return 0;
+        }
+    }
+
+    /** "0.0.1 Beta 5", or "0.0.1" for the release: how the app names itself. */
+    static String displayVersion(Context context) {
+        final int beta = installedBeta(context);
+        return installedVersion(context) + (beta > 0 ? " Beta " + beta : "");
     }
 
     static String installedVersion(Context context) {

@@ -27,13 +27,15 @@ final class SettingsMenu {
     private static final String TAG = "Basara";
     private static final int BACKGROUND = Color.rgb(16, 20, 24);
 
-    private static final String[] SECTIONS = {"Display", "Graphics", "Performance", "Controls"};
+    private static final String[] SECTIONS = {"Display", "Graphics", "Performance", "Controls", "Experimental"};
     private static final String[] SECTION_ABOUT = {
         "Picture shape and size",
         "Sharpness and GPU fixes",
         "Smoothness and speed",
         "Touch controls and motion",
+        "Unfinished, for testers",
     };
+    private static final int SECTION_EXPERIMENTAL = 4;
 
     private final Activity activity;
     private final AppSettings settings;
@@ -44,7 +46,14 @@ final class SettingsMenu {
     private int section;
 
     static void show(Activity activity) {
-        new SettingsMenu(activity).dialog.show();
+        show(activity, null);
+    }
+
+    /** `closed`: runs when the screen closes (the launcher shows the settings in use). */
+    static void show(Activity activity, Runnable closed) {
+        final SettingsMenu menu = new SettingsMenu(activity);
+        if (closed != null) menu.dialog.setOnDismissListener(d -> closed.run());
+        menu.dialog.show();
     }
 
     private SettingsMenu(Activity activity) {
@@ -53,7 +62,7 @@ final class SettingsMenu {
 
         nav = new LinearLayout(activity);
         nav.setOrientation(LinearLayout.VERTICAL);
-        final TextView title = text("Settings", 24, Color.WHITE);
+        final TextView title = text(Tr.t("Settings"), 24, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setPadding(dp(8), 0, 0, dp(14));
         nav.addView(title);
@@ -64,15 +73,16 @@ final class SettingsMenu {
             item.setPadding(dp(16), dp(10), dp(16), dp(10));
             item.setClickable(true);
             item.setOnClickListener(v -> showSection(index));
-            final TextView name = text(SECTIONS[i], 16, Color.WHITE);
+            final TextView name = text(Tr.t(SECTIONS[i]), 16,
+                    i == SECTION_EXPERIMENTAL ? Sheet.WARNING_TEXT : Color.WHITE);
             name.setTypeface(LauncherActivity.MEDIUM);
             item.addView(name);
-            item.addView(text(SECTION_ABOUT[i], 12, LauncherActivity.MUTED));
+            item.addView(text(Tr.t(SECTION_ABOUT[i]), 12, LauncherActivity.MUTED));
             nav.addView(item, matchWidth(dp(6)));
         }
         final View spacer = new View(activity);
         nav.addView(spacer, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        final TextView done = text("Done", 17, Color.WHITE);
+        final TextView done = text(Tr.t("Done"), 17, Color.WHITE);
         done.setTypeface(Typeface.DEFAULT_BOLD);
         done.setGravity(Gravity.CENTER);
         done.setPadding(0, dp(12), 0, dp(12));
@@ -125,21 +135,20 @@ final class SettingsMenu {
         }
     }
 
-    /** GX Thread is read once when the game starts: either change needs a restart, or it goes back. */
-    private void confirmGxThreadRestart(boolean on) {
-        final String state = on ? "on" : "off";
-        final Runnable revert = () -> {
-            settings.setGxThread(!on);
+    /** A setting read once when the game starts: either the change restarts it, or it goes back. */
+    private void confirmRestart(String name, String now, String before, Runnable revert) {
+        final Runnable back = () -> {
+            revert.run();
             changed();
         };
-        new Sheet(activity, "Restart Required", "GX Thread takes effect when the game starts again.")
-                .action("Restart", "Restart the game now with GX Thread " + state, true, false, () -> {
+        new Sheet(activity, Tr.t("Restart Required"), name + Tr.t(" takes effect when the game starts again."))
+                .action(Tr.t("Restart"), Tr.t("Restart the game now with ") + name + " " + now, true, false, () -> {
                     if (activity instanceof LauncherActivity && ((LauncherActivity) activity).restartGame()) {
                         dialog.dismiss();
                     }
                 })
-                .action("Cancel", "Keep GX Thread " + (on ? "off" : "on"), false, false, revert)
-                .onCancel(revert)
+                .action(Tr.t("Cancel"), Tr.t("Keep ") + name + " " + before, false, false, back)
+                .onCancel(back)
                 .show();
     }
 
@@ -166,15 +175,25 @@ final class SettingsMenu {
             case 0: showDisplay(); break;
             case 1: showGraphics(); break;
             case 2: showPerformance(); break;
-            default: showControls(); break;
+            case 3: showControls(); break;
+            default: showExperimental(); break;
         }
     }
 
     // --- sections --------------------------------------------------------------------------------
 
     private void showDisplay() {
-        choiceRow("Aspect Ratio", "The shape of the picture.",
-                new String[] {"Original 4:3", "16:9", "Fill Screen"}, settings.aspectMode(), true,
+        choiceRow(Tr.t("Language"), Tr.t("The launcher's language. Auto follows the phone's region: Indonesian "
+                        + "in Indonesia, English elsewhere."),
+                new String[] {Tr.t("Auto"), "English", "Bahasa Indonesia"}, settings.language(), true, which -> {
+                    settings.setLanguage(which);
+                    Tr.init(activity);
+                    // Every screen is drawn again in the new language.
+                    dialog.dismiss();
+                    activity.recreate();
+                });
+        choiceRow(Tr.t("Aspect Ratio"), Tr.t("The shape of the picture."),
+                new String[] {Tr.t("Original 4:3"), "16:9", Tr.t("Fill Screen")}, settings.aspectMode(), true,
                 which -> settings.setAspectMode(which));
         final float[] scales = AppSettings.RESOLUTION_SCALES;
         final String[] labels = new String[scales.length];
@@ -189,23 +208,23 @@ final class SettingsMenu {
         final DisplayMetrics screen = activity.getResources().getDisplayMetrics();
         final boolean aboveScreen = settings.resolutionScale() > 0f
                 && 480 * settings.resolutionScale() > Math.min(screen.widthPixels, screen.heightPixels) * 1.05f;
-        choiceRow("Render Resolution", "Rendered at " + renderSize(settings.resolutionScale())
+        choiceRow(Tr.t("Render Resolution"), Tr.t("Rendered at ") + renderSize(settings.resolutionScale())
                 + (aboveScreen
-                        ? ", more than this screen shows: several times the GPU work for little sharpness, so fps can drop. Match screen is sharp enough."
-                        : ". Lower is lighter on a slow phone; FSR1 keeps it sharp."), labels, selected, true,
+                        ? Tr.t(", more than this screen shows: several times the GPU work for little sharpness, so fps can drop. Match screen is sharp enough.")
+                        : Tr.t(". Lower is lighter on a slow phone; FSR1 keeps it sharp.")), labels, selected, true,
                 which -> settings.setResolutionScale(scales[which]));
-        toggleRow("Performance Overlay", "A see-through bar at the top of the game with FPS and phone stats.",
+        toggleRow(Tr.t("Performance Overlay"), Tr.t("A see-through bar at the top of the game with FPS and phone stats."),
                 settings.showFps(), on -> settings.setShowFps(on));
-        final String[] items = {"FPS", "CPU %", "GPU %", "Battery", "Temperature °C", "Details (ms, draws, RAM)",
-                "Frametime Graph"};
+        final String[] items = {Tr.t("FPS"), Tr.t("CPU %"), Tr.t("GPU %"), Tr.t("Battery"), Tr.t("Temperature °C"), Tr.t("Details (ms, draws, RAM)"),
+                Tr.t("Frametime Graph")};
         final int mask = settings.overlayItems();
         final boolean[] lit = new boolean[items.length];
         for (int i = 0; i < 6; ++i) lit[i] = (mask & (1 << i)) != 0;
         lit[6] = settings.frameGraph();
-        multiRow("Overlay Items", settings.showFps()
-                        ? "Tap to show or hide each one. FPS counts the frames the game really draws a second. "
-                                + "CPU is how busy the game's thread is: near 100% means the phone's CPU is the limit."
-                        : "Turn Performance Overlay on to choose.",
+        multiRow(Tr.t("Overlay Items"), settings.showFps()
+                        ? Tr.t("Tap to show or hide each one. FPS counts the frames the game really draws a second. "
+                                + "CPU is how busy the game's thread is: near 100% means the phone's CPU is the limit.")
+                        : Tr.t("Turn Performance Overlay on to choose."),
                 items, lit, settings.showFps(), which -> {
                     if (which == 6) settings.setFrameGraph(!settings.frameGraph());
                     else settings.setOverlayItems(settings.overlayItems() ^ (1 << which));
@@ -213,91 +232,168 @@ final class SettingsMenu {
     }
 
     private void showGraphics() {
-        toggleRow("FSR1 Upscaling", "Keeps a picture rendered below the screen's resolution sharp when "
-                + "it is stretched to fill it.", settings.fsrOn(), on -> settings.setFsrOn(on));
-        choiceRow("FSR1 Quality", settings.fsrOn()
-                        ? "Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's "
-                                + "edge-aware upscale: sharpest, but several ms on a small phone GPU."
-                        : "Turn FSR1 Upscaling on to choose.",
-                new String[] {"Light", "Full"}, settings.fsrFull() ? 1 : 0, settings.fsrOn(),
+        toggleRow(Tr.t("FSR1 Upscaling"), Tr.t("Keeps a picture rendered below the screen's resolution sharp when "
+                + "it is stretched to fill it."), settings.fsrOn(), on -> settings.setFsrOn(on));
+        choiceRow(Tr.t("FSR1 Quality"), settings.fsrOn()
+                        ? Tr.t("Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's "
+                                + "edge-aware upscale: sharpest, but several ms on a small phone GPU.")
+                        : Tr.t("Turn FSR1 Upscaling on to choose."),
+                new String[] {Tr.t("Light"), Tr.t("Full")}, settings.fsrFull() ? 1 : 0, settings.fsrOn(),
                 which -> settings.setFsrFull(which == 1));
-        choiceRow("Texture Detail", "Keeps the ground, walls and characters sharp at low Render "
-                        + "Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU.",
-                new String[] {"Original", "Sharp", "Sharpest"}, settings.textureFilter(), true,
+        choiceRow(Tr.t("Texture Detail"), Tr.t("Keeps the ground, walls and characters sharp at low Render "
+                        + "Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU."),
+                new String[] {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")}, settings.textureFilter(), true,
                 which -> settings.setTextureFilter(which));
-        choiceRow("Graphics Compatibility", "Fixes for phone GPUs whose drivers break the 3D models "
-                        + "(scrambled textures, stretched characters). Auto uses them where needed.",
-                new String[] {"Auto", "On", "Off"}, settings.gpuCompat(), true,
+        choiceRow(Tr.t("Graphics Compatibility"), Tr.t("Fixes for phone GPUs whose drivers break the 3D models "
+                        + "(scrambled textures, stretched characters). Auto uses them where needed."),
+                new String[] {Tr.t("Auto"), Tr.t("On"), Tr.t("Off")}, settings.gpuCompat(), true,
                 which -> settings.setGpuCompat(which));
-        final String folder = BuildConfig.BETA ? "basara2heroes-beta/textures" : "basara2heroes/textures";
-        final boolean files = android.os.Environment.isExternalStorageManager();
-        toggleRow("Custom Textures", files
-                        ? "Uses your own textures (tex1_*.png, Dolphin-style names) from " + folder
-                                + " in place of the game's. Takes effect when the game starts again."
-                        : "Needs \"All files access\" for this app, to read " + folder + ".",
-                settings.customTextures(), files, on -> settings.setCustomTextures(on));
-        toggleRow("Dump Textures", settings.customTextures()
-                        ? "Saves each texture the game uses to " + folder + "/dump, named the way its "
-                                + "replacement must be: edit one and put it in " + folder + ". Slows loading "
-                                + "and fills storage, so turn it off when done."
-                        : "Turn Custom Textures on to choose.",
-                settings.dumpTextures(), settings.customTextures(), on -> settings.setDumpTextures(on));
     }
 
     private void showPerformance() {
-        toggleRow("V-Sync", "Frames go out in step with the display: smoother motion.", settings.vsync(),
+        toggleRow(Tr.t("V-Sync"), Tr.t("Frames go out in step with the display: smoother motion."), settings.vsync(),
                 on -> settings.setVSync(on));
-        choiceRow("Frameskip", "The game moves one step per drawn frame, so a slow phone plays in slow "
+        choiceRow(Tr.t("Frameskip"), Tr.t("The game moves one step per drawn frame, so a slow phone plays in slow "
                         + "motion. Auto skips drawing a frame when it falls behind: closer to full speed, "
-                        + "choppier picture.",
-                new String[] {"Off", "Auto"}, settings.frameskip() ? 1 : 0, true,
+                        + "choppier picture."),
+                new String[] {Tr.t("Off"), Tr.t("Auto")}, settings.frameskip() ? 1 : 0, true,
                 which -> settings.setFrameskip(which == 1));
-        toggleRow("30 FPS Lock", "Draws every other frame, evenly paced: a steady 30 FPS while the game "
+        toggleRow(Tr.t("30 FPS Lock"), Tr.t("Draws every other frame, evenly paced: a steady 30 FPS while the game "
                         + "and sound keep full speed. For phones that cannot hold 60. Replaces Frameskip "
-                        + "while on.",
+                        + "while on."),
                 settings.fpsLock30(), on -> settings.setFpsLock30(on));
-        toggleRow("Dynamic Resolution", "Lowers the render resolution while the GPU holds the game back "
-                        + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
-                        + "highest it goes.",
-                settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
         final boolean thermal = AppSettings.thermalSupported(activity);
-        toggleRow("Thermal Control", thermal
-                        ? "When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
+        toggleRow(Tr.t("Thermal Control"), thermal
+                        ? Tr.t("When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
                         + "for at least a minute, and lowers the resolution if the GPU is the one working "
-                        + "hard. Back to normal once it cools down."
-                        : "Not available: needs Android 12 or newer with a thermal sensor report.",
+                        + "hard. Back to normal once it cools down.")
+                        : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
                 settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
-        toggleRow("GX Thread (Experimental)", "Runs the graphics work on its own CPU core, so busy "
-                        + "battles run faster on slower phones. Known issue: textures and the sky can "
-                        + "flicker white. Turning it on restarts the game.",
-                settings.gxThread(), on -> {
-                    settings.setGxThread(on);
-                    confirmGxThreadRestart(on);
-                });
     }
 
     private void showControls() {
-        toggleRow("Touch Controls", "The on-screen Classic Controller.", settings.touchControls(),
+        toggleRow(Tr.t("Touch Controls"), Tr.t("The on-screen Classic Controller."), settings.touchControls(),
                 on -> settings.setTouchControls(on));
         final String[] opacities = {"20%", "40%", "60%", "80%", "100%"};
         final int opacity = Math.max(0, Math.min(4, Math.round(settings.touchOpacity() * 5f) - 1));
-        choiceRow("Touch Control Opacity", "How solid the controls look over the game.", opacities, opacity,
+        choiceRow(Tr.t("Touch Control Opacity"), Tr.t("How solid the controls look over the game."), opacities, opacity,
                 settings.touchControls(), which -> settings.setTouchOpacity((which + 1) / 5f));
-        actionRow("Touch Control Layout", settings.touchLayout().isEmpty()
-                        ? "Move and resize the controls while playing: Back > Edit Controls Layout."
-                        : "Arranged by you. Change it while playing: Back > Edit Controls Layout.",
-                settings.touchLayout().isEmpty() ? null : "Reset", () -> settings.setTouchLayout(""));
-        toggleRow("Fixed Left Stick", "On: the stick moves only when touched where it is drawn. "
-                        + "Off: a thumb anywhere on the empty left side grabs it.",
+        actionRow(Tr.t("Touch Control Layout"), settings.touchLayout().isEmpty()
+                        ? Tr.t("Move and resize the controls while playing: Back > Edit Controls Layout.")
+                        : Tr.t("Arranged by you. Change it while playing: Back > Edit Controls Layout."),
+                settings.touchLayout().isEmpty() ? null : Tr.t("Reset"), () -> settings.setTouchLayout(""));
+        toggleRow(Tr.t("Fixed Left Stick"), Tr.t("On: the stick moves only when touched where it is drawn. "
+                        + "Off: a thumb anywhere on the empty left side grabs it."),
                 settings.fixedStick(), on -> settings.setFixedStick(on));
-        toggleRow("Vibration", "A short buzz when a touch button is pressed.", settings.haptics(),
+        toggleRow(Tr.t("Vibration"), Tr.t("A short buzz when a touch button is pressed."), settings.haptics(),
                 on -> settings.setHaptics(on));
-        toggleRow("Touch camera", "Drag on the empty right side of the screen to turn the camera.",
+        toggleRow(Tr.t("Touch camera"), Tr.t("Drag on the empty right side of the screen to turn the camera."),
                 settings.touchCamera(), on -> settings.setTouchCamera(on));
-        toggleRow("Tilt", "Turn the phone like a steering wheel.", settings.motionTilt(),
+        toggleRow(Tr.t("Tilt"), Tr.t("Turn the phone like a steering wheel."), settings.motionTilt(),
                 on -> settings.setMotionTilt(on));
-        toggleRow("Shake", "Jolt the phone to shake the remote.", settings.motionShake(),
+        toggleRow(Tr.t("Shake"), Tr.t("Jolt the phone to shake the remote."), settings.motionShake(),
                 on -> settings.setMotionShake(on));
+    }
+
+    /**
+     * Everything unfinished, each with a warning: testers can find them, players know what they risk.
+     * Each is read when the game starts, unless it says otherwise.
+     */
+    private void showExperimental() {
+        rows.addView(Sheet.warningBox(activity, Tr.t("Experimental features"),
+                Tr.t("Unfinished and only partly tested. They can crash the game, glitch the picture, use much more "
+                        + "RAM, storage and battery, or make the phone hot. Leave them off to play normally. If "
+                        + "you test one, say which in your report and send the log (") + folderName("console.log")
+                        + ")."),
+                matchWidth(0));
+
+        warn(weakPhone()
+                ? Tr.t("This phone has little RAM or renders below 1x: likely to crash, and the gain is small.")
+                : Tr.t("Uses more RAM (up to 4x per texture) and storage, and works on the CPU while you play."));
+        choiceRow(Tr.t("HD Textures"), Tr.t("Makes the game's textures twice as sharp: each one is upscaled on a "
+                        + "background thread the first time it appears, and kept for next time. It looks blurry, "
+                        + "then sharp, while that happens. Prepare from disc (all at once, before playing) is "
+                        + "coming later."),
+                new String[] {Tr.t("Off"), Tr.t("Live")}, settings.hdTextures(), true, which -> {
+                    final int before = settings.hdTextures();
+                    settings.setHdTextures(which);
+                    confirmRestart(Tr.t("HD Textures"), which == 1 ? Tr.t("Live") : "off", before == 1 ? Tr.t("Live") : "off",
+                            () -> settings.setHdTextures(before));
+                });
+        final int[] sizes = AppSettings.HD_CACHE_SIZES;
+        int size = 1;
+        for (int i = 0; i < sizes.length; ++i) if (sizes[i] == settings.hdCacheMb()) size = i;
+        choiceRow(Tr.t("HD Texture Storage"), settings.hdTextures() != 0
+                        ? Tr.t("The most storage the sharper textures may take; once full, no new ones are made.")
+                        : Tr.t("Turn HD Textures on to choose."),
+                new String[] {Tr.t("512 MB"), Tr.t("1 GB"), Tr.t("2 GB")}, size, settings.hdTextures() != 0,
+                which -> settings.setHdCacheMb(sizes[which]));
+        final java.io.File hdCache = AppFiles.hdCacheDir();
+        final long used = AppFiles.folderSize(hdCache);
+        actionRow(Tr.t("HD Texture Cache"), hdCache == null ? Tr.t("Needs \"All files access\" for this app.")
+                        : String.format(java.util.Locale.ROOT, Tr.t("%.0f MB in %s."), used / 1048576.0,
+                                folderName("hd-cache")),
+                used > 0 ? Tr.t("Clear") : null, this::confirmClearHdCache);
+
+        warn(Tr.t("Writes to the log while you play."));
+        toggleRow(Tr.t("Report Texture Keys"), Tr.t("Lists the name of every texture the game uses in the log (only "
+                        + "the names, no pictures), so testers can check that texture packs match the game. "
+                        + "Takes effect when the game starts again."),
+                settings.textureKeyReport(), on -> settings.setTextureKeyReport(on));
+
+        final String folder = folderName("textures");
+        final boolean files = android.os.Environment.isExternalStorageManager();
+        warn(Tr.t("A wrong or very large pack can crash the game or use up RAM."));
+        toggleRow(Tr.t("Custom Textures"), files
+                        ? Tr.t("Uses your own textures (tex1_*.png, Dolphin-style names) from ") + folder
+                                + Tr.t(" in place of the game's. Takes effect when the game starts again.")
+                        : Tr.t("Needs \"All files access\" for this app, to read ") + folder + ".",
+                settings.customTextures(), files, on -> settings.setCustomTextures(on));
+        warn(Tr.t("Slows loading and fills storage quickly."));
+        toggleRow(Tr.t("Dump Textures"), settings.customTextures()
+                        ? Tr.t("Saves each texture the game uses to ") + folder + Tr.t("/dump, named the way its "
+                                + "replacement must be: edit one and put it in ") + folder + Tr.t(". Turn it off when "
+                                + "done.")
+                        : Tr.t("Turn Custom Textures on to choose."),
+                settings.dumpTextures(), settings.customTextures(), on -> settings.setDumpTextures(on));
+
+        warn(Tr.t("Can make the picture switch between sharp and soft during battles."));
+        toggleRow(Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
+                        + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
+                        + "highest it goes."),
+                settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
+        warn(Tr.t("Known issue: textures and the sky can flicker white."));
+        toggleRow(Tr.t("GX Thread"), Tr.t("Runs the graphics work on its own CPU core, so busy battles run faster on "
+                        + "slower phones. Turning it on or off restarts the game."),
+                settings.gxThread(), on -> {
+                    settings.setGxThread(on);
+                    confirmRestart(Tr.t("GX Thread"), on ? "on" : "off", on ? "off" : "on",
+                            () -> settings.setGxThread(!on));
+                });
+    }
+
+    /** RAM under 4.5 GB, or a render scale below 1x: HD Textures costs a lot and shows little. */
+    private boolean weakPhone() {
+        final android.app.ActivityManager am = activity.getSystemService(android.app.ActivityManager.class);
+        final android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+        if (am != null) am.getMemoryInfo(info);
+        final float scale = settings.resolutionScale();
+        return (info.totalMem > 0 && info.totalMem < (4500L << 20)) || (scale > 0f && scale < 1f);
+    }
+
+    private static String folderName(String sub) {
+        return (BuildConfig.BETA ? "basara2heroes-beta/" : "basara2heroes/") + sub;
+    }
+
+    private void confirmClearHdCache() {
+        new Sheet(activity, Tr.t("Clear HD Texture Cache?"), Tr.t("The sharper textures are made again while you play."))
+                .action(Tr.t("Clear"), null, true, true, () -> {
+                    final java.io.File dir = AppFiles.hdCacheDir();
+                    if (dir != null) AppFiles.deleteRecursively(dir);
+                    changed();
+                })
+                .action(Tr.t("Cancel"), null, false, false, null)
+                .show();
     }
 
     /** "WxH" the game renders at for a scale (0: the screen's own size). */
@@ -320,6 +416,13 @@ final class SettingsMenu {
     private interface Toggle { void set(boolean on); }
     private interface Choice { void pick(int which); }
 
+    /** The next card gets a red warning box under its text (experimental features). */
+    private String pendingWarning;
+
+    private void warn(String warning) {
+        pendingWarning = warning;
+    }
+
     /** A card: the setting's name and a line about it, with `control` on the right or underneath. */
     private LinearLayout card(String title, String about, View control, boolean underneath, boolean enabled) {
         final LinearLayout card = new LinearLayout(activity);
@@ -336,6 +439,10 @@ final class SettingsMenu {
         final TextView line = text(about, 13, LauncherActivity.MUTED);
         line.setPadding(0, dp(2), 0, 0);
         words.addView(line);
+        if (pendingWarning != null) {
+            words.addView(Sheet.warningBox(activity, Tr.t("Experimental"), pendingWarning), matchWidth(dp(8)));
+            pendingWarning = null;
+        }
         if (underneath) {
             card.addView(words, matchWidth(0));
             if (control != null) card.addView(control, matchWidth(dp(12)));
@@ -373,7 +480,7 @@ final class SettingsMenu {
         final LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(dp(56), dp(32));
         final LinearLayout box = new LinearLayout(activity);
         box.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView state = text(on ? "On" : "Off", 13, on ? Color.WHITE : LauncherActivity.MUTED);
+        final TextView state = text(on ? Tr.t("On") : Tr.t("Off"), 13, on ? Color.WHITE : LauncherActivity.MUTED);
         state.setTypeface(Typeface.DEFAULT_BOLD);
         state.setPadding(0, 0, dp(10), 0);
         box.addView(state);

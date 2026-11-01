@@ -27,6 +27,7 @@ final class Sheet {
     private final LinearLayout body;
     private final LinearLayout actions;
     private boolean horizontal;
+    private final ScrollView scroll;
 
     Sheet(Activity activity, String title, String subtitle) {
         this.activity = activity;
@@ -51,7 +52,7 @@ final class Sheet {
         card.setBackground(rounded(LauncherActivity.SURFACE, dp(24)));
         card.addView(body);
         card.addView(actions, matchWidth(dp(6)));
-        final ScrollView scroll = new ScrollView(activity);
+        scroll = new ScrollView(activity);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.addView(card);
 
@@ -118,6 +119,91 @@ final class Sheet {
         view.setPadding(dp(4), dp(18), 0, 0);
         body.addView(view);
         return this;
+    }
+
+    /** A red-tinted box with a bold warning line: for experimental features and risky steps. */
+    Sheet warning(String title, String about) {
+        body.addView(warningBox(activity, title, about), matchWidth(dp(12)));
+        return this;
+    }
+
+    /** The warning box, shared with the settings screen's experimental cards. */
+    static LinearLayout warningBox(Activity activity, String title, String about) {
+        final float density = activity.getResources().getDisplayMetrics().density;
+        final LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final int pad = Math.round(12 * density);
+        box.setPadding(pad, Math.round(10 * density), pad, Math.round(10 * density));
+        final GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(Math.round(14 * density));
+        shape.setColor(WARNING_FILL);
+        shape.setStroke(Math.max(1, Math.round(density)), WARNING_TEXT);
+        box.setBackground(shape);
+        final TextView name = new TextView(activity);
+        name.setText("⚠  " + title);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        name.setTextColor(WARNING_TEXT);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(name);
+        if (about != null) {
+            final TextView line = new TextView(activity);
+            line.setText(about);
+            line.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            line.setTextColor(Color.rgb(255, 205, 200));
+            line.setPadding(0, Math.round(2 * density), 0, 0);
+            box.addView(line);
+        }
+        return box;
+    }
+
+    static final int WARNING_FILL = Color.rgb(64, 22, 24);
+    static final int WARNING_TEXT = Color.rgb(255, 120, 110);
+
+    /** Any view in the body (a progress bar, a list). */
+    Sheet view(View view) {
+        body.addView(view, matchWidth(dp(12)));
+        return this;
+    }
+
+    /** A wrapped text paragraph. */
+    Sheet paragraph(String value) {
+        final TextView view = text(value, 14, Color.rgb(200, 206, 212));
+        view.setPadding(dp(4), dp(10), 0, 0);
+        body.addView(view);
+        return this;
+    }
+
+    /** False: Back and taps outside do nothing (work in progress). */
+    Sheet cancelable(boolean cancelable) {
+        dialog.setCancelable(cancelable);
+        dialog.setCanceledOnTouchOutside(cancelable);
+        return this;
+    }
+
+    void scrollToTop() {
+        scroll.scrollTo(0, 0);
+    }
+
+    void dismiss() {
+        dialog.dismiss();
+    }
+
+    /**
+     * A button that keeps the sheet open: `run` gets its label, to change it (e.g. "Stopping…").
+     * Returns the button, so it can be disabled.
+     */
+    View actionStay(String label, boolean danger, java.util.function.Consumer<TextView> run) {
+        final LinearLayout button = new LinearLayout(activity);
+        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setPadding(dp(18), dp(12), dp(18), dp(12));
+        button.setBackground(rounded(LauncherActivity.RAISED, dp(18)));
+        final TextView name = text(label, 16, danger ? WARNING_TEXT : Color.WHITE);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        button.addView(name);
+        button.setClickable(true);
+        button.setOnClickListener(v -> run.accept(name));
+        actions.addView(button, matchWidth(dp(10)));
+        return button;
     }
 
     /** Plain faint text, such as the version. */

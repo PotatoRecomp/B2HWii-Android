@@ -160,6 +160,25 @@ final class AppSettings {
     boolean dumpTextures() { return prefs.getBoolean("dump_textures", false); }
     void setDumpTextures(boolean on) { prefs.edit().putBoolean("dump_textures", on).commit(); }
 
+    /** HD Textures (experimental): 0 off, 1 live (upscaled 2x while playing, kept in hd-cache). */
+    int hdTextures() { return Math.max(0, Math.min(1, prefs.getInt("hd_textures", 0))); }
+    void setHdTextures(int mode) { prefs.edit().putInt("hd_textures", mode).commit(); }
+    /** Disk budget of the HD texture cache, in MB. */
+    static final int[] HD_CACHE_SIZES = {512, 1024, 2048};
+    int hdCacheMb() { return prefs.getInt("hd_cache_mb", 1024); }
+    void setHdCacheMb(int mb) { prefs.edit().putInt("hd_cache_mb", mb).commit(); }
+    /** Report Texture Keys: the log lists the name of each texture the game uses (no images). */
+    boolean textureKeyReport() { return prefs.getBoolean("texture_key_report", false); }
+    void setTextureKeyReport(boolean on) { prefs.edit().putBoolean("texture_key_report", on).commit(); }
+
+    /** The launcher's language: Tr.AUTO (from the phone's region), Tr.ENGLISH or Tr.INDONESIAN. */
+    int language() { return prefs.getInt("language", Tr.AUTO); }
+    void setLanguage(int language) { prefs.edit().putInt("language", language).commit(); }
+
+    /** The build whose release notes the player has seen ("" before the first). */
+    String notesSeen() { return prefs.getString("notes_seen", ""); }
+    void setNotesSeen(String build) { prefs.edit().putString("notes_seen", build).commit(); }
+
     /** Lowers the render resolution while the GPU holds the game back (the chosen one is the ceiling). */
     boolean dynamicResolution() { return prefs.getBoolean("dynamic_resolution", false); }
     void setDynamicResolution(boolean on) { prefs.edit().putBoolean("dynamic_resolution", on).commit(); }
@@ -173,7 +192,7 @@ final class AppSettings {
 
     /** "2× (960p)": the scale and the number of lines it renders, as the menu shows it. */
     static String resolutionLabel(float scale) {
-        if (scale <= 0f) return "Match screen";
+        if (scale <= 0f) return Tr.t("Match screen");
         final String factor = scale == Math.rint(scale)
                 ? String.valueOf((int) scale) : String.valueOf(scale);
         return factor + "× (" + Math.round(480 * scale) + "p)";

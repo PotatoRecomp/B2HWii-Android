@@ -346,6 +346,8 @@ No folders here.	Tidak ada folder di sini.
 Choose your save backup	Pilih backup save
 The basara2heroes-save-….zip made by Back Up. The save on this phone is replaced (and kept for Undo Last Import).	File basara2heroes-save-….zip hasil Backup. Save di HP ini diganti (dan disimpan untuk Batalkan Impor Terakhir).
 No folders or .zip files here.	Tidak ada folder atau file .zip di sini.
+The basara2heroes-save-….zip made by Back Up, or a data.bin copied from a Wii or Dolphin. The save on this phone is replaced (and kept for Undo Last Import).	File basara2heroes-save-….zip hasil Backup, atau data.bin dari Wii atau Dolphin. Save di HP ini diganti (dan disimpan untuk Batalkan Impor Terakhir).
+No folders, .zip or .bin files here.	Tidak ada folder, file .zip atau .bin di sini.
 Undo the last import?	Batalkan impor terakhir?
 The save from before that import comes back. A running game is closed without saving.	Save dari sebelum impor itu kembali. Game yang sedang jalan ditutup tanpa menyimpan.
 To list the folders on this phone.	Untuk menampilkan folder di HP ini.
@@ -465,3 +467,5 @@ The launcher asks for file access as soon as it opens, until it is given.	Launch
 GX Thread: black flashes in the battle preparation screen and white flashes in battle.	GX Thread: kedip hitam di layar persiapan dan kedip putih saat pertempuran.
 On: the scene follows the finger (drag right, the view turns left), and the right touch stick is reversed both ways. Off: the game's own directions.	On: layar mengikuti jari (geser ke kanan, pandangan berputar ke kiri), dan stik sentuh kanan dibalik dua arah. Off: arah bawaan game.
 Invert Camera now also reverses the right touch stick (both ways), not only camera drags.	Invert Camera kini juga membalik stik sentuh kanan (dua arah), bukan hanya geser kamera.
+Installing this Beta over an ended one still showed "The Beta has ended".	Memasang Beta ini di atas Beta yang sudah berakhir masih menampilkan "Beta sudah berakhir".
+Import Save refused a data.bin copied from a Wii or Dolphin ("not a save of this game"). It is now read as it is.	Impor Save menolak data.bin dari Wii atau Dolphin ("bukan save game ini"). Kini file itu bisa langsung dibaca.

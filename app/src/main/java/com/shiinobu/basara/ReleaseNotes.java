@@ -59,6 +59,8 @@ final class ReleaseNotes {
                     "Loud battle sound crackled when many effects played at once.",
                     "GX Thread: black flashes in the battle preparation screen and white flashes in battle.",
                     "Invert Camera now also reverses the right touch stick (both ways), not only camera drags.",
+                    "Installing this Beta over an ended one still showed \"The Beta has ended\".",
+                    "Import Save refused a data.bin copied from a Wii or Dolphin (\"not a save of this game\"). It is now read as it is.",
                 },
                 new String[] {
                     "malisx2 on Mali-G52 works, but is not faster than the phone's own driver.",

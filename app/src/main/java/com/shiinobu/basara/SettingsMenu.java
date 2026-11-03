@@ -374,9 +374,9 @@ final class SettingsMenu {
             return;
         }
         FileBrowser.showFiles(activity, SaveData.importStart(), Tr.t("Choose your save backup"),
-                Tr.t("The basara2heroes-save-….zip made by Back Up. The save on this phone is replaced (and kept "
-                        + "for Undo Last Import)."),
-                SaveData::isSaveFile, Tr.t("No folders or .zip files here."),
+                Tr.t("The basara2heroes-save-….zip made by Back Up, or a data.bin copied from a Wii or Dolphin. "
+                        + "The save on this phone is replaced (and kept for Undo Last Import)."),
+                SaveData::isSaveFile, Tr.t("No folders, .zip or .bin files here."),
                 file -> SaveData.importFile(activity, file, endGame(), this::changed));
     }
 

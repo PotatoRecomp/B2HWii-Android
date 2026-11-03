@@ -238,8 +238,22 @@ final class AppSettings {
     void setSkipBoot(boolean on) { prefs.edit().putBoolean("skip_boot", on).commit(); }
 
     /** Beta only: why the Beta ended, once BetaGate has seen it end (kept, so going offline won't reopen it). */
-    String betaEnded() { return prefs.getString("beta_ended", null); }
-    void setBetaEnded(String reason) { prefs.edit().putString("beta_ended", reason).commit(); }
+    /**
+     * Why this Beta ended, or null. Kept with the versionCode it was seen on: an update installed over
+     * an ended Beta starts clean (the next check locks it again if it is still too old).
+     */
+    String betaEnded() {
+        final String reason = prefs.getString("beta_ended", null);
+        if (reason == null) return null;
+        if (prefs.getInt("beta_ended_code", -1) != BuildConfig.VERSION_CODE) {
+            prefs.edit().remove("beta_ended").remove("beta_ended_code").commit();
+            return null;
+        }
+        return reason;
+    }
+    void setBetaEnded(String reason) {
+        prefs.edit().putString("beta_ended", reason).putInt("beta_ended_code", BuildConfig.VERSION_CODE).commit();
+    }
 
     /** "2× (960p)": the scale and the number of lines it renders, as the menu shows it. */
     static String resolutionLabel(float scale) {

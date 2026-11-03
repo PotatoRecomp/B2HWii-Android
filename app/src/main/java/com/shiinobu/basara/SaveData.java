@@ -86,10 +86,10 @@ final class SaveData {
         return zips != null && zips.length > 0 ? saves : FileBrowser.downloads();
     }
 
-    /** What Import lists: a .zip, or a bare basara2w.dat. */
+    /** What Import lists: a .zip, a bare basara2w.dat, or a Wii SD export data.bin (any .bin). */
     static boolean isSaveFile(File file) {
         final String name = file.getName().toLowerCase(Locale.ROOT);
-        return name.endsWith(".zip") || name.equals(SAVE);
+        return name.endsWith(".zip") || name.endsWith(".bin") || name.equals(SAVE);
     }
 
     static void startExport(Activity activity) {
@@ -233,11 +233,17 @@ final class SaveData {
                         if (entry.isDirectory()) continue;
                         if (name.equals(SAVE)) save = readAll(zip);
                         else if (name.equals(BANNER)) banner = readAll(zip);
+                        else if (name.equalsIgnoreCase("data.bin") && save == null) save = readAll(zip);
                     }
                 }
             } else {
                 save = readAll(in);
             }
+        }
+        if (save != null && isWiiDataBin(save)) {
+            final byte[][] parts = fromWiiDataBin(save);
+            save = parts[0];
+            if (parts[1] != null) banner = parts[1];
         }
         if (save == null) throw new IOException(Tr.t("No basara2w.dat in this file: pick a backup made here."));
         if (save.length < 1024) throw new IOException(Tr.t("This is not a Sengoku Basara 2 Heroes save."));
@@ -253,6 +259,63 @@ final class SaveData {
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
         write(new File(dir, SAVE), save);
         if (banner != null) write(new File(dir, BANNER), banner);
+    }
+
+    // Wii SD export (Data Management > copy to SD, or Dolphin's Export Wii Save): private/wii/title/RBSJ/data.bin.
+    // Layout as Dolphin's Core/WiiSave.cpp: 0xF0C0 encrypted header (title id, banner), 0x80 "Bk" header,
+    // then per file a 0x80 header (size, name, IV) and its data encrypted and padded to 0x40, then certificates.
+    private static final int DATABIN_HEADER = 0xF0C0;
+    private static final byte[] SD_KEY = {(byte) 0xab, 0x01, (byte) 0xb9, (byte) 0xd8, (byte) 0xe1, 0x62, 0x2b, 0x08,
+            (byte) 0xaf, (byte) 0xba, (byte) 0xd8, 0x4d, (byte) 0xbf, (byte) 0xc2, (byte) 0xa5, 0x5d};
+    private static final byte[] SD_IV = {0x21, 0x67, 0x12, (byte) 0xe6, (byte) 0xaa, 0x1f, 0x68, (byte) 0x9f,
+            (byte) 0x95, (byte) 0xc5, (byte) 0xa2, 0x23, 0x24, (byte) 0xdc, 0x6a, (byte) 0x98};
+    private static final long TITLE_ID = 0x000100005242534aL;
+
+    private static boolean isWiiDataBin(byte[] bin) {
+        return bin.length > DATABIN_HEADER + 0x100 && be32(bin, DATABIN_HEADER + 4) == 0x426b0001;
+    }
+
+    /** { basara2w.dat, banner.bin or null } out of a Wii data.bin. */
+    private static byte[][] fromWiiDataBin(byte[] bin) throws IOException {
+        final byte[] header = aes(bin, 0, DATABIN_HEADER, SD_IV);
+        final long title = ((long) be32(header, 0) << 32) | (be32(header, 4) & 0xffffffffL);
+        if (title != TITLE_ID) throw new IOException(Tr.t("This is not a Sengoku Basara 2 Heroes save."));
+        final int bannerSize = be32(header, 8);
+        final byte[] banner = bannerSize > 0 && bannerSize <= DATABIN_HEADER - 0x20
+                ? Arrays.copyOfRange(header, 0x20, 0x20 + bannerSize) : null;
+        final int files = be32(bin, DATABIN_HEADER + 0xc);
+        int at = DATABIN_HEADER + 0x80;
+        for (int i = 0; i < files && at + 0x80 <= bin.length; ++i) {
+            if (be32(bin, at) != 0x03adf17e) break;
+            final int size = be32(bin, at + 4);
+            final int type = bin[at + 0xa];
+            int end = at + 0xb;
+            while (end < at + 0x50 && bin[end] != 0) ++end;
+            final String name = new String(bin, at + 0xb, end - (at + 0xb), java.nio.charset.StandardCharsets.US_ASCII);
+            final byte[] iv = Arrays.copyOfRange(bin, at + 0x50, at + 0x60);
+            at += 0x80;
+            if (type != 1) continue;  // a directory: no data follows
+            final int padded = (size + 0x3f) & ~0x3f;
+            if (size < 0 || at + padded > bin.length) break;
+            if (name.equals(SAVE)) return new byte[][] {Arrays.copyOf(aes(bin, at, padded, iv), size), banner};
+            at += padded;
+        }
+        throw new IOException(Tr.t("No basara2w.dat in this file: pick a backup made here."));
+    }
+
+    private static byte[] aes(byte[] src, int off, int len, byte[] iv) throws IOException {
+        try {
+            final javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/CBC/NoPadding");
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, new javax.crypto.spec.SecretKeySpec(SD_KEY, "AES"),
+                    new javax.crypto.spec.IvParameterSpec(iv));
+            return cipher.doFinal(src, off, len);
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IOException("data.bin: " + e.getMessage());
+        }
+    }
+
+    private static int be32(byte[] b, int off) {
+        return ((b[off] & 0xff) << 24) | ((b[off + 1] & 0xff) << 16) | ((b[off + 2] & 0xff) << 8) | (b[off + 3] & 0xff);
     }
 
     private static void backUpBeforeImport(Context context, File dir) throws IOException {

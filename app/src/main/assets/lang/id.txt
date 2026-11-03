@@ -456,3 +456,12 @@ The game closed in battle against some bosses ("Missing translated function").	G
 Dialogue repeated in short steps when the game ran around 30 fps.	Dialog berulang-ulang pendek saat game berjalan sekitar 30 fps.
 The touch camera turned slowly or not at all on gentle drags. Any drag now turns it at full speed.	Kamera sentuh berputar lambat atau diam saat digeser pelan. Kini setiap geseran memutarnya dengan kecepatan penuh.
 Loud battle sound crackled when many effects played at once.	Suara pertempuran yang keras terdengar kresek saat banyak efek berbunyi bersamaan.
+Then return to this app.	Lalu kembali ke aplikasi ini.
+Graphics > Renderer: the Vulkan renderer, lighter than the default on some phones.	Grafis > Renderer: renderer Vulkan, lebih ringan dari bawaan di sebagian HP.
+Performance > GX Thread: the graphics work runs on its own CPU core, so busy battles run faster on slower phones.	Performa > GX Thread: kerja grafis berjalan di core CPU sendiri, jadi pertempuran ramai lebih cepat di HP yang lebih lambat.
+Dynamic Resolution moved from Experimental to Performance.	Dynamic Resolution dipindah dari Eksperimen ke Performa.
+Logs: every game start has its own folder, Logs/<date and time>, with log/ (console.log) and crash/ (crash reports). The 20 newest are kept.	Log: tiap kali game dimulai punya folder sendiri, Logs/<tanggal dan jam>, berisi log/ (console.log) dan crash/ (laporan crash). 20 terbaru disimpan.
+The launcher asks for file access as soon as it opens, until it is given.	Launcher langsung meminta akses file saat dibuka, sampai izinnya diberikan.
+GX Thread: black flashes in the battle preparation screen and white flashes in battle.	GX Thread: kedip hitam di layar persiapan dan kedip putih saat pertempuran.
+On: the scene follows the finger (drag right, the view turns left), and the right touch stick is reversed both ways. Off: the game's own directions.	On: layar mengikuti jari (geser ke kanan, pandangan berputar ke kiri), dan stik sentuh kanan dibalik dua arah. Off: arah bawaan game.
+Invert Camera now also reverses the right touch stick (both ways), not only camera drags.	Invert Camera kini juga membalik stik sentuh kanan (dua arah), bukan hanya geser kamera.

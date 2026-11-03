@@ -1358,6 +1358,18 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
   // Palette conversions, MSAA resolves and EFB copies depend on sealed frame state, not on the
   // interpolation weight, so encode them on the native render and let replay slots sample them.
   const bool encodeTextureBakes = interpolatedFrame < 0;
+  const auto passRuns = [&](u32 j) {
+    const auto& p = renderPasses[j];
+    return j == renderPasses.size() - 1 || (p.resolveTarget && encodeTextureBakes) || p.clearColor ||
+           p.clearDepth || !p.commands.empty();
+  };
+  // An attachment that the next pass to run clears, and nothing reads before that, need not be written
+  // back: on a tile-based GPU that saves storing the whole tile memory (EFB copy + clear does this every
+  // copy). AURORA_EFB_DISCARD=0 stores everything.
+  static const bool discardEnabled = [] {
+    const char* v = std::getenv("AURORA_EFB_DISCARD");
+    return v == nullptr || v[0] != '0';
+  }();
   for (u32 i = 0; i < renderPasses.size(); ++i) {
     const auto& passInfo = renderPasses[i];
     if (encodeTextureBakes) {
@@ -1374,12 +1386,32 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
       continue;
     }
 
+    wgpu::StoreOp colorStore = wgpu::StoreOp::Store;
+    wgpu::StoreOp depthStore = wgpu::StoreOp::Store;
+    if (discardEnabled) {
+      for (u32 j = i + 1; j < renderPasses.size(); ++j) {
+        if (!passRuns(j)) {
+          continue;
+        }
+        const auto& next = renderPasses[j];
+        // An EFB copy after this pass reads color or depth; keep whichever it reads.
+        const bool copyReadsDepth = passInfo.resolveTarget && gx::is_depth_format(passInfo.resolveFormat);
+        const bool copyReadsColor = passInfo.resolveTarget && !copyReadsDepth;
+        if (next.clearDepth && next.depthView.Get() == passInfo.depthView.Get() && !copyReadsDepth) {
+          depthStore = wgpu::StoreOp::Discard;
+        }
+        if (next.clearColor && next.colorView.Get() == passInfo.colorView.Get() && !copyReadsColor) {
+          colorStore = wgpu::StoreOp::Discard;
+        }
+        break;
+      }
+    }
     const std::array attachments{
         wgpu::RenderPassColorAttachment{
             .view = passInfo.colorView,
             .resolveTarget = passInfo.resolveView,
             .loadOp = passInfo.clearColor ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load,
-            .storeOp = wgpu::StoreOp::Store,
+            .storeOp = colorStore,
             .clearValue =
                 {
                     .r = passInfo.clearColorValue.x(),
@@ -1392,7 +1424,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
     const wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{
         .view = passInfo.depthView,
         .depthLoadOp = passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load,
-        .depthStoreOp = wgpu::StoreOp::Store,
+        .depthStoreOp = depthStore,
         .depthClearValue = passInfo.clearDepthValue,
     };
     const wgpu::RenderPassDescriptor renderPassDescriptor{

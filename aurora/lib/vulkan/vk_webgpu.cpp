@@ -380,6 +380,9 @@ void LoadDeviceFunctions(VkDevice device, bool api13, bool hasSync2) {
 #include <unordered_map>
 #include <vector>
 
+// Set by wgpuSurfaceConfigure, read by aurora_vk_surface_rotation.
+static std::atomic<int> g_surfaceRotation{0};
+
 namespace {
 
 void Log(const char* fmt, ...) {
@@ -932,7 +935,7 @@ void GlobalBarrier(VkCommandBuffer cb) {
 // - attachment and fragment-shader writes and reads, which later fragment, transfer and compute work
 //   depends on (render-to-texture, EFB copies, attachment reuse) but vertex work never does;
 // - vertex-stage reads, which a later transfer or compute write must not overtake.
-void PassBarrier(VkCommandBuffer cb) {
+void PassBarrier(VkCommandBuffer cb, bool memory = true, const std::vector<VkImageMemoryBarrier2>* images = nullptr) {
   constexpr VkPipelineStageFlags2 kFragmentStages =
       VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -952,10 +955,13 @@ void PassBarrier(VkCommandBuffer cb) {
        .srcStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
        .dstStageMask = kWriteStages},
   }};
+  const bool hasImages = images != nullptr && !images->empty();
   const VkDependencyInfo dep{
       .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-      .memoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+      .memoryBarrierCount = memory ? static_cast<uint32_t>(barriers.size()) : 0u,
       .pMemoryBarriers = barriers.data(),
+      .imageMemoryBarrierCount = hasImages ? static_cast<uint32_t>(images->size()) : 0u,
+      .pImageMemoryBarriers = hasImages ? images->data() : nullptr,
   };
   vkCmdPipelineBarrier2(cb, &dep);
 }
@@ -1008,6 +1014,88 @@ void ImageLayoutBarrier(VkCommandBuffer cb, VkImage image, VkImageAspectFlags as
       .image = image,
       .subresourceRange = {aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS},
   };
+  const VkDependencyInfo dep{
+      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers = &barrier,
+  };
+  vkCmdPipelineBarrier2(cb, &dep);
+}
+
+// Image layouts. Every texture rests in a "home" layout between operations, chosen from its usage:
+// sampled -> SHADER_READ_ONLY (DEPTH_STENCIL_READ_ONLY for depth), attachment only -> its attachment
+// layout, storage or copy only -> GENERAL. An encoder moves a subresource out of home only for the
+// operation that needs it and returns it before any pass that might sample it and before Finish, so
+// every command buffer starts and ends with all textures at home and submission order never matters.
+// Bind groups name the home layout. GENERAL everywhere can keep tile-based GPUs (Mali AFBC, Adreno
+// UBWC on the proprietary driver) from compressing; AURORA_VK_LAYOUTS=0 brings it back for comparison.
+bool LayoutsEnabled() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("AURORA_VK_LAYOUTS");
+    return v == nullptr || v[0] != '0';
+  }();
+  return enabled;
+}
+
+VkImageLayout OpLayout(VkImageLayout layout) { return LayoutsEnabled() ? layout : VK_IMAGE_LAYOUT_GENERAL; }
+
+struct LayoutScope {
+  VkPipelineStageFlags2 stages;
+  VkAccessFlags2 access;
+};
+
+LayoutScope ScopeFor(VkImageLayout layout) {
+  constexpr VkPipelineStageFlags2 kShaders = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+  constexpr VkPipelineStageFlags2 kTests =
+      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+  switch (layout) {
+  case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+    return {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT};
+  case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+    return {kTests, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
+  case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+    return {kTests | kShaders, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT};
+  case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+    return {kShaders, VK_ACCESS_2_SHADER_READ_BIT};
+  case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+    return {VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT};
+  case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    return {VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT};
+  case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+  case VK_IMAGE_LAYOUT_UNDEFINED:
+    // ALL_COMMANDS so a swapchain image's first transition still waits on the acquire semaphore.
+    return {VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0};
+  default:
+    return {VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
+  }
+}
+
+VkImageMemoryBarrier2 LayoutTransition(VkImage image, VkImageAspectFlags aspect, uint32_t mip, uint32_t mipCount,
+                                       uint32_t layer, uint32_t layerCount, VkImageLayout from, VkImageLayout to) {
+  constexpr VkAccessFlags2 kWrites = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                     VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+  const LayoutScope src = ScopeFor(from);
+  const LayoutScope dst = ScopeFor(to);
+  return VkImageMemoryBarrier2{
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+      .srcStageMask = src.stages,
+      .srcAccessMask = src.access & kWrites,
+      .dstStageMask = dst.stages,
+      .dstAccessMask = dst.access,
+      .oldLayout = from,
+      .newLayout = to,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = image,
+      .subresourceRange = {aspect, mip, mipCount, layer, layerCount},
+  };
+}
+
+void ImageLayoutBarrier2(VkCommandBuffer cb, const VkImageMemoryBarrier2& barrier) {
   const VkDependencyInfo dep{
       .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
       .imageMemoryBarrierCount = 1,
@@ -1248,8 +1336,11 @@ struct WGPUTextureImpl : Object {
   uint32_t mips = 1;
   uint32_t samples = 1;
   bool swapchain = false;
-  // Swapchain images only; every other image lives in GENERAL.
+  // Swapchain images only: the layout as recorded so far (UNDEFINED after acquire).
   VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  // Where the image rests between operations; see LayoutsEnabled.
+  VkImageLayout home = VK_IMAGE_LAYOUT_GENERAL;
+  VkImageAspectFlags aspects = VK_IMAGE_ASPECT_COLOR_BIT;
   VkImageView defaultView = VK_NULL_HANDLE;
 
   ~WGPUTextureImpl() override {
@@ -1266,6 +1357,7 @@ struct WGPUTextureViewImpl : Object {
   WGPUTextureImpl* texture = nullptr;
   VkImageView view = VK_NULL_HANDLE;
   uint32_t baseMip = 0;
+  uint32_t baseLayer = 0;
   uint32_t width = 0;
   uint32_t height = 0;
 
@@ -1400,20 +1492,69 @@ struct WGPUCommandEncoderImpl : Object {
       refs.push_back(obj);
     }
   }
+  // Subresources (one mip, one layer) currently away from their texture's home layout.
+  struct Away {
+    WGPUTextureImpl* tex;
+    uint32_t mip;
+    uint32_t layer;
+    VkImageLayout layout;
+    bool keep;
+  };
+  std::vector<Away> away;
+  std::vector<VkImageMemoryBarrier2> transitions;
+
+  // Pending layout transitions go out with the pass barrier, in one call.
   void Barrier() {
-    if (needBarrier) {
-      PassBarrier(slot.cb);
+    if (needBarrier || !transitions.empty()) {
+      PassBarrier(slot.cb, needBarrier, &transitions);
       needBarrier = false;
+      transitions.clear();
     }
   }
-  // Swapchain images move from their acquire/present layout to GENERAL before first use.
+  // Swapchain images move from their acquire/present layout to home before first use.
   void PrepareTexture(WGPUTextureImpl* tex) {
     touchesSwapchain |= tex->swapchain;
-    if (tex->swapchain && tex->layout != VK_IMAGE_LAYOUT_GENERAL) {
-      ImageLayoutBarrier(slot.cb, tex->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_GENERAL);
-      tex->layout = VK_IMAGE_LAYOUT_GENERAL;
+    if (tex->swapchain && tex->layout != tex->home) {
+      transitions.push_back(
+          LayoutTransition(tex->image, tex->aspects, 0, 1, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, tex->home));
+      tex->layout = tex->home;
     }
+  }
+  // Puts the subresources of the coming operation in `layout`; call Settle once all are named.
+  void Use(WGPUTextureImpl* tex, uint32_t mip, uint32_t layer, uint32_t layerCount, VkImageLayout layout) {
+    PrepareTexture(tex);
+    for (uint32_t l = layer; l < layer + layerCount; ++l) {
+      auto it = std::find_if(away.begin(), away.end(),
+                             [&](const Away& a) { return a.tex == tex && a.mip == mip && a.layer == l; });
+      const VkImageLayout current = it != away.end() ? it->layout : tex->home;
+      if (current != layout) {
+        transitions.push_back(LayoutTransition(tex->image, tex->aspects, mip, 1, l, 1, current, layout));
+      }
+      if (layout == tex->home) {
+        if (it != away.end()) {
+          away.erase(it);
+        }
+      } else if (it != away.end()) {
+        it->layout = layout;
+        it->keep = true;
+      } else {
+        away.push_back({tex, mip, l, layout, true});
+      }
+    }
+  }
+  // Every subresource not named by Use since the last Settle goes home, then the barrier is recorded.
+  void Settle() {
+    for (auto it = away.begin(); it != away.end();) {
+      if (it->keep) {
+        it->keep = false;
+        ++it;
+        continue;
+      }
+      transitions.push_back(
+          LayoutTransition(it->tex->image, it->tex->aspects, it->mip, 1, it->layer, 1, it->layout, it->tex->home));
+      it = away.erase(it);
+    }
+    Barrier();
   }
   ~WGPUCommandEncoderImpl() override {
     if (!finished) {
@@ -2547,15 +2688,27 @@ WGPUTexture wgpuDeviceCreateTexture(WGPUDevice dev, const WGPUTextureDescriptor*
   };
   const VmaAllocationCreateInfo allocInfo{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
   VK_CHECK(vmaCreateImage(dev->vma, &info, &allocInfo, &tex->image, &tex->alloc, nullptr));
+  tex->aspects = AspectFor(tex->info, WGPUTextureAspect_All);
+  if (!LayoutsEnabled() || (usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0) {
+    tex->home = VK_IMAGE_LAYOUT_GENERAL;
+  } else if ((usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0) {
+    tex->home =
+        tex->info.depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  } else if ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+    tex->home = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  } else if ((usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0) {
+    tex->home = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  } else {
+    tex->home = VK_IMAGE_LAYOUT_GENERAL;
+  }
   {
     std::lock_guard lock(dev->queueMutex);
-    ImageLayoutBarrier(UploadCb(dev), tex->image, AspectFor(tex->info, WGPUTextureAspect_All),
-                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    ImageLayoutBarrier(UploadCb(dev), tex->image, tex->aspects, VK_IMAGE_LAYOUT_UNDEFINED, tex->home);
     // The barrier names the image, so it must outlive the upload submission even if released first.
     tex->AddRef();
     dev->uploadRefs.push_back(tex);
   }
-  tex->layout = VK_IMAGE_LAYOUT_GENERAL;
+  tex->layout = tex->home;
   return tex;
 }
 
@@ -2619,6 +2772,7 @@ WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureView
     texture->defaultView = view->view;
   }
   view->baseMip = desc.baseMipLevel;
+  view->baseLayer = desc.baseArrayLayer;
   view->width = std::max(1u, texture->width >> desc.baseMipLevel);
   view->height = std::max(1u, texture->height >> desc.baseMipLevel);
   return view;
@@ -2798,7 +2952,9 @@ WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice dev, const WGPUBindGroupDescr
     case BindKind::StorageTexture:
       write.descriptorType =
           it->kind == BindKind::Texture ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-      imageInfos.push_back(VkDescriptorImageInfo{.imageView = e.textureView->view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL});
+      imageInfos.push_back(VkDescriptorImageInfo{
+          .imageView = e.textureView->view,
+          .imageLayout = it->kind == BindKind::Texture ? e.textureView->texture->home : VK_IMAGE_LAYOUT_GENERAL});
       write.pImageInfo = &imageInfos.back();
       e.textureView->AddRef();
       group->refs.push_back(e.textureView);
@@ -3077,6 +3233,10 @@ WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice dev, const WGPUComm
 void wgpuCommandEncoderRelease(WGPUCommandEncoder encoder) { encoder->Release(); }
 
 WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder encoder, const WGPUCommandBufferDescriptor*) {
+  if (!encoder->away.empty() || !encoder->transitions.empty()) {
+    encoder->needBarrier = false;
+    encoder->Settle();
+  }
   if (!encoder->mapTracked.empty()) {
     HostReadBarrier(encoder->slot.cb);
   }
@@ -3179,10 +3339,12 @@ void wgpuCommandEncoderCopyTextureToBuffer(WGPUCommandEncoder encoder, const WGP
   if (copySize->width == 0 || copySize->height == 0) {
     return;
   }
-  encoder->Barrier();
-  encoder->PrepareTexture(source->texture);
+  const VkImageLayout srcLayout = OpLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  encoder->Use(source->texture, source->mipLevel, source->origin.z, std::max(1u, copySize->depthOrArrayLayers),
+               srcLayout);
+  encoder->Settle();
   const VkBufferImageCopy region = BufferImageRegion(source->texture, source, destination->layout, copySize);
-  vkCmdCopyImageToBuffer(encoder->slot.cb, source->texture->image, VK_IMAGE_LAYOUT_GENERAL, destination->buffer->buffer,
+  vkCmdCopyImageToBuffer(encoder->slot.cb, source->texture->image, srcLayout, destination->buffer->buffer,
                          1, &region);
   encoder->needBarrier = true;
   encoder->Ref(source->texture);
@@ -3197,9 +3359,14 @@ void wgpuCommandEncoderCopyTextureToTexture(WGPUCommandEncoder encoder, const WG
   if (copySize->width == 0 || copySize->height == 0) {
     return;
   }
-  encoder->Barrier();
-  encoder->PrepareTexture(source->texture);
-  encoder->PrepareTexture(destination->texture);
+  // A copy within one texture keeps both sides in GENERAL.
+  const bool same = source->texture == destination->texture;
+  const VkImageLayout srcLayout = OpLayout(same ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  const VkImageLayout dstLayout = OpLayout(same ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  const uint32_t copyLayers = std::max(1u, copySize->depthOrArrayLayers);
+  encoder->Use(source->texture, source->mipLevel, source->origin.z, copyLayers, srcLayout);
+  encoder->Use(destination->texture, destination->mipLevel, destination->origin.z, copyLayers, dstLayout);
+  encoder->Settle();
   const VkImageAspectFlags srcAspect =
       AspectFor(source->texture->info, source->aspect) & (source->texture->info.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
   const VkImageAspectFlags dstAspect = AspectFor(destination->texture->info, destination->aspect) &
@@ -3212,8 +3379,8 @@ void wgpuCommandEncoderCopyTextureToTexture(WGPUCommandEncoder encoder, const WG
       .dstOffset = {static_cast<int32_t>(destination->origin.x), static_cast<int32_t>(destination->origin.y), 0},
       .extent = {copySize->width, copySize->height, 1},
   };
-  vkCmdCopyImage(encoder->slot.cb, source->texture->image, VK_IMAGE_LAYOUT_GENERAL, destination->texture->image,
-                 VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+  vkCmdCopyImage(encoder->slot.cb, source->texture->image, srcLayout, destination->texture->image, dstLayout, 1,
+                 &region);
   encoder->needBarrier = true;
   encoder->Ref(source->texture);
   encoder->Ref(destination->texture);
@@ -3221,7 +3388,25 @@ void wgpuCommandEncoderCopyTextureToTexture(WGPUCommandEncoder encoder, const WG
 
 WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encoder,
                                                         const WGPURenderPassDescriptor* descriptor) {
-  encoder->Barrier();
+  const VkImageLayout colorLayout = OpLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+  VkImageLayout depthLayout = VK_IMAGE_LAYOUT_GENERAL;
+  if (const auto* d = descriptor->depthStencilAttachment) {
+    const bool readOnly = d->depthReadOnly && (d->stencilReadOnly || !d->view->texture->info.stencil);
+    depthLayout = OpLayout(readOnly ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    encoder->Use(d->view->texture, d->view->baseMip, d->view->baseLayer, 1, depthLayout);
+  }
+  for (size_t i = 0; i < descriptor->colorAttachmentCount; ++i) {
+    const auto& a = descriptor->colorAttachments[i];
+    if (a.view != nullptr) {
+      encoder->Use(a.view->texture, a.view->baseMip, a.view->baseLayer, 1, colorLayout);
+      if (a.resolveTarget != nullptr) {
+        encoder->Use(a.resolveTarget->texture, a.resolveTarget->baseMip, a.resolveTarget->baseLayer, 1, colorLayout);
+      }
+    }
+  }
+  // Everything else goes home: the pass may sample it.
+  encoder->Settle();
   VkCommandBuffer cb = encoder->slot.cb;
   std::vector<VkRenderingAttachmentInfo> colors(descriptor->colorAttachmentCount);
   uint32_t width = 0;
@@ -3233,18 +3418,16 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
     if (a.view == nullptr) {
       continue;
     }
-    encoder->PrepareTexture(a.view->texture);
     encoder->Ref(a.view);
     width = a.view->width;
     height = a.view->height;
     out.imageView = a.view->view;
-    out.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    out.imageLayout = colorLayout;
     if (a.resolveTarget != nullptr) {
-      encoder->PrepareTexture(a.resolveTarget->texture);
       encoder->Ref(a.resolveTarget);
       out.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
       out.resolveImageView = a.resolveTarget->view;
-      out.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+      out.resolveImageLayout = colorLayout;
     }
     out.loadOp = a.loadOp == WGPULoadOp_Clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     out.storeOp = a.storeOp == WGPUStoreOp_Discard ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
@@ -3288,7 +3471,7 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
     hasDepth = info.depth;
     hasStencil = info.stencil;
     depth.imageView = d->view->view;
-    depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    depth.imageLayout = depthLayout;
     depth.loadOp = d->depthLoadOp == WGPULoadOp_Clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     depth.storeOp = d->depthReadOnly || d->depthStoreOp == WGPUStoreOp_Discard ? VK_ATTACHMENT_STORE_OP_DONT_CARE
                                                                                : VK_ATTACHMENT_STORE_OP_STORE;
@@ -3410,7 +3593,7 @@ void wgpuRenderPassEncoderPushDebugGroup(WGPURenderPassEncoder, WGPUStringView) 
 void wgpuRenderPassEncoderPopDebugGroup(WGPURenderPassEncoder) {}
 
 WGPUComputePassEncoder wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder encoder, const WGPUComputePassDescriptor*) {
-  encoder->Barrier();
+  encoder->Settle();
   auto* pass = new WGPUComputePassEncoderImpl;
   pass->encoder = encoder;
   encoder->AddRef();
@@ -3576,8 +3759,21 @@ void wgpuQueueWriteTexture(WGPUQueue queue, const WGPUTexelCopyTextureInfo* dest
       .imageExtent = {writeSize->width, writeSize->height, 1},
   };
   VkCommandBuffer cb = UploadCb(dev);
-  vkCmdCopyBufferToImage(cb, chunk->buffer, tex->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
-  TransferBarrier(cb);
+  if (tex->home == VK_IMAGE_LAYOUT_GENERAL) {
+    vkCmdCopyBufferToImage(cb, chunk->buffer, tex->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    TransferBarrier(cb);
+  } else {
+    ImageLayoutBarrier2(cb, LayoutTransition(tex->image, tex->aspects, destination->mipLevel, 1, destination->origin.z,
+                                             layers, tex->home, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
+    vkCmdCopyBufferToImage(cb, chunk->buffer, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    // Back home and visible to anything later, as TransferBarrier does for the GENERAL path.
+    VkImageMemoryBarrier2 back = LayoutTransition(tex->image, tex->aspects, destination->mipLevel, 1,
+                                                  destination->origin.z, layers, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                  tex->home);
+    back.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    back.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    ImageLayoutBarrier2(cb, back);
+  }
   tex->AddRef();
   dev->uploadRefs.push_back(tex);
 }
@@ -3679,8 +3875,37 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
   // Rendering is never pre-rotated here, so ask for the identity transform and the window's own size
   // (what aurora renders for); the compositor rotates. currentExtent can't be used for that: drivers
   // disagree on whether it is in the panel's orientation or the window's.
+  //
+  // Pre-rotation (default on): leaving the rotation to the compositor makes many phones compose the
+  // game layer on the GPU every frame (Redmi Note 12 Pro: SurfaceFlinger "CLIENT, ROT_90"). Instead
+  // the swapchain takes the panel's orientation and aurora's final copy pass draws the picture
+  // rotated (aurora_vk_surface_rotation). AURORA_VK_PRE_ROTATE=0 keeps the old behaviour.
+  static const bool preRotate = [] {
+    const char* env = std::getenv("AURORA_VK_PRE_ROTATE");
+    return env == nullptr || env[0] != '0';
+  }();
+  int rotation = 0;
+  switch (caps.currentTransform) {
+  case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+    rotation = 90;
+    break;
+  case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+    rotation = 180;
+    break;
+  case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+    rotation = 270;
+    break;
+  default:
+    break;
+  }
   VkSurfaceTransformFlagBitsKHR transform = caps.currentTransform;
-  if (caps.currentTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR &&
+  bool preRotated = false;
+  if (preRotate && rotation != 0 && (caps.supportedTransforms & caps.currentTransform) != 0 &&
+      config->width != 0 && config->height != 0) {
+    preRotated = true;
+    extent = rotation == 180 ? VkExtent2D{config->width, config->height}
+                             : VkExtent2D{config->height, config->width};
+  } else if (caps.currentTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR &&
       (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0) {
     transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     if (config->width != 0 && config->height != 0) {
@@ -3688,6 +3913,7 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
     }
   }
   surface->rotatedByCompositor = transform != caps.currentTransform;
+  g_surfaceRotation.store(preRotated ? rotation : 0, std::memory_order_release);
   extent.width = std::max(1u, extent.width);
   extent.height = std::max(1u, extent.height);
   VkSwapchainKHR old = surface->swapchain;
@@ -3752,6 +3978,7 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
     tex->dev = dev;
     tex->image = image;
     tex->swapchain = true;
+    tex->home = OpLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     tex->format = config->format;
     tex->info = GetFormat(config->format);
     tex->width = extent.width;
@@ -3842,7 +4069,7 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
   WGPUTextureImpl* tex = surface->images[index];
   CmdSlot slot = AcquireSlot(dev);
   VkImageLayout from =
-      tex->layout == VK_IMAGE_LAYOUT_GENERAL ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+      tex->layout == tex->home ? tex->home : VK_IMAGE_LAYOUT_UNDEFINED;
   // AURORA_VK_DEBUG_CLEAR=1 clears the left half of each presented image to magenta: magenta on screen
   // means presentation works and only the frame's content is missing.
   static const bool debugClear = [] {
@@ -3959,5 +4186,9 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
   }
   return WGPUStatus_Success;
 }
+
+// Degrees (0/90/180/270) aurora's final copy pass must rotate the picture by: the swapchain is in
+// the panel's orientation (see wgpuSurfaceConfigure). 0 when the compositor rotates.
+int aurora_vk_surface_rotation() { return g_surfaceRotation.load(std::memory_order_acquire); }
 
 } // extern "C"

@@ -273,16 +273,17 @@ const std::filesystem::path& GetRunLogDirectory() {
         std::error_code ec;
         std::filesystem::create_directories(logRoot, ec);
 #if defined(__ANDROID__)
-        // Android: one Logs/console.log, replaced on every start. Players send this file in, and
-        // a folder per run left them guessing which one to pick. The previous run's folders and
-        // crash reports are cleared so nothing stale sits next to it. In the shared /sdcard folder
-        // only our crash files go: the player may keep other things there.
-        const bool shared = SharedLogDirectory() != nullptr &&
-                            logRoot == std::filesystem::path(SharedLogDirectory());
+        // Android with "All files access": the app made Logs/<start time>/log for this run and
+        // keeps the newest runs, so it is used as is.
+        if (SharedLogDirectory() != nullptr && logRoot == std::filesystem::path(SharedLogDirectory())) {
+            return logRoot;
+        }
+        // Without it: one Android/data/.../files/Logs/console.log, replaced on every start, with
+        // the previous run's folders and crash reports cleared.
         for (const auto& entry : std::filesystem::directory_iterator(logRoot, ec)) {
             std::error_code entryEc;
             const std::string name = entry.path().filename().string();
-            if ((!shared && entry.is_directory(entryEc)) ||
+            if (entry.is_directory(entryEc) ||
                 (name.rfind("crash_", 0) == 0 && !entry.is_directory(entryEc))) {
                 std::filesystem::remove_all(entry.path(), entryEc);
             }
@@ -307,6 +308,19 @@ const std::filesystem::path& GetRunLogDirectory() {
         return directory;
     }();
     return runDirectory;
+}
+
+// Crash artifacts: the run's crash/ folder next to log/ when the app made one, else the log folder.
+std::filesystem::path GetRunCrashDirectory() {
+#if defined(__ANDROID__)
+    if (SharedLogDirectory() != nullptr && GetRunLogDirectory() == std::filesystem::path(SharedLogDirectory())) {
+        const std::filesystem::path crash = GetRunLogDirectory().parent_path() / "crash";
+        std::error_code ec;
+        std::filesystem::create_directories(crash, ec);
+        if (std::filesystem::is_directory(crash, ec)) return crash;
+    }
+#endif
+    return GetRunLogDirectory();
 }
 
 ProcessTranscriptState& GetProcessTranscriptState() {
@@ -773,7 +787,7 @@ std::string FormatHostStackTrace(unsigned framesToSkip) {
 
 void WriteFatalLogImpl(std::string_view reason, std::string_view extraDetails = {},
                        const uint32_t* missingGuestTarget = nullptr) {
-    const std::filesystem::path runDirectory = GetRunLogDirectory();
+    const std::filesystem::path runDirectory = GetRunCrashDirectory();
     std::string fileName = "crash_";
     fileName.append(reason);
     fileName.append(".txt");

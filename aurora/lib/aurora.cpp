@@ -1001,11 +1001,15 @@ bool present_presentation_job(const PresentationJob& job) {
             .colorAttachments = attachments.data(),
         };
         const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
-        pass.SetPipeline(webgpu::g_CopyPipeline);
+        // A pre-rotated swapchain is in the panel's orientation: width and height swap at 90/270.
+        const int rotation = webgpu::surface_rotation();
+        const bool swapAxes = rotation == 90 || rotation == 270;
+        const auto& surfaceConfig = webgpu::g_graphicsConfig.surfaceConfiguration;
+        pass.SetPipeline(webgpu::surface_copy_pipeline(rotation));
         pass.SetBindGroup(0, job.image->bindGroup, 0, nullptr);
         pass.SetViewport(0.f, 0.f,
-                         static_cast<float>(webgpu::g_graphicsConfig.surfaceConfiguration.width),
-                         static_cast<float>(webgpu::g_graphicsConfig.surfaceConfiguration.height),
+                         static_cast<float>(swapAxes ? surfaceConfig.height : surfaceConfig.width),
+                         static_cast<float>(swapAxes ? surfaceConfig.width : surfaceConfig.height),
                          0.f, 1.f);
         pass.Draw(3);
         pass.End();

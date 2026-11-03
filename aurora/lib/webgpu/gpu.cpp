@@ -52,6 +52,7 @@ static Module Log("aurora::gpu");
 #if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
 extern "C" bool aurora_wgpu_vk;  // lib/vulkan/wgpu_dispatch.cpp
 extern "C" void aurora_vk_save_pipeline_cache();
+extern "C" int aurora_vk_surface_rotation();
 static bool vulkan_backend_active() { return aurora_wgpu_vk; }
 static void set_vulkan_backend(bool on) { aurora_wgpu_vk = on; }
 #else
@@ -71,6 +72,7 @@ TextureWithSampler g_depthBuffer;
 // EFB -> XFB copy pipeline
 wgpu::BindGroupLayout g_CopyBindGroupLayout;
 wgpu::RenderPipeline g_CopyPipeline;
+std::array<wgpu::RenderPipeline, 3> g_CopyPipelineRotated;
 wgpu::BindGroup g_CopyBindGroup;
 static bool g_presentSourceOverrideActive = false;
 static wgpu::BindGroup g_presentSourceOverrideBindGroup;
@@ -502,11 +504,38 @@ var<private> uvs: array<vec2<f32>, 3> = array<vec2<f32>, 3>(
     vec2(2.0, 0.0),
 );
 
-@vertex
-fn vs_main(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
+fn fullscreen(vtxIdx: u32) -> VertexOutput {
     var out: VertexOutput;
     out.pos = vec4<f32>(pos[vtxIdx], 0.0, 1.0);
     out.uv = uvs[vtxIdx];
+    return out;
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
+    return fullscreen(vtxIdx);
+}
+
+// Pre-rotated copies into a swapchain in the panel's orientation: uvs are the target's own
+// coordinates, turned back into the picture's.
+@vertex
+fn vs_rot90(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
+    var out = fullscreen(vtxIdx);
+    out.uv = vec2(out.uv.y, 1.0 - out.uv.x);
+    return out;
+}
+
+@vertex
+fn vs_rot180(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
+    var out = fullscreen(vtxIdx);
+    out.uv = vec2(1.0 - out.uv.x, 1.0 - out.uv.y);
+    return out;
+}
+
+@vertex
+fn vs_rot270(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
+    var out = fullscreen(vtxIdx);
+    out.uv = vec2(1.0 - out.uv.y, out.uv.x);
     return out;
 }
 
@@ -579,6 +608,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
       .fragment = &fragmentState,
   };
   g_CopyPipeline = g_device.CreateRenderPipeline(&pipelineDescriptor);
+  if (vulkan_backend_active()) {
+    constexpr std::array<const char*, 3> rotatedEntries{"vs_rot90", "vs_rot180", "vs_rot270"};
+    for (size_t i = 0; i < rotatedEntries.size(); ++i) {
+      auto rotated = pipelineDescriptor;
+      rotated.vertex.entryPoint = rotatedEntries[i];
+      g_CopyPipelineRotated[i] = g_device.CreateRenderPipeline(&rotated);
+    }
+  }
+}
+
+int surface_rotation() {
+#if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
+  return vulkan_backend_active() ? aurora_vk_surface_rotation() : 0;
+#else
+  return 0;
+#endif
+}
+
+wgpu::RenderPipeline surface_copy_pipeline(int rotation) {
+  const size_t index = static_cast<size_t>(rotation / 90);
+  if (index >= 1 && index <= g_CopyPipelineRotated.size() && g_CopyPipelineRotated[index - 1]) {
+    return g_CopyPipelineRotated[index - 1];
+  }
+  return g_CopyPipeline;
 }
 
 wgpu::BindGroup create_copy_bind_group(wgpu::TextureView sourceView, wgpu::Sampler sampler) {
@@ -1117,6 +1170,7 @@ void shutdown() {
   sgsr::shutdown();
   g_CopyBindGroupLayout = {};
   g_CopyPipeline = {};
+  g_CopyPipelineRotated = {};
   g_CopyBindGroup = {};
   g_frameBuffer = {};
   g_frameBufferResolved = {};

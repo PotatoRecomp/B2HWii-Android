@@ -742,7 +742,11 @@ final class TouchControlsView extends View {
 
     private void sendSticks() {
         if (listener != null) {
-            listener.onTouchSticks(leftStick.valueX, -leftStick.valueY, rightStick.valueX, -rightStick.valueY);
+            // Invert Camera reverses the right stick on both axes while it is held (a camera drag
+            // already applies it to the values it sets).
+            final float flip = invertCamera && rightStick.finger >= 0 ? -1f : 1f;
+            listener.onTouchSticks(leftStick.valueX, -leftStick.valueY, flip * rightStick.valueX,
+                    -flip * rightStick.valueY);
         }
     }
 

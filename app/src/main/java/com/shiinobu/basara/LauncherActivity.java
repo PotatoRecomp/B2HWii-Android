@@ -62,6 +62,8 @@ public final class LauncherActivity extends Activity {
     private static final String STATE_WAITING_FILE_ACCESS = "waiting_file_access";
     /** Gone to allow "All files access" before playing (the log goes to /sdcard): play on the way back. */
     private boolean waitingPlayAccess;
+    /** The required "All files access" sheet is on screen. */
+    private Sheet accessSheet;
     private static final String STATE_WAITING_PLAY_ACCESS = "waiting_play_access";
     private static final String STATE_SECTION = "section";
 
@@ -192,6 +194,9 @@ public final class LauncherActivity extends Activity {
         statusParams.leftMargin = dp(7);
         statusRow.addView(status, statusParams);
         brand.addView(statusRow, Ui.matchWidth(dp(5)));
+        final TextView credit = Ui.text(this, "Port made by Xu", 10.5f, Ui.SECONDARY);
+        credit.setTypeface(Ui.MONO);
+        brand.addView(credit, Ui.matchWidth(dp(3)));
         header.addView(brand, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         header.addView(iconButton(R.drawable.ic_whatsnew, null, v -> ReleaseNotes.showAll(this)));
@@ -467,6 +472,11 @@ public final class LauncherActivity extends Activity {
                 browseDisc();
             }
         }
+        // Right after install (and until it is given): "All files access" is required, the logs,
+        // saves and textures live in /sdcard/Basara2Heroes[-Beta].
+        if (!Environment.isExternalStorageManager() && !waitingFileAccess && !waitingPlayAccess && accessSheet == null) {
+            requireAccess(false);
+        }
         if (waitingPlayAccess) {
             waitingPlayAccess = false;
             if (Environment.isExternalStorageManager() && AppFiles.gameReady(this)) {
@@ -477,18 +487,31 @@ public final class LauncherActivity extends Activity {
     }
 
     /**
-     * The log always goes to /sdcard/Basara2Heroes[-Beta] (AppFiles.logDir), which needs "All files
+     * The log always goes to /sdcard/Basara2Heroes[-Beta] (AppFiles.newRunLogDir), which needs "All files
      * access": without it the game does not start, and this asks for it first.
      */
     private boolean requirePlayAccess() {
         if (Environment.isExternalStorageManager()) return true;
-        new Sheet(this, Tr.t("Allow file access first"), Tr.t("The game writes its log to the ")
+        requireAccess(true);
+        return false;
+    }
+
+    /**
+     * Asks for "All files access" and cannot be dismissed. forPlay: Play asked, and the game starts
+     * once it is given; otherwise the launcher asks at start (after install).
+     */
+    private void requireAccess(boolean forPlay) {
+        if (accessSheet != null) accessSheet.dismiss();
+        final Sheet sheet = new Sheet(this, Tr.t("Allow file access first"), Tr.t("The game writes its log to the ")
                 + AppFiles.HOME
                 + Tr.t(" folder on your phone's storage, so problems can be reported."))
                 .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
-                .step("2", Tr.t("Come back"), Tr.t("The game starts by itself."))
-                .action(Tr.t("Open Settings"), null, true, false, () -> {
-                    waitingPlayAccess = true;
+                .step("2", Tr.t("Come back"), forPlay ? Tr.t("The game starts by itself.") : Tr.t("Then return to this app."))
+                .cancelable(false);
+        accessSheet = sheet;
+        sheet.action(Tr.t("Open Settings"), null, true, false, () -> {
+                    accessSheet = null;
+                    waitingPlayAccess = forPlay;
                     try {
                         startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                                 Uri.parse("package:" + getPackageName())));
@@ -501,10 +524,8 @@ public final class LauncherActivity extends Activity {
                                     Toast.LENGTH_LONG).show();
                         }
                     }
-                })
-                .action(Tr.t("Cancel"), null, false, false, null)
-                .show();
-        return false;
+                });
+        sheet.show();
     }
 
     /** A short message in the Sheet look, with one button. */

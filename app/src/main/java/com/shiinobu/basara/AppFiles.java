@@ -42,8 +42,8 @@ final class AppFiles {
 
     /**
      * /sdcard/Basara2Heroes (Beta: Basara2Heroes-Beta): everything of the game a player handles, which
-     * every file manager can open, unlike Android/data on many phones. console.log and crash reports at
-     * its top, ISO/ for the game file, Saves/ for save backups, textures/ and hd-cache/. Needs "All files
+     * every file manager can open, unlike Android/data on many phones. Logs/<start time>/log and
+     * /crash per game start, ISO/ for the game file, Saves/ for save backups, textures/ and hd-cache/. Needs "All files
      * access"; without it, null (the log stays in dataDir/Logs).
      */
     static File homeDir() {
@@ -75,9 +75,75 @@ final class AppFiles {
         }
     }
 
-    /** Where console.log goes: homeDir. */
-    static File logDir() {
-        return homeDir();
+    /** Logs/ under homeDir: one folder per game start, named by its start time. */
+    static File logsRoot() {
+        return homeSub("Logs");
+    }
+
+    private static final int KEEP_RUNS = 20;
+
+    /** The run folder newRunLogDir made in this process, or null. */
+    static volatile File currentRun;
+
+    /**
+     * In the :game process: makes Logs/<yyyy-MM-dd_HH-mm-ss>/ with log/ (console.log and other
+     * files the game writes while running) and crash/ (crash reports), keeps the newest KEEP_RUNS
+     * runs, and moves the files the old flat layout left at the top of homeDir into Logs/old.
+     * Returns the run's log/ folder, or null without "All files access".
+     */
+    static File newRunLogDir() {
+        final File root = logsRoot();
+        if (root == null) return null;
+        moveOldFlatLogs(root);
+        final String stamp = new java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT)
+                .format(new java.util.Date());
+        File run = new File(root, stamp);
+        for (int i = 2; run.exists(); i++) run = new File(root, stamp + "_" + i);
+        final File log = new File(run, "log");
+        //noinspection ResultOfMethodCallIgnored
+        log.mkdirs();
+        pruneRuns(root);
+        if (!log.isDirectory()) return null;
+        currentRun = run;
+        return log;
+    }
+
+    /** The newest run folder under Logs/, or null. Run names sort by time. */
+    static File newestRunDir() {
+        final File root = logsRoot();
+        final File[] runs = root == null ? null : root.listFiles(AppFiles::isRunDir);
+        if (runs == null || runs.length == 0) return null;
+        java.util.Arrays.sort(runs);
+        return runs[runs.length - 1];
+    }
+
+    private static boolean isRunDir(File f) {
+        return f.isDirectory() && f.getName().matches("\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}(_\\d+)?");
+    }
+
+    private static void pruneRuns(File root) {
+        final File[] runs = root.listFiles(AppFiles::isRunDir);
+        if (runs == null || runs.length <= KEEP_RUNS) return;
+        java.util.Arrays.sort(runs);
+        for (int i = 0; i < runs.length - KEEP_RUNS; i++) deleteRecursively(runs[i]);
+    }
+
+    private static void moveOldFlatLogs(File root) {
+        final File home = root.getParentFile();
+        final File[] files = home == null ? null : home.listFiles(f -> f.isFile() && isOldLogName(f.getName()));
+        if (files == null || files.length == 0) return;
+        final File old = new File(root, "old");
+        //noinspection ResultOfMethodCallIgnored
+        old.mkdirs();
+        for (File f : files) {
+            //noinspection ResultOfMethodCallIgnored
+            f.renameTo(new File(old, f.getName()));
+        }
+    }
+
+    private static boolean isOldLogName(String name) {
+        return name.equals("console.log") || name.startsWith("last_crash") || name.startsWith("crash_")
+                || name.startsWith("mem1.bin") || name.startsWith("profile-stacks");
     }
 
     /** A folder under homeDir (made when missing), or null without "All files access". */
@@ -90,24 +156,14 @@ final class AppFiles {
         return dir.isDirectory() ? dir : null;
     }
 
-    /** Custom textures: <logDir>/textures (dumps in its dump/ folder), or null without "All files access". */
+    /** Custom textures: <homeDir>/textures (dumps in its dump/ folder), or null without "All files access". */
     static File textureDir() {
-        final File logs = logDir();
-        if (logs == null) return null;
-        final File dir = new File(logs, "textures");
-        //noinspection ResultOfMethodCallIgnored
-        dir.mkdirs();
-        return dir.isDirectory() ? dir : null;
+        return homeSub("textures");
     }
 
-    /** HD Textures' upscaled textures: <logDir>/hd-cache, or null without "All files access". */
+    /** HD Textures' upscaled textures: <homeDir>/hd-cache, or null without "All files access". */
     static File hdCacheDir() {
-        final File logs = logDir();
-        if (logs == null) return null;
-        final File dir = new File(logs, "hd-cache");
-        //noinspection ResultOfMethodCallIgnored
-        dir.mkdirs();
-        return dir.isDirectory() ? dir : null;
+        return homeSub("hd-cache");
     }
 
     /** Bytes in a folder and everything under it. */

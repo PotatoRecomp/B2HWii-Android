@@ -203,6 +203,16 @@ final class SettingsMenu {
                         + "(scrambled textures, stretched characters). Auto uses them where needed."),
                 new String[] {Tr.t("Auto"), Tr.t("On"), Tr.t("Off")}, settings.gpuCompat(), true,
                 which -> settings.setGpuCompat(which));
+        restart(null);
+        choiceRow(Tr.t("Renderer"), Tr.t("Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot "
+                        + "use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, "
+                        + "made for older phones, still being tuned."),
+                new String[] {Tr.t("Auto"), Tr.t("Vulkan")}, settings.renderer(), true, which -> {
+                    final int before = settings.renderer();
+                    settings.setRenderer(which);
+                    confirmRestart(Tr.t("Renderer"), which == 1 ? "Vulkan" : "Auto", before == 1 ? "Vulkan" : "Auto",
+                            () -> settings.setRenderer(before));
+                }, false);
         showGpuDrivers();
     }
 
@@ -289,6 +299,18 @@ final class SettingsMenu {
         restart(null);
         toggleRow(Tr.t("V-Sync"), Tr.t("Frames go out in step with the display: smoother motion."), settings.vsync(),
                 on -> settings.setVSync(on));
+        toggleRow(Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
+                        + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
+                        + "highest it goes."),
+                settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
+        restart(null);
+        toggleRow(Tr.t("GX Thread"), Tr.t("Runs the graphics work on its own CPU core, so busy battles run faster on "
+                        + "slower phones."),
+                settings.gxThread(), true, on -> {
+                    settings.setGxThread(on);
+                    confirmRestart(Tr.t("GX Thread"), on ? "on" : "off", on ? "off" : "on",
+                            () -> settings.setGxThread(!on));
+                }, false);
         restart(null);
         toggleRow(Tr.t("Skip Boot"), Tr.t("Skips the logos at start, straight to the save check."), settings.skipBoot(),
                 on -> settings.setSkipBoot(on));
@@ -473,8 +495,8 @@ final class SettingsMenu {
                 on -> settings.setHaptics(on));
         toggleRow(Tr.t("Touch camera"), Tr.t("Drag on the empty right side of the screen to turn the camera."),
                 settings.touchCamera(), on -> settings.setTouchCamera(on));
-        toggleRow(Tr.t("Invert Camera"), Tr.t("On: the scene follows the finger (drag right, the view turns left). "
-                        + "Off: drag right, the view turns right."),
+        toggleRow(Tr.t("Invert Camera"), Tr.t("On: the scene follows the finger (drag right, the view turns left), and the "
+                        + "right touch stick is reversed both ways. Off: the game's own directions."),
                 settings.invertCamera(), on -> settings.setInvertCamera(on));
         toggleRow(Tr.t("Tilt"), Tr.t("Turn the phone like a steering wheel."), settings.motionTilt(),
                 on -> settings.setMotionTilt(on));
@@ -490,20 +512,10 @@ final class SettingsMenu {
         rows.addView(Sheet.warningBox(activity, Tr.t("Experimental features"),
                 Tr.t("Unfinished and only partly tested. They can crash the game, glitch the picture, use much more "
                         + "RAM, storage and battery, or make the phone hot. Leave them off to play normally. If "
-                        + "you test one, say which in your report and send the log (") + folderName("console.log")
+                        + "you test one, say which in your report and send the log (") + folderName("Logs")
                         + ")."),
                 Ui.matchWidth(0));
 
-        restart(null);
-        choiceRow(Tr.t("Renderer"), Tr.t("Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot "
-                        + "use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, "
-                        + "made for older phones, still being tuned."),
-                new String[] {Tr.t("Auto"), Tr.t("Vulkan")}, settings.renderer(), true, which -> {
-                    final int before = settings.renderer();
-                    settings.setRenderer(which);
-                    confirmRestart(Tr.t("Renderer"), which == 1 ? "Vulkan" : "Auto", before == 1 ? "Vulkan" : "Auto",
-                            () -> settings.setRenderer(before));
-                }, false);
 
         warn(weakPhone()
                 ? Tr.t("This phone has little RAM or renders below 1x: likely to crash, and the gain is small.")
@@ -568,20 +580,6 @@ final class SettingsMenu {
                         : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
                 settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
 
-        warn(Tr.t("Can make the picture switch between sharp and soft during battles."));
-        toggleRow(Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
-                        + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
-                        + "highest it goes."),
-                settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
-        warn(Tr.t("Known issue: textures and the sky can flicker white."));
-        restart(null);
-        toggleRow(Tr.t("GX Thread"), Tr.t("Runs the graphics work on its own CPU core, so busy battles run faster on "
-                        + "slower phones."),
-                settings.gxThread(), true, on -> {
-                    settings.setGxThread(on);
-                    confirmRestart(Tr.t("GX Thread"), on ? "on" : "off", on ? "off" : "on",
-                            () -> settings.setGxThread(!on));
-                }, false);
     }
 
     /** RAM under 4.5 GB, or a render scale below 1x: HD Textures costs a lot and shows little. */

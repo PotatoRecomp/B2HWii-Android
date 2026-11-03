@@ -28,7 +28,7 @@ import java.util.Locale;
  * (ApplicationExitInfo) and writes last_crash.txt, plus the tombstone for a native crash
  * (last_crash_tombstone.pb, Android 12+).</li>
  * </ul>
- * Both go to the log folder (/sdcard/Basara2Heroes[-Beta], or Android/data/.../files/Logs).
+ * Both go to the run's crash folder (/sdcard/Basara2Heroes[-Beta]/Logs/<start time>/crash).
  */
 final class CrashReport {
     private static final String TAG = "Basara";
@@ -37,9 +37,15 @@ final class CrashReport {
 
     private CrashReport() {}
 
+    /**
+     * The crash/ folder of the run: this process's run in :game, else (the launcher, after the game
+     * ended) the newest run, which is the one that crashed. Android/data/.../files/Logs without
+     * "All files access".
+     */
     static File dir(Context context) {
-        final File logs = AppFiles.logDir();
-        final File dir = logs != null ? logs : new File(AppFiles.dataDir(context), "Logs");
+        File run = AppFiles.currentRun;
+        if (run == null) run = AppFiles.newestRunDir();
+        final File dir = run != null ? new File(run, "crash") : new File(AppFiles.dataDir(context), "Logs");
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
         return dir;

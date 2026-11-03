@@ -55,6 +55,10 @@ extern TextureWithSampler g_frameBuffer;
 extern TextureWithSampler g_frameBufferResolved;
 extern TextureWithSampler g_depthBuffer;
 extern wgpu::RenderPipeline g_CopyPipeline;
+// Degrees the final copy into the swapchain rotates by (0 unless the Vulkan backend pre-rotates).
+int surface_rotation();
+// The copy pipeline for that rotation (g_CopyPipeline for 0).
+wgpu::RenderPipeline surface_copy_pipeline(int rotation);
 extern wgpu::BindGroupLayout g_CopyBindGroupLayout;
 extern wgpu::BindGroup g_CopyBindGroup;
 extern wgpu::Instance g_instance;

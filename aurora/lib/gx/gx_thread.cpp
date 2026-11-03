@@ -123,6 +123,67 @@ void thread_main() {
   }
 }
 
+// BASARA_GX_THREAD=4 (bisecting): same queue and hand-over points, but no second thread. Items run
+// on the producer once BASARA_GX_DEFER_ITEMS are queued (or at a sync/fence), so decode is late
+// exactly as with the GX thread, yet nothing runs concurrently.
+bool deferred() noexcept {
+  static const bool on = [] {
+    const char* value = std::getenv("BASARA_GX_THREAD");
+    return value != nullptr && value[0] == '4';
+  }();
+  return on;
+}
+
+size_t defer_items() noexcept {
+  static const size_t n = [] {
+    const char* value = std::getenv("BASARA_GX_DEFER_ITEMS");
+    const unsigned long v = value != nullptr ? std::strtoul(value, nullptr, 0) : 0ul;
+    return v != 0 ? static_cast<size_t>(v) : size_t{32};
+  }();
+  return n;
+}
+
+bool g_inlineRunning = false; // producer only
+
+// Runs queued items on the calling (producer) thread until the queue is empty or `ticket` is done.
+void run_deferred(uint64_t ticket) {
+  if (g_inlineRunning) return;
+  g_inlineRunning = true;
+  for (;;) {
+    Item item;
+    {
+      std::lock_guard lock(g_state.mutex);
+      if (g_state.queue.empty() || (ticket != 0 && g_state.fenceDone >= ticket)) break;
+      item = std::move(g_state.queue.front());
+      g_state.queue.pop_front();
+    }
+    t_runningForwarded = true;
+    try {
+      run_item(item);
+    } catch (const std::exception& e) {
+      Log.error("deferred GX item failed: {}", e.what());
+    }
+    t_runningForwarded = false;
+    std::lock_guard lock(g_state.mutex);
+    if (item.chunk.data != nullptr) {
+      item.chunk.size = 0;
+      g_state.freeChunks.push_back(item.chunk);
+    }
+    if (item.fence != 0) g_state.fenceDone = item.fence;
+  }
+  g_inlineRunning = false;
+}
+
+void maybe_run_deferred() {
+  if (!deferred()) return;
+  size_t queued;
+  {
+    std::lock_guard lock(g_state.mutex);
+    queued = g_state.queue.size();
+  }
+  if (queued >= defer_items()) run_deferred(0);
+}
+
 void ensure_started_locked() {
   if (g_state.started) {
     return;
@@ -130,6 +191,10 @@ void ensure_started_locked() {
   g_state.started = true;
   g_state.stop = false;
   g_state.busy = false;
+  if (deferred()) {
+    Log.info("GX thread deferred mode (no thread), {} items", defer_items());
+    return;
+  }
   g_state.thread = std::thread(thread_main);
   g_state.threadId = g_state.thread.get_id();
   Log.info("GX thread enabled");
@@ -163,7 +228,7 @@ void enqueue_pending_bytes_locked() {
 bool enabled() noexcept {
   static const bool on = [] {
     const char* value = std::getenv("BASARA_GX_THREAD");
-    return value != nullptr && (value[0] == '1' || value[0] == '2' || value[0] == '3');
+    return value != nullptr && (value[0] == '1' || value[0] == '2' || value[0] == '3' || value[0] == '4');
   }();
   return on;
 }
@@ -196,6 +261,7 @@ void submit() {
   }
   g_state.cv.notify_one();
   if (lockstep()) sync(SyncReason::Other);
+  maybe_run_deferred();
 }
 
 namespace {
@@ -234,6 +300,7 @@ uint64_t post_impl(std::function<void()> fn, const char* name, bool fenced) {
   g_state.cv.notify_one();
   if (lockstep()) sync(SyncReason::Other);
   else sync_after(kSyncAfterPost);
+  maybe_run_deferred();
   return ticket;
 }
 
@@ -272,6 +339,11 @@ void wait_fence(uint64_t ticket, SyncReason reason) {
   if (ticket == 0 || !offload()) {
     return;
   }
+  if (deferred()) {
+    g_syncs[static_cast<int>(reason)].fetch_add(1, std::memory_order_relaxed);
+    run_deferred(ticket);
+    return;
+  }
   std::unique_lock lock(g_state.mutex);
   if (g_state.fenceDone >= ticket) {
     return;
@@ -306,6 +378,11 @@ void sync(SyncReason reason) {
     return;
   }
   enqueue_pending_bytes_locked();
+  if (deferred()) {
+    lock.unlock();
+    run_deferred(0);
+    return;
+  }
   if (g_state.queue.empty() && !g_state.busy) {
     return;
   }

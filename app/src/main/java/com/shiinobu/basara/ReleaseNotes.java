@@ -42,7 +42,11 @@ final class ReleaseNotes {
                     "Stop button in the launcher: closes the game waiting in the background.",
                     "SGSR upscaling option (Graphics > Upscaler).",
                     "Graphics > GPU Driver: install a custom Vulkan driver .zip (Turnip for Adreno, malisx2 for Mali). If the game does not start with it, it switches back to System.",
-                    "Experimental > Renderer: the Vulkan renderer, lighter than the default on some phones.",
+                    "Graphics > Renderer: the Vulkan renderer, lighter than the default on some phones.",
+                    "Performance > GX Thread: the graphics work runs on its own CPU core, so busy battles run faster on slower phones.",
+                    "Dynamic Resolution moved from Experimental to Performance.",
+                    "Logs: every game start has its own folder, Logs/<date and time>, with log/ (console.log) and crash/ (crash reports). The 20 newest are kept.",
+                    "The launcher asks for file access as soon as it opens, until it is given.",
                     "Settings > Controls > Invert Camera: choose which way a drag turns the camera.",
                 },
                 new String[] {
@@ -53,6 +57,8 @@ final class ReleaseNotes {
                     "Dialogue repeated in short steps when the game ran around 30 fps.",
                     "The touch camera turned slowly or not at all on gentle drags. Any drag now turns it at full speed.",
                     "Loud battle sound crackled when many effects played at once.",
+                    "GX Thread: black flashes in the battle preparation screen and white flashes in battle.",
+                    "Invert Camera now also reverses the right touch stick (both ways), not only camera drags.",
                 },
                 new String[] {
                     "malisx2 on Mali-G52 works, but is not faster than the phone's own driver.",

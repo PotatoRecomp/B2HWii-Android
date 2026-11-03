@@ -100,7 +100,7 @@ public final class GameActivity extends SDLActivity
             // Read by runtime/src/platform/host_platform.cpp before anything else starts.
             Os.setenv("WIICOMPILED_RUNTIME_DIR", AppFiles.runtimeDir(this).getAbsolutePath(), true);
             Os.setenv("WIICOMPILED_DATA_DIR", AppFiles.dataDir(this).getAbsolutePath(), true);
-            final java.io.File logs = AppFiles.logDir();
+            final java.io.File logs = AppFiles.newRunLogDir();
             if (logs != null) Os.setenv("BASARA_LOG_DIR", logs.getAbsolutePath(), true);
             // HD Textures keeps its own cache folder; without Custom Textures it is the only one indexed.
             final java.io.File hdCache = settings.hdTextures() != 0 ? AppFiles.hdCacheDir() : null;

@@ -19,7 +19,7 @@ final class TouchIcons {
     // Face buttons: seal arc and dot on the outer side, the letter.
     private static final Path A_SEAL = svg("M 64.2 28.5 A 26.5 26.5 0 0 1 64.2 51.5");
     private static final Path A_GLYPH = svg("M 32.5 50 L 40 29.5 L 47.5 50 M 35.2 43.2 H 44.8");
-    private static final Path B_MARK = svg("M 35 66.2 A 26.5 26.5 0 0 0 45 66.2");
+    private static final Path B_SEAL = svg("M 51.5 64.2 A 26.5 26.5 0 0 1 28.5 64.2");
     private static final Path B_GLYPH = svg("M 34 30 V 50 H 42.5 C 45.5 50 47.2 48.2 47.2 45.2 C 47.2 42.2 45.2 40 42 40 "
             + "H 34 M 34 30 H 41.5 C 44.3 30 46 31.6 46 35 C 46 38.2 44.2 40 41.5 40");
     private static final Path X_SEAL = svg("M 28.5 15.8 A 26.5 26.5 0 0 1 51.5 15.8");
@@ -153,9 +153,8 @@ final class TouchIcons {
                 glyph(c, A_GLYPH, down, 2.2f);
                 break;
             case TouchControlsView.B:
-                line.setColor(down ? held(0xFFFFFF, 1f) : idle(PAPER, 0.85f));
-                line.setStrokeWidth(1.6f);
-                c.drawPath(B_MARK, line);
+                seal(c, B_SEAL, down, 2.1f);
+                sealDot(c, 40f, 68.5f, 1.8f, down);
                 glyph(c, B_GLYPH, down, 2.2f);
                 break;
             case TouchControlsView.X:

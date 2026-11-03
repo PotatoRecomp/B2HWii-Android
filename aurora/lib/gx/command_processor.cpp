@@ -1527,6 +1527,14 @@ static void handle_bp(u32 value, bool bigEndian) {
 }
 
 extern "C" void GXApplyBPReg(u8 reg, u32 value) {
+  // The runtime replays raw guest FIFO / display-list BP writes (fog, TEV, blend, z, alpha compare)
+  // through here. With the GX thread the decoded state belongs to that thread and lags the queue,
+  // so the write has to go through the FIFO: applied here it raced the decode and landed before
+  // the draws already queued (black preparation screen from fog, white flashes in battle).
+  if (thread::offload()) {
+    GX_WRITE_RAS_REG((static_cast<u32>(reg) << 24) | (value & 0x00FFFFFFu));
+    return;
+  }
   const bool wasDirty = g_gxState.stateDirty;
   handle_bp((static_cast<u32>(reg) << 24) | (value & 0x00FFFFFFu), true);
   if (MergeSuspectsOn()) note_write(0, 0x100 | reg, value & 0x00FFFFFFu, wasDirty);

@@ -476,36 +476,48 @@ static bool validate_static_palette_texture_source_entry(const StaticPaletteText
   return true;
 }
 
+// A cache entry's generation and digest are taken BEFORE the texels are uploaded, generation first.
+// With the GX thread the game runs ahead and may rewrite (and flush) the source while it uploads;
+// reading them afterwards paired old texels with the new generation, and every later validation then
+// skipped the digest and kept the stale texture.
+struct StaticSourceCapture {
+  u64 generation = 0;
+  u64 digest = 0;
+};
+
+static StaticSourceCapture capture_static_source(const void* data, size_t size) noexcept {
+  StaticSourceCapture capture;
+  capture.generation = guest_write_generation(data, size);
+  capture.digest = digest_source_bytes(data, size);
+  return capture;
+}
+
 static StaticTextureSourceEntry make_static_texture_source_entry(const StaticTextureKey& key,
-                                                                const gfx::TextureHandle& handle) {
-  const u32 dataSize = static_texture_data_size(key);
-  const u64 generation = guest_write_generation(key.data, dataSize);
+                                                                const gfx::TextureHandle& handle,
+                                                                const StaticSourceCapture& source) {
   note_texture_cache_stamp();
   return {
       .handle = handle,
-      .digest = digest_source_bytes(key.data, dataSize),
-      .sourceSize = dataSize,
+      .digest = source.digest,
+      .sourceSize = static_texture_data_size(key),
       .validationRevision = s_staticTextureCacheValidationRevision,
-      .sourceGeneration = generation,
+      .sourceGeneration = source.generation,
   };
 }
 
 static StaticPaletteTextureSourceEntry make_static_palette_texture_source_entry(
-    const StaticPaletteTextureKey& key, const gfx::TextureHandle& handle) {
-  const u32 textureDataSize = static_texture_data_size(key.texture);
-  const size_t tlutDataSize = static_cast<size_t>(key.tlutEntries) * sizeof(u16);
-  const u64 textureGeneration = guest_write_generation(key.texture.data, textureDataSize);
-  const u64 tlutGeneration = guest_write_generation(key.tlutData, tlutDataSize);
+    const StaticPaletteTextureKey& key, const gfx::TextureHandle& handle, const StaticSourceCapture& texture,
+    const StaticSourceCapture& tlut) {
   note_texture_cache_stamp();
   return {
       .handle = handle,
-      .textureDigest = digest_source_bytes(key.texture.data, textureDataSize),
-      .tlutDigest = digest_source_bytes(key.tlutData, tlutDataSize),
-      .textureSize = textureDataSize,
-      .tlutSize = static_cast<u32>(tlutDataSize),
+      .textureDigest = texture.digest,
+      .tlutDigest = tlut.digest,
+      .textureSize = static_texture_data_size(key.texture),
+      .tlutSize = static_cast<u32>(static_cast<size_t>(key.tlutEntries) * sizeof(u16)),
       .validationRevision = s_staticTextureCacheValidationRevision,
-      .textureGeneration = textureGeneration,
-      .tlutGeneration = tlutGeneration,
+      .textureGeneration = texture.generation,
+      .tlutGeneration = tlut.generation,
   };
 }
 
@@ -610,16 +622,18 @@ gfx::TextureHandle get_tlut_texture(const GXTlutObj_& tlut) {
     cache.staticTextureUsers.clear();
   }
 
+  // Generation and digest before the upload reads the palette (see capture_static_source).
+  const StaticSourceCapture capture =
+      tlut.tlutObjId != 0 ? capture_static_source(tlut.data, tlutSize) : StaticSourceCapture{};
   const auto handle =
       gfx::new_static_texture_2d(tlut.numEntries, 1, 1, gfx::tlut_texture_format(tlut.format),
                                  {static_cast<const u8*>(tlut.data), tlutSize}, true, "Loaded TLUT");
   if (tlut.tlutObjId != 0) {
     auto& cache = s_tlutObjectCaches[tlut.tlutObjId];
-    const u64 generation = guest_write_generation(tlut.data, tlutSize);
     cache.tlutTexture.handle = handle;
     cache.tlutTexture.tlutDataVersion = tlut.tlutDataVersion;
-    cache.tlutTexture.digest = digest_source_bytes(tlut.data, tlutSize);
-    cache.tlutTexture.generation = generation;
+    cache.tlutTexture.digest = capture.digest;
+    cache.tlutTexture.generation = capture.generation;
     cache.tlutTexture.validationRevision = s_staticTextureCacheValidationRevision;
     note_texture_cache_stamp();
   }
@@ -708,6 +722,9 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
     }
   }
 
+  const u32 sourceSize = canCacheUpload && canUseSourceCache ? static_texture_data_size(sourceKey) : 0;
+  const StaticSourceCapture sourceCapture =
+      sourceSize != 0 ? capture_static_source(sourceKey.data, sourceSize) : StaticSourceCapture{};
   gfx::TextureHandle handle;
   if (const auto replacement = gfx::texture_replacement::find_replacement(obj); replacement.has_value()) {
     handle = *replacement;
@@ -723,8 +740,10 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
                                             obj.has_mips() ? static_cast<u8>(obj.mip_count() - 1) : 0);
     const bool byContent = canUseSourceCache && dataSize != 0;
     const StaticTextureContentKey contentKey =
-        byContent ? StaticTextureContentKey{digest_source_bytes(obj.data, dataSize), dataSize, obj.width(),
-                                            obj.height(), obj.mip_count(), static_cast<u32>(obj.format())}
+        byContent ? StaticTextureContentKey{sourceSize == dataSize ? sourceCapture.digest
+                                                                   : digest_source_bytes(obj.data, dataSize),
+                                            dataSize, obj.width(), obj.height(), obj.mip_count(),
+                                            static_cast<u32>(obj.format())}
                   : StaticTextureContentKey{};
     if (byContent) {
       if (const auto it = s_staticTextureContentCache.find(contentKey); it != s_staticTextureContentCache.end()) {
@@ -779,7 +798,7 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
         absl::erase_if(s_staticTextureSourceCache, [](const auto& item) { return item.second.handle.use_count() <= 1; });
         clear_static_source_front_cache();
       }
-      s_staticTextureSourceCache[sourceKey] = make_static_texture_source_entry(sourceKey, handle);
+      s_staticTextureSourceCache[sourceKey] = make_static_texture_source_entry(sourceKey, handle, sourceCapture);
       store_static_source_front_cache(sourceKey, sourceHash, handle);
       if (obj.texObjId != 0) {
         record_tex_obj_source_key(obj.texObjId, sourceKey);
@@ -822,6 +841,12 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
     }
   }
 
+  const u32 sourceTextureSize = canUseSourceCache ? static_texture_data_size(sourceKey.texture) : 0;
+  const size_t sourceTlutSize = canUseSourceCache ? static_cast<size_t>(sourceKey.tlutEntries) * sizeof(u16) : 0;
+  const StaticSourceCapture textureCapture =
+      canUseSourceCache ? capture_static_source(sourceKey.texture.data, sourceTextureSize) : StaticSourceCapture{};
+  const StaticSourceCapture tlutCapture =
+      canUseSourceCache ? capture_static_source(sourceKey.tlutData, sourceTlutSize) : StaticSourceCapture{};
   gfx::TextureHandle handle;
   if (const auto replacement = gfx::texture_replacement::find_replacement(obj, tlut); replacement.has_value()) {
     handle = *replacement;
@@ -832,8 +857,10 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
     const size_t tlutSize = static_cast<size_t>(tlut.numEntries) * 2;
     const bool byContent = canUseSourceCache && dataSize != 0 && tlutSize != 0;
     const StaticPaletteContentKey contentKey =
-        byContent ? StaticPaletteContentKey{digest_source_bytes(obj.data, dataSize),
-                                            digest_source_bytes(tlut.data, tlutSize),
+        byContent ? StaticPaletteContentKey{dataSize == sourceTextureSize ? textureCapture.digest
+                                                                          : digest_source_bytes(obj.data, dataSize),
+                                            tlutSize == sourceTlutSize ? tlutCapture.digest
+                                                                       : digest_source_bytes(tlut.data, tlutSize),
                                             dataSize,
                                             obj.width(),
                                             obj.height(),
@@ -900,7 +927,7 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
       if (s_staticPaletteTextureSourceCache.size() >= 256) {
         absl::erase_if(s_staticPaletteTextureSourceCache, [](const auto& item) { return item.second.handle.use_count() <= 1; });
       }
-      s_staticPaletteTextureSourceCache[sourceKey] = make_static_palette_texture_source_entry(sourceKey, handle);
+      s_staticPaletteTextureSourceCache[sourceKey] = make_static_palette_texture_source_entry(sourceKey, handle, textureCapture, tlutCapture);
       if (obj.texObjId != 0) {
         record_tex_obj_palette_source_key(obj.texObjId, sourceKey);
       }

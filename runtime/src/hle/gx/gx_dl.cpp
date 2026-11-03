@@ -12,6 +12,11 @@
 // bytes with a 64-bit XXH3 digest (see GxDisplayListScanCache::CanReuse).
 #include <xxhash.h>
 
+extern "C" bool AuroraGxThreadEnabled();
+extern "C" uint64_t AuroraGxThreadMark();
+extern "C" void AuroraGxThreadWaitMark(uint64_t ticket);
+extern "C" bool AuroraGxThreadMarkReached(uint64_t ticket);
+
 namespace aurora::gx::fifo {
 bool in_display_list();
 bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxCount,
@@ -1209,8 +1214,29 @@ static bool ApplyAuroraArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX
                                             const std::array<bool, GX_VA_MAX_ATTR>& sawIdx,
                                             GXVtxFmt vtxfmt,
                                             bool vtxfmtMixed) {
-    static std::array<std::array<std::vector<uint8_t>, 2>, GX_VA_MAX_ATTR> s_packedArrays;
+    // Packed copies are read when the draw decodes. With the GX thread that is later than the next
+    // display list, so each slot keeps a GX fence and is reused (or resized, which frees the old
+    // bytes) only after the GX thread has passed it. Two slots were overwritten mid-flight: flicker.
+    constexpr uint32_t kPackedSlots = 8;
+    struct PackedSlot {
+        std::vector<uint8_t> bytes;
+        uint64_t fence = 0;
+    };
+    static std::array<std::array<PackedSlot, kPackedSlots>, GX_VA_MAX_ATTR> s_packedArrays;
     static std::array<uint32_t, GX_VA_MAX_ATTR> s_packedArrayCursor{};
+    static const bool s_gxThread = AuroraGxThreadEnabled();
+    // Slots the previous call packed: its display list has been queued by now, so one fence
+    // after it covers them all.
+    static std::array<uint64_t*, GX_VA_MAX_ATTR> s_packedPending{};
+    static bool s_anyPackedPending = false;
+    if (s_anyPackedPending) {
+        const uint64_t fence = AuroraGxThreadMark();
+        for (auto& pending : s_packedPending) {
+            if (pending != nullptr) *pending = fence;
+            pending = nullptr;
+        }
+        s_anyPackedPending = false;
+    }
     bool ok = true;
     if (vtxfmt >= GX_MAX_VTXFMT) {
         vtxfmt = g_hleGxState.currentVtxFmt;
@@ -1229,7 +1255,11 @@ static bool ApplyAuroraArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX
             continue;
         }
         const uint32_t span = (count > 0) ? (static_cast<uint32_t>((count - 1u) * arr.stride) + elemSize) : 0u;
-        const bool needsPack = arr.stride > 0xffu;
+        // GX thread: the game rewrites small arrays (a single 6-byte vertex was caught) right after
+        // queuing the draw, without a cache flush. Copy those at queue time instead of handing the
+        // GX thread a pointer into live guest RAM.
+        constexpr uint32_t kSnapshotMaxBytes = 256;
+        const bool needsPack = arr.stride > 0xffu || (s_gxThread && span <= kSnapshotMaxBytes);
         if (!Memory::Contains(arr.base, span)) {
             ok = false;
             continue;
@@ -1296,12 +1326,21 @@ static bool ApplyAuroraArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX
             ApplyAuroraArrayIfChanged(gxAttr, hostPtr, span, static_cast<uint8_t>(arr.stride));
             continue;
         }
-        auto& packed = s_packedArrays[attr][++s_packedArrayCursor[attr] & 1u];
+        auto& slot = s_packedArrays[attr][++s_packedArrayCursor[attr] % (s_gxThread ? kPackedSlots : 2u)];
+        if (slot.fence != 0) {
+            if (!AuroraGxThreadMarkReached(slot.fence)) AuroraGxThreadWaitMark(slot.fence);
+            slot.fence = 0;
+        }
+        auto& packed = slot.bytes;
         if (!PackIndexedAttrData(hostPtr, arr.stride, count, elemSize, packed)) {
             ok = false;
             continue;
         }
         ApplyAuroraArrayIfChanged(gxAttr, packed.data(), static_cast<uint32_t>(packed.size()), static_cast<uint8_t>(elemSize));
+        if (s_gxThread) {
+            s_packedPending[attr] = &slot.fence;
+            s_anyPackedPending = true;
+        }
     }
     return ok;
 }

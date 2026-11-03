@@ -6,7 +6,7 @@ An unofficial port of *Sengoku Basara 2 Heroes* (Wii, NTSC-J, `RBSJ08`) to Andro
 
 The game's PowerPC code is recompiled to C++ ahead of time on a PC and built into a native app, together with a runtime that stands in for the Wii's system software and a GX renderer on Vulkan. Nothing is emulated on the phone.
 
-Port made by Shiinobu, continuing the work of WitherBlitz with the help of WiiCompiled's code, and entirely coded by Claude Opus 5.5. Based on [NSMB-Wii-Multiplayer-Recompilation](https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation) and [WiiCompiled](https://github.com/patchzyy/Wiicompiled), both GPLv3 (see [Credits](#credits)).
+Port made by Xu, continuing the work of WitherBlitz with the help of WiiCompiled's code, and entirely coded by Claude Opus 5.5. Based on [NSMB-Wii-Multiplayer-Recompilation](https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation) and [WiiCompiled](https://github.com/patchzyy/Wiicompiled), both GPLv3 (see [Credits](#credits)).
 
 </div>
 
@@ -42,7 +42,7 @@ The full change history is in the app (**What's New**) and on the [Releases](../
 
 ## Features
 
-| | |
+| Area | What it has |
 |---|---|
 | **Performance** | Frameskip, 30 FPS Lock, Dynamic Resolution, GX Thread. A device profile picks resolution and frameskip on first start. |
 | **Graphics** | Render resolution 0.5×–4×, FSR1 and SGSR upscaling, Texture Detail (trilinear and anisotropic filtering), custom textures and texture dumping, Vulkan renderer choice, custom GPU drivers. |

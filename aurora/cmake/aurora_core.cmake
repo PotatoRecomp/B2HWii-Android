@@ -32,7 +32,7 @@ endif ()
 
 if (AURORA_ENABLE_GX)
     target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
-    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/webgpu/fsr.cpp lib/webgpu/custom_driver.cpp lib/dawn/BackendBinding.cpp)
+    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/webgpu/fsr.cpp lib/webgpu/sgsr.cpp lib/webgpu/custom_driver.cpp lib/dawn/BackendBinding.cpp)
     target_link_libraries(aurora_core PRIVATE dawn::webgpu_dawn)
     if (ANDROID)
         # libadrenotools (BSD-2-Clause) loads player-installed Vulkan drivers (lib/webgpu/custom_driver.cpp).

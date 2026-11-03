@@ -1,5 +1,6 @@
 #include "gpu.hpp"
 #include "fsr.hpp"
+#include "sgsr.hpp"
 #include "custom_driver.hpp"
 
 #include <array>
@@ -50,6 +51,7 @@ static Module Log("aurora::gpu");
 
 #if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
 extern "C" bool aurora_wgpu_vk;  // lib/vulkan/wgpu_dispatch.cpp
+extern "C" void aurora_vk_save_pipeline_cache();
 static bool vulkan_backend_active() { return aurora_wgpu_vk; }
 static void set_vulkan_backend(bool on) { aurora_wgpu_vk = on; }
 #else
@@ -1021,7 +1023,9 @@ bool initialize(AuroraBackend auroraBackend) {
   const bool custom = custom_driver::begin();
 #if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
   const char* renderer = std::getenv("BASARA_RENDERER");
-  const bool vulkanFirst = renderer != nullptr && std::strcmp(renderer, "vulkan") == 0;
+  const char* driverEnv = std::getenv("BASARA_GPU_DRIVER");
+  const bool maliCustom = custom && driverEnv != nullptr && contains_ignore_case(driverEnv, "mali");
+  const bool vulkanFirst = (renderer != nullptr && std::strcmp(renderer, "vulkan") == 0) || maliCustom;
   const bool vulkanTarget = auroraBackend == BACKEND_VULKAN || auroraBackend == BACKEND_AUTO;
   std::vector<bool> order;
   if (vulkanFirst && vulkanTarget) order = {true, false};
@@ -1093,6 +1097,12 @@ void serialize_pipeline_caches() noexcept {
   if (!g_device || g_backendType != wgpu::BackendType::Vulkan) {
     return;
   }
+#if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
+  if (vulkan_backend_active()) {
+    aurora_vk_save_pipeline_cache();
+    return;
+  }
+#endif
   const auto start = std::chrono::steady_clock::now();
   dawn::native::PerformIdleTasks(g_device);
   Log.info("Saved the Vulkan pipeline cache in {} ms",
@@ -1104,6 +1114,7 @@ void shutdown() {
   serialize_pipeline_caches();
   g_initialized.store(false, std::memory_order_release);
   fsr::shutdown();
+  sgsr::shutdown();
   g_CopyBindGroupLayout = {};
   g_CopyPipeline = {};
   g_CopyBindGroup = {};

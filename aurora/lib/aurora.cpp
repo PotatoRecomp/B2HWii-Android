@@ -9,6 +9,7 @@
 #include "webgpu/fsr.hpp"
 #include "webgpu/gpu.hpp"
 #include "webgpu/metalfx.hpp"
+#include "webgpu/sgsr.hpp"
 #include <webgpu/webgpu_cpp.h>
 #endif
 
@@ -1386,11 +1387,14 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
   wgpu::BindGroup presentBindGroup = presentSource.bindGroup;
   wgpu::BindGroup newMetalFXOutput;
   bool fsrUpscaled = false;
+  bool sgsrUpscaled = false;
   if (cachedMetalFXOutput && *cachedMetalFXOutput) {
     presentBindGroup = *cachedMetalFXOutput;
   } else if (auto upscaled = upscale_presentation(encoder, presentSource, viewport, metalfxEnabled)) {
     presentBindGroup = std::move(upscaled);
     newMetalFXOutput = presentBindGroup;
+  } else if (webgpu::fsr::mode() == 3) {
+    sgsrUpscaled = webgpu::sgsr::encode_upscale(encoder, presentSource, viewport);
   } else {
     fsrUpscaled = webgpu::fsr::encode_upscale(encoder, presentSource.bindGroup, presentSource.size, viewport);
   }
@@ -1410,7 +1414,9 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
     const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
     pass.SetViewport(viewport.left, viewport.top, viewport.width, viewport.height,
                      viewport.znear, viewport.zfar);
-    if (fsrUpscaled) {
+    if (sgsrUpscaled) {
+      webgpu::sgsr::draw(pass);
+    } else if (fsrUpscaled) {
       webgpu::fsr::draw_sharpened(pass);
     } else {
       pass.SetPipeline(webgpu::g_CopyPipeline);

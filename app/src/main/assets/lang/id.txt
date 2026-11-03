@@ -390,3 +390,11 @@ The GPU driver	Driver GPU
 System is the phone's own driver. A driver you install (a Turnip .zip made for Dolphin or Yuzu, for Snapdragon / Adreno) can be faster or fix broken graphics. Mali drivers (malisx2) run on the Vulkan renderer, which starts by itself for them. If it fails or the game closes while starting, it goes back to System by itself.	Sistem = driver bawaan HP. Driver yang kamu pasang (.zip Turnip untuk Dolphin atau Yuzu, khusus Snapdragon / Adreno) bisa lebih cepat atau memperbaiki grafis rusak. Driver Mali (malisx2) berjalan di renderer Vulkan, yang otomatis dipakai untuknya. Kalau gagal, atau game tertutup saat mulai, otomatis kembali ke Sistem.
 Renderer	Renderer
 Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, made for older phones, still being tuned. Restarts the game.	Auto memakai Dawn, dan renderer Vulkan hanya untuk driver GPU yang tidak bisa dipakai Dawn (seperti malisx2 di Mali). Vulkan selalu mencoba renderer Vulkan dulu: lebih ringan, dibuat untuk HP lama, masih disempurnakan. Game akan dimulai ulang.
+Upscaling	Upscaling
+Upscaler	Upscaler
+FSR Light	FSR Light
+FSR Full	FSR Full
+SGSR	SGSR
+Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's edge-aware upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware upscale in one pass, lighter than FSR Full.	Light menajamkan gambar yang diperbesar dan hampir tanpa biaya. Full menambah upscale FSR1 yang peka tepi: paling tajam, tetapi beberapa ms di GPU HP kecil. SGSR: upscale peka tepi dari Qualcomm dalam satu pass, lebih ringan dari FSR Full.
+Turn Upscaling on to choose.	Nyalakan Upscaling untuk memilih.
+SGSR upscaling option.	Opsi upscaling SGSR.

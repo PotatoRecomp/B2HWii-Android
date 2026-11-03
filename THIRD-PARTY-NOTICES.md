@@ -27,6 +27,13 @@ Aurora itself vendors:
 - **libogc-derived SRAM structures** - zlib-style license, Copyright (c) Michael Wiedenbauer
   (shagkur) and Dave Murphy (WinterMute). `aurora/lib/card/SRAM.hpp`.
   Source: <https://github.com/devkitPro/libogc>
+- **AMD FidelityFX Super Resolution 1 (FSR1)** - MIT, Copyright (c) 2021 Advanced Micro Devices, Inc.
+  Adapted into WGSL in `aurora/lib/webgpu/fsr.cpp`.
+  Source: <https://github.com/GPUOpen-Effects/FidelityFX-FSR>
+- **Snapdragon Game Super Resolution 1 (SGSR1)** - BSD-3-Clause, Copyright (c) 2023, Qualcomm
+  Innovation Center, Inc. Adapted into WGSL in `aurora/lib/webgpu/sgsr.cpp` (with full BSD-3-Clause
+  license header).
+  Source: <https://github.com/SnapdragonStudios/snapdragon-gsr>
 
 ### Dolphin Emulator data files - GPL-2.0-or-later
 

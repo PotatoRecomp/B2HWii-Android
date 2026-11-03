@@ -39,6 +39,7 @@ final class ReleaseNotes {
                 new String[] {
                     "Settings > Save Data: back up your save to a .zip and import it again.",
                     "Settings > Cheats: money (infinite, or set once to any amount), infinite HP and infinite Basara gauge.",
+                    "SGSR upscaling option.",
                 },
                 new String[] {
                     "Dialogue and cutscene voices no longer stutter or repeat when the game runs below 60 fps (Low resolution, 30 FPS Lock, busy battles).",

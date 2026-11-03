@@ -613,7 +613,7 @@ public final class LauncherActivity extends Activity {
         settings = new AppSettings(this);  // the settings screen and the game write the same file
         activeSettings.removeAllViews();
         final String[] aspects = {"4:3", "16:9", Tr.t("Fill")};
-        final String[] fsr = {Tr.t("FSR Off"), Tr.t("FSR Light"), Tr.t("FSR Full")};
+        final String[] fsr = {Tr.t("FSR Off"), Tr.t("FSR Light"), Tr.t("FSR Full"), Tr.t("SGSR")};
         final String[] detail = {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")};
         settingLine(AppSettings.resolutionLabel(settings.resolutionScale()) + "  ·  "
                 + aspects[Math.max(0, Math.min(2, settings.aspectMode()))] + "  ·  " + fsr[settings.fsr()], Color.WHITE);

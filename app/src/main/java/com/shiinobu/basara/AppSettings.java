@@ -95,15 +95,20 @@ final class AppSettings {
     boolean fpsLock30() { return prefs.getBoolean("fps_lock_30", false); }
     void setFpsLock30(boolean on) { prefs.edit().putBoolean("fps_lock_30", on).commit(); }
     /**
-     * FSR1 upscaling when the game renders below the screen's resolution (on by default), in light
-     * quality (sharpen the stretched picture) or full (FSR1's edge-aware upscale, heavier on the GPU).
+     * Upscaling when the game renders below the screen's resolution (on by default): 0 FSR Light
+     * (sharpen the stretched picture), 1 FSR Full (FSR1's edge-aware upscale, heavier on the GPU),
+     * 2 SGSR (Qualcomm's single-pass edge-aware upscale).
      */
     boolean fsrOn() { return prefs.getBoolean("fsr_on", true); }
     void setFsrOn(boolean on) { prefs.edit().putBoolean("fsr_on", on).commit(); }
     boolean fsrFull() { return prefs.getBoolean("fsr_full", false); }
     void setFsrFull(boolean full) { prefs.edit().putBoolean("fsr_full", full).commit(); }
-    /** The config value: 0 off, 1 light, 2 full. */
-    int fsr() { return fsrOn() ? (fsrFull() ? 2 : 1) : 0; }
+    int upscaler() {
+        return Math.max(0, Math.min(2, prefs.getInt("upscaler", prefs.getBoolean("fsr_full", false) ? 1 : 0)));
+    }
+    void setUpscaler(int mode) { prefs.edit().putInt("upscaler", Math.max(0, Math.min(2, mode))).commit(); }
+    /** The config value: 0 off, 1 FSR light, 2 FSR full, 3 SGSR. */
+    int fsr() { return fsrOn() ? (upscaler() + 1) : 0; }
 
     /**
      * Texture Detail for the 3D world: 0 original (as the game asks), 1 sharp (default: the Wii's

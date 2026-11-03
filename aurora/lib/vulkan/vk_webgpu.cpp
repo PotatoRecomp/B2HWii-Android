@@ -1250,8 +1250,12 @@ struct WGPUTextureImpl : Object {
   bool swapchain = false;
   // Swapchain images only; every other image lives in GENERAL.
   VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VkImageView defaultView = VK_NULL_HANDLE;
 
   ~WGPUTextureImpl() override {
+    if (defaultView != VK_NULL_HANDLE) {
+      vkDestroyImageView(dev->device, defaultView, nullptr);
+    }
     if (image != VK_NULL_HANDLE && !swapchain) {
       vmaDestroyImage(dev->vma, image, alloc);
     }
@@ -1266,7 +1270,9 @@ struct WGPUTextureViewImpl : Object {
   uint32_t height = 0;
 
   ~WGPUTextureViewImpl() override {
-    vkDestroyImageView(texture->dev->device, view, nullptr);
+    if (view != VK_NULL_HANDLE && view != texture->defaultView) {
+      vkDestroyImageView(texture->dev->device, view, nullptr);
+    }
     texture->Release();
   }
 };
@@ -1524,6 +1530,10 @@ void WGPUSurfaceImpl::DestroySwapchain() {
   }
   Retire(dev);
   for (auto* image : images) {
+    if (image->defaultView != VK_NULL_HANDLE) {
+      vkDestroyImageView(dev->device, image->defaultView, nullptr);
+      image->defaultView = VK_NULL_HANDLE;
+    }
     image->image = VK_NULL_HANDLE;
     image->Release();
   }
@@ -1685,12 +1695,10 @@ VkShaderModule MakeModule(WGPUDeviceImpl* dev, const std::vector<uint32_t>& spir
   return module;
 }
 
-void NotePipelineCreated(WGPUDeviceImpl* dev) {
-  // Persist the driver's pipeline cache now and then, not only at shutdown, so a crash keeps it.
-  if (dev->pipelinesSinceSave.fetch_add(1) + 1 < 64) {
+void SavePipelineCache(WGPUDeviceImpl* dev) {
+  if (dev == nullptr || dev->device == VK_NULL_HANDLE || dev->pipelineCache == VK_NULL_HANDLE) {
     return;
   }
-  dev->pipelinesSinceSave.store(0);
   size_t size = 0;
   if (vkGetPipelineCacheData(dev->device, dev->pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0) {
     return;
@@ -1700,14 +1708,34 @@ void NotePipelineCreated(WGPUDeviceImpl* dev) {
     return;
   }
   std::error_code ec;
-  std::filesystem::create_directories(dev->pipelineCachePath.parent_path(), ec);
+  if (dev->pipelineCachePath.has_parent_path()) {
+    std::filesystem::create_directories(dev->pipelineCachePath.parent_path(), ec);
+  }
   const auto tmp = dev->pipelineCachePath.string() + ".tmp";
   std::ofstream(tmp, std::ios::binary).write(data.data(), static_cast<std::streamsize>(size));
   std::filesystem::rename(tmp, dev->pipelineCachePath, ec);
 }
 
+void NotePipelineCreated(WGPUDeviceImpl* dev) {
+  // Persist the driver's pipeline cache now and then, not only at shutdown, so a crash keeps it.
+  if (dev->pipelinesSinceSave.fetch_add(1) + 1 < 64) {
+    return;
+  }
+  dev->pipelinesSinceSave.store(0);
+  SavePipelineCache(dev);
+}
+
 std::filesystem::path PipelineCachePath() {
   if (const char* dir = std::getenv("AURORA_VK_CACHE_DIR"); dir != nullptr && *dir != 0) {
+    return std::filesystem::path{dir} / "vk_pipeline_cache.bin";
+  }
+  if (const char* drv = std::getenv("BASARA_GPU_DRIVER"); drv != nullptr && *drv != 0) {
+    const std::filesystem::path p{drv};
+    if (p.has_parent_path()) {
+      return p.parent_path() / "vk_pipeline_cache.bin";
+    }
+  }
+  if (const char* dir = std::getenv("WIICOMPILED_RUNTIME_DIR"); dir != nullptr && *dir != 0) {
     return std::filesystem::path{dir} / "vk_pipeline_cache.bin";
   }
   if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && *xdg != 0) {
@@ -2003,6 +2031,12 @@ void CreateVkInstance();
 } // namespace
 
 extern "C" {
+
+void aurora_vk_save_pipeline_cache() {
+  if (g_device != nullptr) {
+    SavePipelineCache(g_device);
+  }
+}
 
 WGPUInstance wgpuCreateInstance(const WGPUInstanceDescriptor*) {
 #if defined(__ANDROID__)
@@ -2532,6 +2566,13 @@ WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureView
   auto* view = new WGPUTextureViewImpl;
   view->texture = texture;
   texture->AddRef();
+  if (descriptor == nullptr && texture->defaultView != VK_NULL_HANDLE) {
+    view->view = texture->defaultView;
+    view->baseMip = 0;
+    view->width = texture->width;
+    view->height = texture->height;
+    return view;
+  }
   WGPUTextureViewDescriptor desc{};
   if (descriptor != nullptr) {
     desc = *descriptor;
@@ -2574,6 +2615,9 @@ WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureView
       .subresourceRange = {aspect, desc.baseMipLevel, mipCount, desc.baseArrayLayer, layerCount},
   };
   VK_CHECK(vkCreateImageView(texture->dev->device, &info2, nullptr, &view->view));
+  if (descriptor == nullptr && texture->swapchain && texture->defaultView == VK_NULL_HANDLE) {
+    texture->defaultView = view->view;
+  }
   view->baseMip = desc.baseMipLevel;
   view->width = std::max(1u, texture->width >> desc.baseMipLevel);
   view->height = std::max(1u, texture->height >> desc.baseMipLevel);
@@ -3656,6 +3700,10 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
     }
     Retire(dev);
     for (auto* image : surface->images) {
+      if (image->defaultView != VK_NULL_HANDLE) {
+        vkDestroyImageView(dev->device, image->defaultView, nullptr);
+        image->defaultView = VK_NULL_HANDLE;
+      }
       image->image = VK_NULL_HANDLE;
       image->Release();
     }

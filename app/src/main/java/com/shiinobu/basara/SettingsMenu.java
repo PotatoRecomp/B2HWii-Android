@@ -243,14 +243,15 @@ final class SettingsMenu {
     }
 
     private void showGraphics() {
-        toggleRow(Tr.t("FSR1 Upscaling"), Tr.t("Keeps a picture rendered below the screen's resolution sharp when "
+        toggleRow(Tr.t("Upscaling"), Tr.t("Keeps a picture rendered below the screen's resolution sharp when "
                 + "it is stretched to fill it."), settings.fsrOn(), on -> settings.setFsrOn(on));
-        choiceRow(Tr.t("FSR1 Quality"), settings.fsrOn()
+        choiceRow(Tr.t("Upscaler"), settings.fsrOn()
                         ? Tr.t("Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's "
-                                + "edge-aware upscale: sharpest, but several ms on a small phone GPU.")
-                        : Tr.t("Turn FSR1 Upscaling on to choose."),
-                new String[] {Tr.t("Light"), Tr.t("Full")}, settings.fsrFull() ? 1 : 0, settings.fsrOn(),
-                which -> settings.setFsrFull(which == 1));
+                                + "edge-aware upscale: sharpest, but several ms on a small phone GPU. "
+                                + "SGSR: Qualcomm's edge-aware upscale in one pass, lighter than FSR Full.")
+                        : Tr.t("Turn Upscaling on to choose."),
+                new String[] {Tr.t("FSR Light"), Tr.t("FSR Full"), Tr.t("SGSR")}, settings.upscaler(), settings.fsrOn(),
+                which -> settings.setUpscaler(which));
         choiceRow(Tr.t("Texture Detail"), Tr.t("Keeps the ground, walls and characters sharp at low Render "
                         + "Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU."),
                 new String[] {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")}, settings.textureFilter(), true,

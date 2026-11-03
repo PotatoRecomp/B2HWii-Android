@@ -1297,20 +1297,26 @@ void DrawGraphicsSettings() {
     }
 #endif
     {
-        // FSR1 on or off; on keeps the chosen quality (Light unless Full was picked).
-        static int s_fsrQuality = aurora_get_fsr() == 2 ? 2 : 1;
-        bool fsrOn = aurora_get_fsr() != 0;
+        // Upscaling on or off; on keeps the chosen mode (1 Light, 2 Full, 3 SGSR).
+        const int currentFsr = aurora_get_fsr();
+        static int s_fsrQuality = (currentFsr >= 1 && currentFsr <= 3) ? currentFsr : 1;
+        if (currentFsr >= 1 && currentFsr <= 3) {
+            s_fsrQuality = currentFsr;
+        }
+        bool fsrOn = currentFsr != 0;
         if (ImGui::Checkbox("FSR1 upscaling", &fsrOn)) {
             aurora_set_fsr(fsrOn ? s_fsrQuality : 0);
             RuntimeConfigFile::SetFsr(aurora_get_fsr());
         }
         ImGui::BeginDisabled(!fsrOn);
-        bool full = s_fsrQuality == 2;
-        ImGui::SameLine();
-        if (ImGui::Checkbox("Full quality (heavier on the GPU)", &full)) {
-            s_fsrQuality = full ? 2 : 1;
-            aurora_set_fsr(s_fsrQuality);
-            RuntimeConfigFile::SetFsr(s_fsrQuality);
+        static constexpr std::array<const char*, 3> kUpscalerLabels{"Light", "Full", "SGSR"};
+        for (int mode = 1; mode <= 3; ++mode) {
+            ImGui::SameLine();
+            if (ImGui::RadioButton(kUpscalerLabels[static_cast<size_t>(mode - 1)], s_fsrQuality == mode)) {
+                s_fsrQuality = mode;
+                aurora_set_fsr(s_fsrQuality);
+                RuntimeConfigFile::SetFsr(s_fsrQuality);
+            }
         }
         ImGui::EndDisabled();
     }

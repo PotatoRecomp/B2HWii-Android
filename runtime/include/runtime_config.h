@@ -566,7 +566,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     if (auto value = FindConfigInt(document, "video", "frameskip"); value && *value >= 0 && *value <= 2) {
         config.frameskip = *value;
     }
-    if (auto value = FindConfigInt(document, "video", "fsr"); value && *value >= 0 && *value <= 2) {
+    if (auto value = FindConfigInt(document, "video", "fsr"); value && *value >= 0 && *value <= 3) {
         config.fsr = *value;
     }
     if (auto value = FindConfigInt(document, "video", "texture_filter"); value && *value >= 0 && *value <= 2) {
@@ -1071,7 +1071,7 @@ inline int32_t TextureFilter() {
 }
 
 inline int32_t Fsr() {
-    if (const char* env = std::getenv("BASARA_FSR"); env && *env >= '0' && *env <= '2') return *env - '0';
+    if (const char* env = std::getenv("BASARA_FSR"); env && *env >= '0' && *env <= '3') return *env - '0';
     return Get().fsr.value_or(1);
 }
 

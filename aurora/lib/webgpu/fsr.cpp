@@ -350,7 +350,7 @@ int mode() noexcept { return g_mode.load(std::memory_order_relaxed); }
 bool encode_upscale(const wgpu::CommandEncoder& encoder, const wgpu::BindGroup& source,
                     const wgpu::Extent3D& sourceSize, const Viewport& viewport) {
   const int current = mode();
-  if (current == ModeOff || !source) return false;
+  if ((current != ModeLite && current != ModeFull) || !source) return false;
   const auto width = static_cast<uint32_t>(std::lround(viewport.width));
   const auto height = static_cast<uint32_t>(std::lround(viewport.height));
   // Same size or smaller: the plain copy is already sharp.

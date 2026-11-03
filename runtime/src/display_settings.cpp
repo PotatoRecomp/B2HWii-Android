@@ -51,6 +51,8 @@ constexpr double kDynUpBusyMs = 11.5;         // predicted worker time at the ne
 constexpr int kDynUpWindows = 3;              // calm windows in a row before stepping up
 constexpr int kDynUpWindowsMax = 24;          // ...raised up to this while steps up keep bouncing back
 constexpr int kDynBounceWindows = 5;          // a step down this soon after a step up is a bounce
+constexpr int kDynMinGapWindows = 5;          // windows between two dynamic steps (each one rebuilds the targets)
+int g_dynSinceChange = 1 << 20;
 // While the phone runs hot (Thermal::Hot, ten seconds ahead), at least this step: the GPU shares the
 // SoC's heat budget with the CPU, so fewer pixels keep the CPU clocks up in a long battle.
 constexpr int kDynHotStep = 2;                // 80%
@@ -148,6 +150,9 @@ bool DynamicResolutionTick() {
             g_dynUpNeed = std::max(g_dynUpNeed / 2, kDynUpWindows);  // the steps up hold again
         }
     }
+    if (g_dynSinceChange < (1 << 20)) {
+        ++g_dynSinceChange;
+    }
     if (g_dynSkipWindow || cycles == 0) {
         g_dynSkipWindow = false;
         return false;
@@ -195,6 +200,10 @@ bool DynamicResolutionTick() {
     if (step == g_dynStep) {
         return false;
     }
+    if (dynamic && !s_cycleTest && g_dynSinceChange < kDynMinGapWindows) {
+        return false;  // too soon after the last step: wait (the calm count is kept)
+    }
+    g_dynSinceChange = 0;
     RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (worker %.2f ms a cycle, game waited %.2f ms a frame%s)\n",
             kDynSteps[g_dynStep] * 100.0f, kDynSteps[step] * 100.0f, busyMs, waitMs, reason);
     g_dynStep = step;

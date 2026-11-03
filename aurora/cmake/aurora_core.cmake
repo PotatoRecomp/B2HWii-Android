@@ -32,8 +32,31 @@ endif ()
 
 if (AURORA_ENABLE_GX)
     target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
-    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/webgpu/fsr.cpp lib/dawn/BackendBinding.cpp)
+    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/webgpu/fsr.cpp lib/webgpu/custom_driver.cpp lib/dawn/BackendBinding.cpp)
     target_link_libraries(aurora_core PRIVATE dawn::webgpu_dawn)
+    if (ANDROID)
+        # libadrenotools (BSD-2-Clause) loads player-installed Vulkan drivers (lib/webgpu/custom_driver.cpp).
+        # Its hook libraries are loaded at run time from a folder; tools/b-android.ps1 -Mode stage puts
+        # them in the APK's assets (runtime/gpu_hooks), and the app copies them out.
+        include(FetchContent)
+        set(_aurora_adrenotools_local "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/src/libadrenotools")
+        if (EXISTS "${_aurora_adrenotools_local}/CMakeLists.txt")
+            FetchContent_Declare(adrenotools SOURCE_DIR "${_aurora_adrenotools_local}")
+        else ()
+            FetchContent_Declare(adrenotools GIT_REPOSITORY https://github.com/bylaws/libadrenotools.git
+                                 GIT_TAG 8fae8ce254dfc1344527e05301e43f37dea2df80 GIT_SUBMODULES_RECURSE TRUE)
+        endif ()
+        FetchContent_MakeAvailable(adrenotools)
+        target_link_libraries(aurora_core PRIVATE adrenotools)
+        foreach (_aurora_hook hook_impl main_hook file_redirect_hook gsl_alloc_hook)
+            target_link_options(${_aurora_hook} PRIVATE "LINKER:-z,max-page-size=16384")
+        endforeach ()
+        add_custom_target(aurora_gpu_hooks DEPENDS main_hook file_redirect_hook gsl_alloc_hook hook_impl)
+        add_dependencies(aurora_core aurora_gpu_hooks)
+        include(cmake/aurora_vk.cmake)
+        # PUBLIC: the dispatch must come ahead of the (renamed) Dawn archive for everything that calls wgpu*.
+        target_link_libraries(aurora_core PUBLIC aurora_vk)
+    endif ()
     if (APPLE AND DAWN_ENABLE_METAL)
         find_library(AURORA_METALFX_FRAMEWORK MetalFX)
     endif ()

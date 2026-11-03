@@ -1,5 +1,6 @@
 #include "gpu.hpp"
 #include "fsr.hpp"
+#include "custom_driver.hpp"
 
 #include <array>
 #include <algorithm>
@@ -46,6 +47,15 @@ void clear_offscreen_cache();
 
 namespace aurora::webgpu {
 static Module Log("aurora::gpu");
+
+#if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
+extern "C" bool aurora_wgpu_vk;  // lib/vulkan/wgpu_dispatch.cpp
+static bool vulkan_backend_active() { return aurora_wgpu_vk; }
+static void set_vulkan_backend(bool on) { aurora_wgpu_vk = on; }
+#else
+static bool vulkan_backend_active() { return false; }
+static void set_vulkan_backend(bool) {}
+#endif
 
 wgpu::Device g_device;
 wgpu::Queue g_queue;
@@ -637,7 +647,7 @@ static bool create_surface() {
   return true;
 }
 
-bool initialize(AuroraBackend auroraBackend) {
+static bool initialize_once(AuroraBackend auroraBackend) {
   if (!g_instance) {
     Log.info("Creating WebGPU instance");
     const std::array requiredInstanceFeatures{
@@ -918,7 +928,8 @@ bool initialize(AuroraBackend auroraBackend) {
     {
       // Dawn picks its own workarounds from the adapter (vendor, driver, extensions); record them.
       std::string toggles;
-      for (const char* toggle : dawn::native::GetTogglesUsed(g_device.Get())) {
+      for (const char* toggle : vulkan_backend_active() ? std::vector<const char*>{}
+                                                        : dawn::native::GetTogglesUsed(g_device.Get())) {
         toggles += toggles.empty() ? "" : " ";
         toggles += toggle;
       }
@@ -987,6 +998,55 @@ bool initialize(AuroraBackend auroraBackend) {
   }
   g_initialized.store(true, std::memory_order_release);
   return true;
+}
+
+static void reset_instance() {
+  g_queue = {};
+  g_device = {};
+  g_adapter = {};
+  {
+    window::SurfaceLock surfaceLock;
+    release_surface();
+  }
+  g_instance = {};
+}
+
+// Two WebGPU implementations share libmain on Android (lib/vulkan/wgpu_dispatch.cpp): Dawn, and aurora's
+// own Vulkan backend (lib/vulkan/vk_webgpu.cpp), which needs fewer Vulkan features (no 4x MSAA, Vulkan
+// 1.1) so it also runs drivers Dawn rejects, such as malisx2 on Mali. The order:
+//   BASARA_RENDERER=vulkan: the Vulkan backend first, then Dawn;
+//   otherwise Dawn, then (only with a player-installed driver) the Vulkan backend on that driver;
+//   a player driver that neither starts is dropped, and Dawn runs on the system driver.
+bool initialize(AuroraBackend auroraBackend) {
+  const bool custom = custom_driver::begin();
+#if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
+  const char* renderer = std::getenv("BASARA_RENDERER");
+  const bool vulkanFirst = renderer != nullptr && std::strcmp(renderer, "vulkan") == 0;
+  const bool vulkanTarget = auroraBackend == BACKEND_VULKAN || auroraBackend == BACKEND_AUTO;
+  std::vector<bool> order;
+  if (vulkanFirst && vulkanTarget) order = {true, false};
+  else if (custom && vulkanTarget) order = {false, true};
+  else order = {false};
+#else
+  const std::vector<bool> order{false};
+#endif
+  for (const bool vk : order) {
+    set_vulkan_backend(vk);
+    Log.info("Renderer: {}{}", vk ? "aurora Vulkan" : "Dawn", custom_driver::active() ? " (custom driver)" : "");
+    if (initialize_once(auroraBackend)) {
+      if (custom_driver::active()) {
+        custom_driver::running([] { return g_deviceLost.load(std::memory_order_acquire); });
+      }
+      return true;
+    }
+    reset_instance();
+  }
+  set_vulkan_backend(false);
+  if (!custom_driver::active()) {
+    return false;
+  }
+  custom_driver::fail(std::string{"no renderer could start on it ("} + SDL_GetError() + ")");
+  return initialize_once(auroraBackend);
 }
 
 void fail_if_device_lost() noexcept {
@@ -1171,11 +1231,18 @@ void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, ui
     Log.info("Render target {}x{} for a {}x{} surface", render_width, render_height, native_width,
              native_height);
   }
-  g_graphicsConfig.surfaceConfiguration.width = native_width;
-  g_graphicsConfig.surfaceConfiguration.height = native_height;
-  auto surfaceConfiguration = g_graphicsConfig.surfaceConfiguration;
-  surfaceConfiguration.device = g_device;
-  g_surface.Configure(&surfaceConfiguration);
+  // Only a new surface size (or a forced reconfigure) recreates the swapchain. A render-size change
+  // alone (dynamic resolution) used to reconfigure it too; on Adreno 610 (2021 driver) one of those
+  // dozens of swapchain rebuilds ended in VK_ERROR_DEVICE_LOST.
+  const bool surfaceChanged = g_graphicsConfig.surfaceConfiguration.width != native_width ||
+                              g_graphicsConfig.surfaceConfiguration.height != native_height;
+  if (force || surfaceChanged) {
+    g_graphicsConfig.surfaceConfiguration.width = native_width;
+    g_graphicsConfig.surfaceConfiguration.height = native_height;
+    auto surfaceConfiguration = g_graphicsConfig.surfaceConfiguration;
+    surfaceConfiguration.device = g_device;
+    g_surface.Configure(&surfaceConfiguration);
+  }
   if (!sizeChanged) {
     // Forced reconfigure at an unchanged size (present-mode change or recreated surface). The
     // offscreen targets are not swapchain images, so reallocating them would only stall the frame.

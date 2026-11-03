@@ -50,7 +50,8 @@ if ($Mode -eq 'stage') {
     $libDir = Join-Path $native 'jniLibs\arm64-v8a'
     New-Item -ItemType Directory -Force $libDir | Out-Null
     & $strip --strip-unneeded -o (Join-Path $libDir 'libmain.so') (Join-Path $bd 'libmain.so')
-    Get-ChildItem $bd -Recurse -Filter '*.so' | Where-Object { $_.Name -ne 'libmain.so' } |
+    $hookNames = 'libhook_impl.so', 'libmain_hook.so', 'libfile_redirect_hook.so', 'libgsl_alloc_hook.so'
+    Get-ChildItem $bd -Recurse -Filter '*.so' | Where-Object { $_.Name -ne 'libmain.so' -and $hookNames -notcontains $_.Name } |
         ForEach-Object { & $strip --strip-unneeded -o (Join-Path $libDir $_.Name) $_.FullName; "bundled $($_.Name)" }
     $assets = Join-Path $native 'assets\runtime'
     if (Test-Path $assets) { Remove-Item $assets -Recurse -Force }
@@ -58,6 +59,14 @@ if ($Mode -eq 'stage') {
     foreach ($f in 'dsp_coef.bin', 'cacert.pem') {
         $src = Join-Path $bd $f
         if (Test-Path $src) { Copy-Item $src $assets } else { "missing: $f" }
+    }
+    # libadrenotools hooks: loaded from a folder at run time, so they ship as assets (the app copies
+    # runtime/ out of the APK) instead of jniLibs, which are not extracted.
+    $hookOut = Join-Path $assets 'gpu_hooks'
+    New-Item -ItemType Directory -Force $hookOut | Out-Null
+    foreach ($h in $hookNames) {
+        $src = Get-ChildItem $bd -Recurse -Filter $h | Select-Object -First 1
+        if ($src) { & $strip --strip-unneeded -o (Join-Path $hookOut $h) $src.FullName; "hook $h" } else { "missing hook: $h" }
     }
     if (Test-Path (Join-Path $bd 'wii_bootstrap')) { Copy-Item (Join-Path $bd 'wii_bootstrap') $assets -Recurse }
     Get-Item (Join-Path $libDir 'libmain.so') | ForEach-Object { '{0:N1} MB {1}' -f ($_.Length / 1MB), $_.FullName }

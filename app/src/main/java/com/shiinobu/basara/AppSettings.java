@@ -156,6 +156,14 @@ final class AppSettings {
     void setFixedStick(boolean on) { prefs.edit().putBoolean("touch_fixed_stick", on).commit(); }
 
     String touchLayout() { return prefs.getString("touch_layout", ""); }
+
+    /** The installed GPU driver (GpuDrivers id) the game loads; "" = the phone's own. */
+    String gpuDriver() { return prefs.getString("gpu_driver", ""); }
+
+    /** 0 = Auto (Dawn; the Vulkan backend only for a driver Dawn cannot use), 1 = Vulkan backend first. */
+    int renderer() { return prefs.getInt("renderer", 0); }
+    void setRenderer(int which) { prefs.edit().putInt("renderer", which).commit(); }
+    void setGpuDriver(String id) { prefs.edit().putString("gpu_driver", id == null ? "" : id).commit(); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
 
     /** GX Thread (experimental): GX work on its own thread; read when the game starts. */

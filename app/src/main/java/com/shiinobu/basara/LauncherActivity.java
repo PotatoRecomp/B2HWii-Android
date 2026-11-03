@@ -247,6 +247,7 @@ public final class LauncherActivity extends Activity {
     void endGame() {
         final int pid = gameProcess();
         if (pid != 0) {
+            GpuDrivers.endedOnPurpose(this);
             android.os.Process.killProcess(pid);
             endedGame = pid;
             refresh();
@@ -296,6 +297,11 @@ public final class LauncherActivity extends Activity {
         final String crash = CrashReport.checkLastGameExit(this);
         if (crash != null) {
             Toast.makeText(this, "The game closed unexpectedly: " + crash, Toast.LENGTH_LONG).show();
+        }
+        // A custom GPU driver that failed or crashed the last start is switched back to the system one.
+        if (gameProcess() == 0) {
+            final String driver = GpuDrivers.checkLastStart(this, new AppSettings(this));
+            if (driver != null) Toast.makeText(this, driver, Toast.LENGTH_LONG).show();
         }
         // Back from "Allow from this source": carry on with the update that was waiting for it.
         if (waitingUpdate != null && Updater.canInstall(this)) {

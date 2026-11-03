@@ -89,6 +89,9 @@ public final class GameActivity extends SDLActivity
         bootWidescreen = settings.aspectMode() != AppSettings.ASPECT_4_3;
         try {
             AppFiles.prepareRuntime(this);
+            final String driverOff = GpuDrivers.checkLastStart(this, settings);
+            if (driverOff != null) Toast.makeText(this, driverOff, Toast.LENGTH_LONG).show();
+            GpuDrivers.applyToGame(this, settings);
             AppFiles.writeConfig(this, settings);
             // Read by runtime/src/platform/host_platform.cpp before anything else starts.
             Os.setenv("WIICOMPILED_RUNTIME_DIR", AppFiles.runtimeDir(this).getAbsolutePath(), true);
@@ -364,6 +367,7 @@ public final class GameActivity extends SDLActivity
         }
         super.onDestroy();
         if (isFinishing()) {
+            GpuDrivers.endedOnPurpose(this);
             // The runtime starts once per process; the next start must get a fresh one.
             Process.killProcess(Process.myPid());
         }

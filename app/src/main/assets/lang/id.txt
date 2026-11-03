@@ -364,3 +364,29 @@ Save restored	Save sudah dipulihkan
 The save from before the last import is back. Start the game to play from it.	Save sebelum impor terakhir sudah kembali. Mulai game untuk bermain dari save itu.
 A character's voice right after picking them no longer plays slow and broken, and the character select no longer pauses for a moment on each pick.	Suara karakter tepat setelah dipilih tidak lagi pelan dan patah-patah, dan layar pilih karakter tidak lagi berhenti sejenak di tiap pilihan.
 Settings changed in the Start Menu now apply when you Continue the game.	Setelan yang diubah di Start Menu kini langsung berlaku saat game dilanjutkan (Continue).
+GPU Driver	Driver GPU
+System	Sistem
+Install GPU Driver	Pasang Driver GPU
+Choose a driver .zip (it has a meta.json inside), for example from Download.	Pilih .zip driver (berisi meta.json), misalnya dari Download.
+Install	Pasang
+Remove	Hapus
+By 	Oleh 
+Allow file access to choose a driver .zip.	Izinkan akses file untuk memilih .zip driver.
+Choose a GPU driver	Pilih driver GPU
+A driver .zip with a meta.json inside (Turnip for Adreno).	.zip driver berisi meta.json (Turnip untuk Adreno).
+Installed 	Terpasang 
+. Choose it under GPU Driver.	. Pilih di Driver GPU.
+Not a driver	Bukan driver
+It is not a .zip file that can be read.	Ini bukan file .zip yang bisa dibaca.
+It has no meta.json, so it is not a driver pack (like the Turnip .zip files made for Dolphin or Yuzu).	Tidak ada meta.json, jadi ini bukan paket driver (seperti .zip Turnip untuk Dolphin atau Yuzu).
+Its meta.json cannot be read.	meta.json-nya tidak bisa dibaca.
+The driver library its meta.json names is not in the .zip.	Library driver yang disebut meta.json tidak ada di .zip.
+It needs a newer Android (API 	Butuh Android lebih baru (API 
+Could not make its folder.	Folder driver tidak bisa dibuat.
+Its files could not be read back.	File driver tidak bisa dibaca ulang.
+the game closed while it was starting with this driver	game tertutup saat mulai dengan driver ini
+The GPU driver	Driver GPU
+ was turned off, back to the system driver: 	 dimatikan, kembali ke driver sistem: 
+System is the phone's own driver. A driver you install (a Turnip .zip made for Dolphin or Yuzu, for Snapdragon / Adreno) can be faster or fix broken graphics. Mali drivers (malisx2) run on the Vulkan renderer, which starts by itself for them. If it fails or the game closes while starting, it goes back to System by itself.	Sistem = driver bawaan HP. Driver yang kamu pasang (.zip Turnip untuk Dolphin atau Yuzu, khusus Snapdragon / Adreno) bisa lebih cepat atau memperbaiki grafis rusak. Driver Mali (malisx2) berjalan di renderer Vulkan, yang otomatis dipakai untuknya. Kalau gagal, atau game tertutup saat mulai, otomatis kembali ke Sistem.
+Renderer	Renderer
+Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, made for older phones, still being tuned. Restarts the game.	Auto memakai Dawn, dan renderer Vulkan hanya untuk driver GPU yang tidak bisa dipakai Dawn (seperti malisx2 di Mali). Vulkan selalu mencoba renderer Vulkan dulu: lebih ringan, dibuat untuk HP lama, masih disempurnakan. Game akan dimulai ulang.

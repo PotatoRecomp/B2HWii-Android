@@ -259,6 +259,64 @@ final class SettingsMenu {
                         + "(scrambled textures, stretched characters). Auto uses them where needed."),
                 new String[] {Tr.t("Auto"), Tr.t("On"), Tr.t("Off")}, settings.gpuCompat(), true,
                 which -> settings.setGpuCompat(which));
+        showGpuDrivers();
+    }
+
+    /** Player-installed Vulkan drivers (GpuDrivers): choose one, install a .zip, remove one. */
+    private void showGpuDrivers() {
+        if (!GpuDrivers.supported()) return;
+        final java.util.List<GpuDrivers.Driver> drivers = GpuDrivers.installed(activity);
+        final String[] options = new String[drivers.size() + 1];
+        options[0] = Tr.t("System");
+        int selected = 0;
+        for (int i = 0; i < drivers.size(); ++i) {
+            options[i + 1] = drivers.get(i).label();
+            if (drivers.get(i).id.equals(settings.gpuDriver())) selected = i + 1;
+        }
+        final String before = settings.gpuDriver();
+        final String beforeName = options[selected];
+        choiceRow(Tr.t("GPU Driver"), Tr.t("System is the phone's own driver. A driver you install (a Turnip .zip "
+                        + "made for Dolphin or Yuzu, for Snapdragon / Adreno) can be faster or fix broken graphics. "
+                        + "Mali drivers (malisx2) run on the Vulkan renderer, which starts by itself for them. "
+                        + "If it fails or the game closes while starting, it goes back to System by itself."),
+                options, selected, true, which -> {
+                    settings.setGpuDriver(which == 0 ? "" : drivers.get(which - 1).id);
+                    confirmRestart(Tr.t("GPU Driver"), options[which], beforeName,
+                            () -> settings.setGpuDriver(before));
+                });
+        actionRow(Tr.t("Install GPU Driver"), Tr.t("Choose a driver .zip (it has a meta.json inside), for example "
+                        + "from Download."),
+                Tr.t("Install"), this::installGpuDriver);
+        for (GpuDrivers.Driver driver : drivers) {
+            final String about = (driver.description.isEmpty() ? "" : driver.description + " ")
+                    + (driver.author.isEmpty() ? "" : Tr.t("By ") + driver.author + ".");
+            actionRow(driver.label(), about.trim(), Tr.t("Remove"), () -> {
+                if (driver.id.equals(settings.gpuDriver())) settings.setGpuDriver("");
+                GpuDrivers.remove(activity, driver);
+            });
+        }
+    }
+
+    private void installGpuDriver() {
+        if (!android.os.Environment.isExternalStorageManager()) {
+            askFileAccess(() -> android.widget.Toast.makeText(activity, Tr.t("Allow file access to choose a "
+                    + "driver .zip."), android.widget.Toast.LENGTH_LONG).show());
+            return;
+        }
+        FileBrowser.showFiles(activity, FileBrowser.downloads(), Tr.t("Choose a GPU driver"),
+                Tr.t("A driver .zip with a meta.json inside (Turnip for Adreno)."),
+                f -> f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".zip"),
+                Tr.t("No folders or .zip files here."), file -> {
+                    try {
+                        final GpuDrivers.Driver driver = GpuDrivers.install(activity, file);
+                        android.widget.Toast.makeText(activity, Tr.t("Installed ") + driver.label()
+                                + Tr.t(". Choose it under GPU Driver."), android.widget.Toast.LENGTH_LONG).show();
+                    } catch (java.io.IOException e) {
+                        new Sheet(activity, Tr.t("Not a driver"), e.getMessage())
+                                .action(Tr.t("OK"), null, true, false, null).show();
+                    }
+                    changed();
+                });
     }
 
     private void showPerformance() {
@@ -468,6 +526,16 @@ final class SettingsMenu {
                         + "you test one, say which in your report and send the log (") + folderName("console.log")
                         + ")."),
                 matchWidth(0));
+
+        choiceRow(Tr.t("Renderer"), Tr.t("Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot "
+                        + "use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, "
+                        + "made for older phones, still being tuned. Restarts the game."),
+                new String[] {Tr.t("Auto"), Tr.t("Vulkan")}, settings.renderer(), true, which -> {
+                    final int before = settings.renderer();
+                    settings.setRenderer(which);
+                    confirmRestart(Tr.t("Renderer"), which == 1 ? "Vulkan" : "Auto", before == 1 ? "Vulkan" : "Auto",
+                            () -> settings.setRenderer(before));
+                });
 
         warn(weakPhone()
                 ? Tr.t("This phone has little RAM or renders below 1x: likely to crash, and the gain is small.")

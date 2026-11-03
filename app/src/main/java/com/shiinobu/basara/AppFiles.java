@@ -328,7 +328,7 @@ final class AppFiles {
         file.delete();
     }
 
-    private static String readText(File file) {
+    static String readText(File file) {
         if (!file.isFile()) {
             return "";
         }
@@ -341,7 +341,7 @@ final class AppFiles {
         }
     }
 
-    private static void writeText(File file, String text) throws IOException {
+    static void writeText(File file, String text) throws IOException {
         try (OutputStream out = new FileOutputStream(file)) {
             out.write(text.getBytes(StandardCharsets.UTF_8));
         }

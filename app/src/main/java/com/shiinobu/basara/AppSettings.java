@@ -160,6 +160,9 @@ final class AppSettings {
     void setHaptics(boolean on) { prefs.edit().putBoolean("haptics", on).commit(); }
     boolean touchCamera() { return prefs.getBoolean("touch_camera", true); }
     void setTouchCamera(boolean on) { prefs.edit().putBoolean("touch_camera", on).commit(); }
+    /** Off: a drag to the right turns the view to the right. On (default): the scene follows the finger. */
+    boolean invertCamera() { return prefs.getBoolean("invert_camera", true); }
+    void setInvertCamera(boolean on) { prefs.edit().putBoolean("invert_camera", on).commit(); }
 
     /** The touch controls as the player arranged them in the layout editor ("" is the default). */
     boolean fixedStick() { return prefs.getBoolean("touch_fixed_stick", false); }

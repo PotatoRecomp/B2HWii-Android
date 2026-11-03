@@ -44,7 +44,9 @@ final class TouchControlsView extends View {
     private static final int MODE_CAMERA = 5;   // a drag on the empty right side turns the camera
 
     /** Camera drag: finger speed (screen heights a second) that gives a full right-stick tilt. */
-    private static final float CAMERA_FULL_SPEED = 0.9f;
+    private static final float CAMERA_FULL_SPEED = 0.35f;
+    /** Share of CAMERA_FULL_SPEED under which a drag is a resting finger, not a turn. */
+    private static final float CAMERA_DEADZONE = 0.12f;
     /** The stick falls back to centre this long after the finger stops moving. */
     private static final long CAMERA_IDLE_MS = 60;
 
@@ -170,6 +172,8 @@ final class TouchControlsView extends View {
     }
 
     private boolean touchCamera = true;
+    private boolean invertCamera = true;
+    void setInvertCamera(boolean on) { invertCamera = on; }
     void setTouchCamera(boolean on) {
         touchCamera = on;
         if (!on && cameraId >= 0) endCamera();
@@ -652,14 +656,14 @@ final class TouchControlsView extends View {
         final float h = getHeight();
         if (dt <= 0 || h <= 0 || rightStick.finger >= 0) return;
         final float scale = 1000f / (dt * h * CAMERA_FULL_SPEED);
-        final float vx = clampUnit((x - cameraLastX) * scale);
-        final float vy = clampUnit((y - cameraLastY) * scale);
+        final float dx = invertCamera ? cameraLastX - x : x - cameraLastX;
+        final float vx = camAxis(dx * scale);
+        final float vy = camAxis((y - cameraLastY) * scale);
         cameraLastX = x;
         cameraLastY = y;
         cameraLastTime = now;
-        // Smooth over touch events (they come at the panel's rate, not the game's).
-        rightStick.valueX = clampUnit(rightStick.valueX * 0.4f + vx * 0.6f);
-        rightStick.valueY = clampUnit(rightStick.valueY * 0.4f + vy * 0.6f);
+        rightStick.valueX = vx;
+        rightStick.valueY = vy;
         sendSticks();
         removeCallbacks(cameraIdle);
         postDelayed(cameraIdle, CAMERA_IDLE_MS);
@@ -669,6 +673,16 @@ final class TouchControlsView extends View {
         cameraId = -1;
         removeCallbacks(cameraIdle);
         cameraIdle.run();
+    }
+
+    /**
+     * The game's camera is not analog: a right stick below about 0.65 does not turn it, and 0.7 to 1
+     * all turn it at one speed (above 1 the value wraps and turns it the wrong way). So any real drag
+     * gives a full tilt.
+     */
+    private static float camAxis(float v) {
+        if (Math.abs(v) < CAMERA_DEADZONE) return 0f;
+        return v < 0f ? -1f : 1f;
     }
 
     private static float clampUnit(float v) {

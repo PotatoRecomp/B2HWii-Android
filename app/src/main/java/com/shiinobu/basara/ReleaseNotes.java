@@ -43,11 +43,16 @@ final class ReleaseNotes {
                     "SGSR upscaling option (Graphics > Upscaler).",
                     "Graphics > GPU Driver: install a custom Vulkan driver .zip (Turnip for Adreno, malisx2 for Mali). If the game does not start with it, it switches back to System.",
                     "Experimental > Renderer: the Vulkan renderer, lighter than the default on some phones.",
+                    "Settings > Controls > Invert Camera: choose which way a drag turns the camera.",
                 },
                 new String[] {
                     "The game closed in Story while riding a horse (\"Missing translated function\").",
                     "The game closed on Adreno 610 phones (Poco M3, Redmi 9T) when Dynamic Resolution changed the resolution. It now changes at most every 5 seconds.",
                     "malisx2 on Mali-G52 showed a black screen.",
+                    "The game closed in battle against some bosses (\"Missing translated function\").",
+                    "Dialogue repeated in short steps when the game ran around 30 fps.",
+                    "The touch camera turned slowly or not at all on gentle drags. Any drag now turns it at full speed.",
+                    "Loud battle sound crackled when many effects played at once.",
                 },
                 new String[] {
                     "malisx2 on Mali-G52 works, but is not faster than the phone's own driver.",

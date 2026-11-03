@@ -319,6 +319,30 @@ void WriteProcessTranscriptChunk(ProcessTranscriptState& state, const char* data
         return;
     }
 
+    // Some Xiaomi firmware loads a vendor library into the process that prints "get scene" to
+    // stdout a few times a second (20,000 lines a session). It is not ours, so it stays out of the log.
+    static constexpr std::string_view kVendorNoise = "get scene\n";
+    const std::string_view chunk(data, size);
+    std::string filtered;
+    if (chunk.find(kVendorNoise) != std::string_view::npos) {
+        filtered.reserve(size);
+        size_t pos = 0;
+        while (pos < chunk.size()) {
+            const size_t end = chunk.find('\n', pos);
+            const size_t next = end == std::string_view::npos ? chunk.size() : end + 1;
+            const std::string_view line = chunk.substr(pos, next - pos);
+            if (line != kVendorNoise) {
+                filtered.append(line);
+            }
+            pos = next;
+        }
+        if (filtered.empty()) {
+            return;
+        }
+        data = filtered.data();
+        size = filtered.size();
+    }
+
     std::lock_guard<std::mutex> lock(state.fileMutex);
     state.file.write(data, static_cast<std::streamsize>(size));
     state.file.flush();

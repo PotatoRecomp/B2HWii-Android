@@ -414,6 +414,7 @@ public final class GameActivity extends SDLActivity
         touch.setOpacity(settings.touchOpacity());
         touch.setHaptics(settings.haptics());
         touch.setTouchCamera(settings.touchCamera());
+        touch.setInvertCamera(settings.invertCamera());
         touch.setFixedStick(settings.fixedStick());
         touch.setLayout(settings.touchLayout());
     }

@@ -178,6 +178,8 @@ On: the stick moves only when touched where it is drawn. Off: a thumb anywhere o
 Vibration	Getar
 A short buzz when a touch button is pressed.	Getar singkat saat tombol sentuh ditekan.
 Touch camera	Kamera sentuh
+Invert Camera	Balik Kamera
+On: the scene follows the finger (drag right, the view turns left). Off: drag right, the view turns right.	On: pemandangan ikut jari (geser kanan, pandangan berputar ke kiri). Off: geser kanan, pandangan berputar ke kanan.
 Drag on the empty right side of the screen to turn the camera.	Seret di sisi kanan layar yang kosong untuk memutar kamera.
 Tilt	Miring
 Turn the phone like a steering wheel.	Putar HP seperti setir.
@@ -449,3 +451,8 @@ Layout	Tata Letak
 Leave LAN	Keluar LAN
 Quit	Keluar
 Changes apply at once, except those marked Restart needed.	Perubahan langsung berlaku, kecuali yang bertanda Perlu mulai ulang.
+Settings > Controls > Invert Camera: choose which way a drag turns the camera.	Setelan > Kontrol > Balik Kamera: pilih arah putar kamera saat menggeser.
+The game closed in battle against some bosses ("Missing translated function").	Game tertutup saat melawan beberapa bos ("Missing translated function").
+Dialogue repeated in short steps when the game ran around 30 fps.	Dialog berulang-ulang pendek saat game berjalan sekitar 30 fps.
+The touch camera turned slowly or not at all on gentle drags. Any drag now turns it at full speed.	Kamera sentuh berputar lambat atau diam saat digeser pelan. Kini setiap geseran memutarnya dengan kecepatan penuh.
+Loud battle sound crackled when many effects played at once.	Suara pertempuran yang keras terdengar kresek saat banyak efek berbunyi bersamaan.

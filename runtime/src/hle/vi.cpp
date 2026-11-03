@@ -1367,8 +1367,10 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                     std::snprintf(last, sizeof(last), " (last: format %#x, %.0f Hz, rms %u)", voiceFormat,
                                   voiceRatio * 32000.0 / 65536.0, voiceRms);
                 }
-                RT_LOGF(RT_TAG_VI, "audio level: peak %u, %u clipped samples, hf %.2f, %u noisy voice frames%s\n",
-                        peak, clipped, hf, noisyVoices, last);
+                const uint32_t limited = AxDspHle::TakeLimitedFrames();
+                RT_LOGF(RT_TAG_VI, "audio level: peak %u, %u clipped samples, %u limited frames, hf %.2f, "
+                        "%u noisy voice frames%s\n",
+                        peak, clipped, limited, hf, noisyVoices, last);
             }
             {
                 // The renderer: the frame worker's time a cycle, of which preparing the next frame (where a
@@ -1813,33 +1815,40 @@ PPC_NATIVE_OVERRIDE_VOID(8036E77C, VIWaitForRetrace_HLE_801b99ec, (CpuContext* c
 // next reschedule, so a game frame spanning two or three retraces collapses them into one wakeup
 // and one pass. Dialogue then decodes slower than it plays and the AX voice laps CRI's 85 ms PCM
 // ring, replaying the previous lap (the jittering voices on phones). Called as the server suspends
-// itself: true when retraces since its last pass are still owed, so it runs another pass at once.
+// itself: true when a pass is still owed, so it runs another pass at once.
+// Owed passes follow wall-clock time, not the retrace count: elastic V-sync re-phases late
+// retraces instead of catching up, so a game running at 30-45 fps also sees only 30-45 retraces a
+// second, and counting those left the voice ring lapped (dialogue repeating in 85 ms steps).
 bool VI_HLE_TakeOwedCriServerPass() {
     // A load can hold the game for seconds; past this many the backlog is dropped, not decoded.
-    constexpr int32_t kMaxOwedPasses = 6;
+    constexpr int kMaxOwedPasses = 6;
     static bool s_started = false;
-    static uint32_t s_passes = 0;  // retraces the server has had a pass for
+    static Clock::time_point s_due{};  // when the next pass falls due
     if (DetClock::Enabled()) {
         return false;  // deterministic mode keeps the guest's own scheduling
     }
-    uint32_t retraces = 0;
+    std::chrono::nanoseconds interval{16666667};
     {
         std::lock_guard<std::mutex> lock(g_viMutex);
-        retraces = g_vi.retraceCount;
+        if (g_vi.initialized) {
+            interval = ActiveIntervalLocked();
+        }
     }
+    const auto now = Clock::now();
     if (!s_started) {
         s_started = true;
-        s_passes = retraces;
+        s_due = now + interval;
         return false;
     }
-    ++s_passes;
-    const int32_t owed = static_cast<int32_t>(retraces - s_passes);
-    if (owed <= 0) {
-        s_passes = retraces;  // extra resumes (CRI's own requests) leave no credit behind
+    s_due += interval;
+    if (s_due > now + interval) {
+        s_due = now + interval;  // extra resumes (CRI's own requests) leave no credit behind
+    }
+    if (now < s_due) {
         return false;
     }
-    if (owed > kMaxOwedPasses) {
-        s_passes = retraces - kMaxOwedPasses;
+    if (now - s_due > interval * kMaxOwedPasses) {
+        s_due = now - interval * kMaxOwedPasses;
     }
     return true;
 }

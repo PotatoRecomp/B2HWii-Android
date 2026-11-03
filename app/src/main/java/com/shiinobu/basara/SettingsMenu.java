@@ -473,6 +473,9 @@ final class SettingsMenu {
                 on -> settings.setHaptics(on));
         toggleRow(Tr.t("Touch camera"), Tr.t("Drag on the empty right side of the screen to turn the camera."),
                 settings.touchCamera(), on -> settings.setTouchCamera(on));
+        toggleRow(Tr.t("Invert Camera"), Tr.t("On: the scene follows the finger (drag right, the view turns left). "
+                        + "Off: drag right, the view turns right."),
+                settings.invertCamera(), on -> settings.setInvertCamera(on));
         toggleRow(Tr.t("Tilt"), Tr.t("Turn the phone like a steering wheel."), settings.motionTilt(),
                 on -> settings.setMotionTilt(on));
         toggleRow(Tr.t("Shake"), Tr.t("Jolt the phone to shake the remote."), settings.motionShake(),

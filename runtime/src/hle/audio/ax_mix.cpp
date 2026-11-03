@@ -1404,18 +1404,21 @@ private:
                                 m_bus[kBusAuxCL].data(), kAxSamplesPerFrame);
         }
         std::array<int16_t, kAxSamplesPerFrame * 2> pcm{};
+        std::array<uint16_t, kAxSamplesPerFrame> limit{};
+        UpdateLimiter(ramp, limit);
         if (m_splitMix) {
-            RecordSpeakerFrame(lrAddr, ramp);
+            RecordSpeakerFrame(lrAddr, ramp, limit);
         }
         for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
-            const int16_t left = ClampS16((static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15);
-            const int16_t right = ClampS16((static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15);
+            const int64_t wideL = (static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15;
+            const int64_t wideR = (static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15;
             // OUTPUT is destructive on the DSP: the main buses are left holding the ramped,
             // clamped result (not the wide accumulator) so any mixing after it sees that value.
-            m_bus[kBusMainL][i] = left;
-            m_bus[kBusMainR][i] = right;
-            pcm[i * 2] = right;
-            pcm[i * 2 + 1] = left;
+            m_bus[kBusMainL][i] = ClampS16(wideL);
+            m_bus[kBusMainR][i] = ClampS16(wideR);
+            // The AI frame alone goes through the limiter: only the audio output reads it.
+            pcm[i * 2] = ClampS16((wideR * limit[i]) >> 15);
+            pcm[i * 2 + 1] = ClampS16((wideL * limit[i]) >> 15);
         }
         // The AI frame (contiguous right/left interleaved) lands in guest memory directly
         // even from the worker: its only reader, PushAudioBlock, runs after Audio_HLE_Tick
@@ -1436,27 +1439,73 @@ private:
     // (effects, and the aux returns, which carry the effects' reverb) at the Sound Effects
     // volume. The frame the game sees is written as before; the speaker frame is kept here, with
     // a copy of that guest frame, for PushAudioBlock to play instead.
-    void RecordSpeakerFrame(uint32_t lrAddr, const std::array<uint16_t, kAxSamplesPerFrame>& ramp) {
+    // Soft limiter for the AI frame. Busy battles push the main bus past full scale (up to a
+    // thousand clipped samples every 2 s), which the hard clamp turns into crackle. The gain
+    // drops at once to what the loudest sample of this 3 ms frame needs to stay under the
+    // ceiling, ramped over the first samples, then recovers over about 150 ms. Below the
+    // ceiling the gain is exactly 1 (0x8000), so quiet audio passes bit-exact.
+    // BASARA_AUDIO_LIMITER=0 turns it off.
+    void UpdateLimiter(const std::array<uint16_t, kAxSamplesPerFrame>& ramp,
+                       std::array<uint16_t, kAxSamplesPerFrame>& limit) {
+        static const bool enabled = [] {
+            const char* env = std::getenv("BASARA_AUDIO_LIMITER");
+            return env == nullptr || env[0] != '0';
+        }();
+        constexpr double kCeiling = 30000.0;
+        double peak = 0.0;
+        if (enabled) {
+            for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
+                const int64_t l = (static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15;
+                const int64_t r = (static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15;
+                peak = std::max(peak, static_cast<double>(std::max(l < 0 ? -l : l, r < 0 ? -r : r)));
+            }
+        }
+        const double need = peak > kCeiling ? kCeiling / peak : 1.0;
+        const double from = m_limiterGain;
+        const double to = std::min(need, from + (1.0 - from) * 0.02);
+        constexpr uint32_t kAttack = 16;
+        for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
+            // Falling gain lands within kAttack samples; rising gain spreads over the frame.
+            const double t = to < from ? std::min(1.0, (i + 1) / static_cast<double>(kAttack))
+                                       : (i + 1) / static_cast<double>(kAxSamplesPerFrame);
+            const double g = from + (to - from) * t;
+            limit[i] = static_cast<uint16_t>(std::clamp(g * 32768.0 + 0.5, 0.0, 32768.0));
+        }
+        m_limiterGain = to > 0.9999 ? 1.0 : to;
+        if (to < 0.9999) {
+            m_limitedFrames.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+public:
+    uint32_t TakeLimitedFrames() { return m_limitedFrames.exchange(0, std::memory_order_relaxed); }
+
+private:
+    void RecordSpeakerFrame(uint32_t lrAddr, const std::array<uint16_t, kAxSamplesPerFrame>& ramp,
+                            const std::array<uint16_t, kAxSamplesPerFrame>& limit) {
         SpeakerFrame& frame = m_speakerFrames[m_nextSpeakerFrame];
         m_nextSpeakerFrame = (m_nextSpeakerFrame + 1) % m_speakerFrames.size();
         frame.addr = lrAddr;
-        const auto speaker = [&](int bus, int music, uint16_t gain) {
+        const auto speaker = [&](int bus, int music, uint16_t gain, uint16_t lim) {
             const int64_t all = (static_cast<int64_t>(bus) * gain) >> 15;
             const int64_t musicPart = (static_cast<int64_t>(music) * gain) >> 15;
             const float mixed = static_cast<float>(musicPart) * m_musicVolume +
                                 static_cast<float>(all - musicPart) * m_effectsVolume;
-            return ClampS16(static_cast<int64_t>(mixed));
+            return ClampS16((static_cast<int64_t>(mixed) * lim) >> 15);
         };
         for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
-            const int16_t left = ClampS16((static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15);
-            const int16_t right = ClampS16((static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15);
+            // Same values OutputSamples writes to the guest frame, so SpeakerBlock still matches.
+            const int64_t wideL = (static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15;
+            const int64_t wideR = (static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15;
+            const int16_t left = ClampS16((wideL * limit[i]) >> 15);
+            const int16_t right = ClampS16((wideR * limit[i]) >> 15);
             // AI frames are right, left, big-endian: the same layout as the guest frame.
             BigEndian::Write16(frame.guest.data() + i * 4, static_cast<uint16_t>(right));
             BigEndian::Write16(frame.guest.data() + i * 4 + 2, static_cast<uint16_t>(left));
             BigEndian::Write16(frame.speaker.data() + i * 4,
-                               static_cast<uint16_t>(speaker(m_bus[kBusMainR][i], m_musicR[i], ramp[i])));
+                               static_cast<uint16_t>(speaker(m_bus[kBusMainR][i], m_musicR[i], ramp[i], limit[i])));
             BigEndian::Write16(frame.speaker.data() + i * 4 + 2,
-                               static_cast<uint16_t>(speaker(m_bus[kBusMainL][i], m_musicL[i], ramp[i])));
+                               static_cast<uint16_t>(speaker(m_bus[kBusMainL][i], m_musicL[i], ramp[i], limit[i])));
         }
         frame.valid = true;
         m_musicL.fill(0);
@@ -1647,6 +1696,8 @@ private:
     std::array<std::array<int, kAxSamplesPerFrame>, kAxRegularBusCount> m_bus{};
     std::array<std::array<int, kAxWiimoteSamplesPerFrame>, kAxWiimoteBusCount> m_wmBus{};
     uint16_t m_lastMainVolume = 0x8000;
+    double m_limiterGain = 1.0;
+    std::atomic<uint32_t> m_limitedFrames{0};
     std::array<uint16_t, 3> m_lastAuxVolumes{};
 
     // The Music / Sound Effects split of the speaker output (RecordSpeakerFrame).
@@ -1815,6 +1866,10 @@ uint32_t TakeNoisyVoiceStats(uint32_t* format, uint32_t* ratio, uint32_t* rms) {
 
 const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes) {
     return Instance().SpeakerBlock(addr, bytes);
+}
+
+uint32_t TakeLimitedFrames() {
+    return Instance().TakeLimitedFrames();
 }
 
 void JoinMixWorker() {

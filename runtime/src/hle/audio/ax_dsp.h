@@ -43,6 +43,8 @@ void SetMixWorkerEnabled(bool enabled);
 // Sound Effects volumes applied, or nullptr to play guest memory as it is (both at 100%, or the
 // block isn't the mix's). Call after JoinMixWorker, from the thread that pushes AI blocks.
 const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes);
+// AI frames the output limiter turned down since the last call.
+uint32_t TakeLimitedFrames();
 
 void InitAram();
 

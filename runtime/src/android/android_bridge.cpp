@@ -5,6 +5,7 @@
 
 #include "cheats.h"
 #include "display_settings.h"
+#include "hle_stubs.h"
 #include "host_suspend.h"
 #include "graphics_info.h"
 #include "runtime_config.h"
@@ -85,6 +86,18 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyDisplayS
     settings_overlay::SetRenderScale(renderScale >= 0.0f ? renderScale : 1.0f);
     settings_overlay::SetShowFps(showFps == JNI_TRUE);
     DisplaySettings::SetDynamicResolution(dynamicResolution == JNI_TRUE);
+}
+
+// GameActivity.nativeApplyLiveSettings: settings the in-game menu changes while playing. Upscaler
+// 0 off, 1 FSR Light, 2 FSR Full, 3 SGSR; frameskip 0 off, 1 auto, 2 30 FPS lock.
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyLiveSettings(
+    JNIEnv*, jclass, jint upscaler, jint frameskip)
+{
+    if (upscaler >= 0 && upscaler <= 3 && aurora_get_fsr() != upscaler) {
+        aurora_set_fsr(static_cast<int>(upscaler));
+        RuntimeConfigFile::SetFsr(aurora_get_fsr());
+    }
+    BasaraFrameskip_SetMode(static_cast<int>(frameskip));
 }
 
 // GameActivity.nativeApplyCheats: Settings > Cheats (cheats.h). A Once request applies at the next frame.

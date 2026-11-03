@@ -25,6 +25,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -38,8 +39,9 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Start screen, one landscape page: the game and Play on the left, everything else as tiles beside
- * them. The game comes from the player's own ISO or RVZ, which is unpacked once when chosen.
+ * Start screen, one portrait page: the game and its state at the top, the settings in use, then
+ * every setting by section, and Play at the bottom within the thumb's reach. The game
+ * comes from the player's own ISO or RVZ, which is unpacked once when chosen.
  */
 public final class LauncherActivity extends Activity {
     private static final int REQUEST_DISC = 1;
@@ -51,10 +53,6 @@ public final class LauncherActivity extends Activity {
     static final String PROJECT_URL = "https://github.com/shiinobu/basara2heroes-android";
 
     private AppSettings settings;
-    private Tile skip;
-    private Tile updateCheck;
-    private Tile autoUpdate;
-    private Tile gameFile;
     private boolean updating;
     /** An update waiting for the player to allow installs from this app. */
     private Updater.Release waitingUpdate;
@@ -65,11 +63,21 @@ public final class LauncherActivity extends Activity {
     /** Gone to allow "All files access" before playing (the log goes to /sdcard): play on the way back. */
     private boolean waitingPlayAccess;
     private static final String STATE_WAITING_PLAY_ACCESS = "waiting_play_access";
+    private static final String STATE_SECTION = "section";
 
     private int endedGame;  // the pid endGame just ended
-    private LinearLayout activeSettings;
     private TextView status;
-    private Button play;
+    private View statusDot;
+    private LinearLayout configStrip;
+    private LinearLayout tabs;
+    private LinearLayout panel;
+    private ScrollView scroll;
+    private SettingsMenu menu;
+    private int[] sections;
+    private TextView sessionLine;
+    private LinearLayout play;
+    private TextView playLabel;
+    private LinearLayout stop;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     @Override
@@ -85,57 +93,54 @@ public final class LauncherActivity extends Activity {
                 || launch.getBooleanExtra(EXTRA_RESTART_GAME, false));
         final boolean opened = savedInstanceState == null && !asked;
 
-        gameFile = tile(Tr.t("Game File"), "", v -> pickDisc());
-        final Tile settingsTile = tile(Tr.t("Settings"), Tr.t("Display, controls, experimental"),
-                v -> SettingsMenu.show(this, this::refresh));
-        // Online play isn't ready yet: shown, but off.
-        final Tile devices = tile(Tr.t("Tailscale & LAN Devices"), Tr.t("Coming soon"), null);
-        devices.view.setClickable(false);
-        devices.view.setAlpha(0.4f);
-        autoUpdate = tile(Tr.t("Auto Update"), Tr.t("Update on launch"), v -> {
-            settings.setAutoUpdate(!settings.autoUpdate());
-            updateAutoUpdateButton();
-        });
-        updateAutoUpdateButton();
-        skip = tile(Tr.t("Skip Boot"), Tr.t("Skip the logos, straight to the save check"), v -> {
-            settings.setSkipBoot(!settings.skipBoot());
-            updateSkipButton();
-        });
-        updateSkipButton();
-        updateCheck = tile(Tr.t("Check for Updates"), Tr.t("Installed: ") + Updater.displayVersion(this),
-                v -> checkForUpdates(false));
-        final Tile help = tile(Tr.t("Help"), Tr.t("Getting started"), v -> showHelp());
-        final Tile notes = tile(Tr.t("What's New"), Tr.t("Features and fixes in each version"),
-                v -> ReleaseNotes.showAll(this));
-
-        if (!BuildConfig.ONLINE_UPDATES) {
-            // Updates are handed out by hand for now: Auto Update is shown, but off.
-            autoUpdate.view.setClickable(false);
-            autoUpdate.view.setAlpha(0.4f);
-        }
-
-        final LinearLayout tiles = new LinearLayout(this);
-        tiles.setOrientation(LinearLayout.VERTICAL);
-        tiles.addView(tileRow(gameFile, help), tileRowParams(0));
-        tiles.addView(tileRow(settingsTile, devices), tileRowParams(GAP));
-        tiles.addView(tileRow(autoUpdate, skip), tileRowParams(GAP));
-        tiles.addView(tileRow(updateCheck, notes), tileRowParams(GAP));
-        // Fills the height where there's room, and scrolls on a short screen or with a large font.
-        final ScrollView tilesScroll = new ScrollView(this);
-        tilesScroll.setFillViewport(true);
-        tilesScroll.setVerticalScrollBarEnabled(false);
-        tilesScroll.addView(tiles);
-
         final LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.HORIZONTAL);
-        page.setPadding(dp(GAP), dp(GAP), dp(GAP), dp(GAP));
-        page.addView(hero(), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.42f));
-        final LinearLayout.LayoutParams tilesParams =
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.58f);
-        tilesParams.leftMargin = dp(GAP);
-        page.addView(tilesScroll, tilesParams);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(Ui.BG);
+        page.addView(header(), Ui.matchWidth(0));
+        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        page.addView(configStripView(), Ui.matchWidth(0));
+        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(14), dp(12), dp(14), dp(20));
+        sections = SettingsMenu.launcherSections();
+        final LinearLayout divider = new LinearLayout(this);
+        divider.setGravity(Gravity.CENTER_VERTICAL);
+        divider.addView(Ui.caption(this, Tr.t("All settings")),
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        final TextView count = Ui.text(this, sections.length + Tr.t(" sections"), 10.5f, Ui.MUTED);
+        count.setTypeface(Ui.MONO);
+        divider.addView(count);
+        body.addView(divider, Ui.matchWidth(0));
+        tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.VERTICAL);
+        body.addView(tabs, Ui.matchWidth(dp(8)));
+        panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        body.addView(panel, Ui.matchWidth(dp(10)));
+
+        scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(body);
+        page.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        page.addView(actionBar(), Ui.matchWidth(0));
+
+        // Room for the status and navigation bars: the page is drawn edge to edge.
+        page.setOnApplyWindowInsetsListener((v, insets) -> {
+            final android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars()
+                    | WindowInsets.Type.displayCutout());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return WindowInsets.CONSUMED;
+        });
         setContentView(page);
-        hideSystemBars();
+
+        menu = new SettingsMenu(this, panel, false, this::showSummary);
+        menu.systemRows = this::systemRows;
+        final int section = savedInstanceState != null
+                ? savedInstanceState.getInt(STATE_SECTION, SettingsMenu.DISPLAY) : SettingsMenu.DISPLAY;
+        selectSection(section, false);
 
         restartGameIfAsked(getIntent());
         if (savedInstanceState != null) {
@@ -151,75 +156,220 @@ public final class LauncherActivity extends Activity {
         if (savedInstanceState == null) main.post(() -> ReleaseNotes.showIfNew(this, settings));
     }
 
-    /** The left side: which game this is, whether it's ready, and the one big button. */
-    private View hero() {
-        final LinearLayout hero = new LinearLayout(this);
-        hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setPadding(dp(20), dp(20), dp(20), dp(16));
-        final GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[] {HERO_GLOW, SURFACE});
-        background.setCornerRadius(dp(24));
-        hero.setBackground(background);
-
+    /** Title, version, the game's state, and What's New / Help / language on the right. */
+    private View header() {
         final LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        final ImageView icon = new ImageView(this);
-        icon.setImageResource(R.mipmap.ic_launcher);
-        header.addView(icon, new LinearLayout.LayoutParams(dp(56), dp(56)));
-        final LinearLayout names = new LinearLayout(this);
-        names.setOrientation(LinearLayout.VERTICAL);
-        final TextView title = text(Tr.t("Basara 2 Heroes"), 24);
+        header.setPadding(dp(16), dp(14), dp(12), dp(12));
+
+        final LinearLayout brand = new LinearLayout(this);
+        brand.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        final TextView title = Ui.text(this, Tr.t("Basara 2 Heroes"), 18, Ui.TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setGravity(Gravity.START);
-        names.addView(title);
-        final TextView subtitle = text(Tr.t("Wii, recompiled to run natively"), 13);
-        subtitle.setGravity(Gravity.START);
-        subtitle.setTextColor(MUTED);
-        names.addView(subtitle);
-        final LinearLayout.LayoutParams namesParams =
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        namesParams.leftMargin = dp(12);
-        header.addView(names, namesParams);
-        hero.addView(header, matchWidth(0));
+        title.setLetterSpacing(-0.02f);
+        titleRow.addView(title);
+        final TextView badge = Ui.text(this, versionText(), 10, Ui.SECONDARY);
+        badge.setTypeface(Ui.MONO);
+        badge.setPadding(dp(6), dp(2), dp(6), dp(2));
+        badge.setBackground(Ui.box(this, Ui.SURFACE, Ui.BORDER, 5));
+        badge.setSingleLine(true);
+        final LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        badgeParams.leftMargin = dp(8);
+        titleRow.addView(badge, badgeParams);
+        brand.addView(titleRow);
 
-        final TextView inUse = text(Tr.t("IN USE"), 11);
-        inUse.setGravity(Gravity.START);
-        inUse.setTextColor(FAINT);
-        inUse.setTypeface(Typeface.DEFAULT_BOLD);
-        inUse.setLetterSpacing(0.08f);
-        hero.addView(inUse, matchWidth(dp(16)));
-        activeSettings = new LinearLayout(this);
-        activeSettings.setOrientation(LinearLayout.VERTICAL);
-        hero.addView(activeSettings, matchWidth(dp(4)));
+        final LinearLayout statusRow = new LinearLayout(this);
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        statusDot = new View(this);
+        statusRow.addView(statusDot, new LinearLayout.LayoutParams(dp(7), dp(7)));
+        status = Ui.text(this, "", 11.5f, Ui.SECONDARY);
+        status.setTypeface(Ui.MONO);
+        final LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        statusParams.leftMargin = dp(7);
+        statusRow.addView(status, statusParams);
+        brand.addView(statusRow, Ui.matchWidth(dp(5)));
+        header.addView(brand, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        final View space = new View(this);
-        hero.addView(space, new LinearLayout.LayoutParams(0, 0, 1f));
+        header.addView(iconButton(R.drawable.ic_whatsnew, null, v -> ReleaseNotes.showAll(this)));
+        header.addView(iconButton(R.drawable.ic_help, null, v -> showHelp()));
+        final boolean indonesian = Tr.resolve(settings.language()) == Tr.INDONESIAN;
+        header.addView(iconButton(0, indonesian ? "ID" : "EN", v -> {
+            settings.setLanguage(indonesian ? Tr.ENGLISH : Tr.INDONESIAN);
+            Tr.init(this);
+            recreate();
+        }));
+        return header;
+    }
 
-        status = text("", 14);
-        status.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        status.setCompoundDrawablePadding(dp(10));
-        hero.addView(status, matchWidth(0));
+    private View iconButton(int icon, String label, View.OnClickListener onClick) {
+        final LinearLayout button = new LinearLayout(this);
+        button.setGravity(Gravity.CENTER);
+        button.setMinimumWidth(dp(36));
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setBackground(Ui.touchBox(this, Ui.SURFACE, Ui.BORDER, 8));
+        if (icon != 0) button.addView(Ui.icon(this, icon, Ui.SECONDARY, 17));
+        if (label != null) {
+            final TextView text = Ui.text(this, label, 12, Ui.SECONDARY);
+            text.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
+            button.addView(text);
+        }
+        button.setClickable(true);
+        button.setOnClickListener(onClick);
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36));
+        params.leftMargin = dp(6);
+        button.setLayoutParams(params);
+        return button;
+    }
 
-        play = button(Tr.t("Play"));
-        play.setOnClickListener(v -> {
-            if (settings.betaEnded() != null) {
-                showBetaEnded();
-            } else if (AppFiles.gameReady(this)) {
-                if (!requirePlayAccess()) return;
-                // A game left for the Start Menu is still running: Continue brings it back.
-                startActivity(new Intent(this, GameActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-            } else {
-                pickDisc();
+    /** "Active configuration": one chip per setting in use; a tap opens its section. */
+    private View configStripView() {
+        final LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setBackgroundColor(Ui.ELEVATED);
+        wrap.setPadding(dp(16), dp(8), dp(16), dp(9));
+        final LinearLayout labels = new LinearLayout(this);
+        labels.addView(Ui.caption(this, Tr.t("In use")),
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        final TextView hint = Ui.text(this, Tr.t("TAP TO OPEN"), 10, Ui.MUTED);
+        hint.setTypeface(Ui.MONO);
+        labels.addView(hint);
+        wrap.addView(labels, Ui.matchWidth(0));
+        configStrip = new LinearLayout(this);
+        final HorizontalScrollView strip = new HorizontalScrollView(this);
+        strip.setHorizontalScrollBarEnabled(false);
+        strip.addView(configStrip);
+        wrap.addView(strip, Ui.matchWidth(dp(6)));
+        return wrap;
+    }
+
+    /** Play (or Continue), and Stop while a game waits in the background. */
+    private View actionBar() {
+        final LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.VERTICAL);
+        bar.setBackgroundColor(Ui.SURFACE);
+        bar.setPadding(dp(16), dp(9), dp(16), dp(14));
+        sessionLine = Ui.text(this, "", 11, Ui.MUTED);
+        bar.addView(sessionLine, Ui.matchWidth(0));
+
+        final LinearLayout buttons = new LinearLayout(this);
+        play = new LinearLayout(this);
+        play.setGravity(Gravity.CENTER);
+        play.setBackground(Ui.touchBox(this, Ui.ACCENT, Ui.ACCENT_PRESSED, 12));
+        play.addView(Ui.icon(this, R.drawable.ic_play, Color.WHITE, 17));
+        playLabel = Ui.text(this, Tr.t("Play"), 15, Color.WHITE);
+        playLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        final LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        labelParams.leftMargin = dp(8);
+        play.addView(playLabel, labelParams);
+        play.setClickable(true);
+        play.setOnClickListener(v -> onPlay());
+        buttons.addView(play, new LinearLayout.LayoutParams(0, dp(48), 1f));
+
+        stop = new LinearLayout(this);
+        stop.setGravity(Gravity.CENTER);
+        stop.setPadding(dp(14), 0, dp(14), 0);
+        stop.setBackground(Ui.touchBox(this, Ui.ACTIVE, Ui.BORDER_STRONG, 12));
+        stop.addView(Ui.icon(this, R.drawable.ic_stop, Ui.TEXT, 15));
+        final TextView stopLabel = Ui.text(this, Tr.t("Stop"), 13, Ui.TEXT);
+        stopLabel.setTypeface(Ui.MEDIUM);
+        final LinearLayout.LayoutParams stopLabelParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        stopLabelParams.leftMargin = dp(6);
+        stop.addView(stopLabel, stopLabelParams);
+        stop.setClickable(true);
+        stop.setOnClickListener(v -> new Sheet(this, Tr.t("Stop the game?"),
+                Tr.t("The game waiting in the background is closed without saving. Play starts it fresh."))
+                .action(Tr.t("Stop"), null, true, true, this::endGame)
+                .action(Tr.t("Cancel"), null, false, false, null)
+                .show());
+        final LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
+        stopParams.leftMargin = dp(8);
+        buttons.addView(stop, stopParams);
+        bar.addView(buttons, Ui.matchWidth(dp(8)));
+        return bar;
+    }
+
+    private void onPlay() {
+        if (settings.betaEnded() != null) {
+            showBetaEnded();
+        } else if (AppFiles.gameReady(this)) {
+            if (!requirePlayAccess()) return;
+            // A game left for the Start Menu is still running: Continue brings it back.
+            startActivity(new Intent(this, GameActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        } else {
+            pickDisc();
+        }
+    }
+
+    /** The section tabs, four to a row, with the open one lit. */
+    private void showTabs() {
+        tabs.removeAllViews();
+        LinearLayout row = null;
+        for (int i = 0; i < sections.length; ++i) {
+            if (i % 4 == 0) {
+                row = new LinearLayout(this);
+                tabs.addView(row, Ui.matchWidth(i == 0 ? 0 : dp(6)));
             }
-        });
-        hero.addView(play, matchWidth(dp(12)));
+            final int id = sections[i];
+            final boolean open = id == menu.section();
+            final int color = open ? Ui.TEXT : SettingsMenu.risky(id) ? Sheet.WARNING_TEXT : Ui.SECONDARY;
+            final LinearLayout tab = new LinearLayout(this);
+            tab.setOrientation(LinearLayout.VERTICAL);
+            tab.setGravity(Gravity.CENTER);
+            tab.setPadding(dp(4), dp(9), dp(4), dp(8));
+            tab.setBackground(Ui.touchBox(this, open ? Ui.ACTIVE : Ui.SURFACE, open ? Ui.SECONDARY : Ui.BORDER, 8));
+            tab.addView(Ui.icon(this, SettingsMenu.icon(id), color, 17));
+            final TextView name = Ui.text(this, SettingsMenu.name(id), 11, color);
+            name.setTypeface(open ? Typeface.DEFAULT_BOLD : Ui.MEDIUM);
+            name.setSingleLine(true);
+            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            name.setGravity(Gravity.CENTER);
+            tab.addView(name, Ui.matchWidth(dp(4)));
+            tab.setClickable(true);
+            tab.setOnClickListener(v -> selectSection(id, false));
+            final LinearLayout.LayoutParams params =
+                    new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            params.leftMargin = i % 4 == 0 ? 0 : dp(6);
+            row.addView(tab, params);
+        }
+        // An unfinished last row keeps the tabs the same width.
+        for (int i = sections.length % 4; i != 0 && i < 4; ++i) {
+            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, 1, 1f);
+            params.leftMargin = dp(6);
+            row.addView(new View(this), params);
+        }
+    }
 
-        final TextView version = text(Tr.t("Basara ") + versionText(), 12);
-        version.setTextColor(FAINT);
-        hero.addView(version, matchWidth(dp(10)));
-        return hero;
+    /** Opens a section under the tabs; `reveal` scrolls the page to it (from a chip at the top). */
+    private void selectSection(int section, boolean reveal) {
+        menu.show(section);
+        showTabs();
+        if (reveal) scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, tabs.getTop() - dp(8))));
+    }
+
+    /** The launcher's own System rows: the game file, updates, network play, the project. */
+    private void systemRows(SettingsMenu rows) {
+        final boolean ready = AppFiles.gameReady(this);
+        rows.actionRow(Tr.t("Game File"), ready ? Tr.t("Loaded (RBSJ08)") : Tr.t("Your ISO or RVZ (RBSJ08)"),
+                ready ? Tr.t("Change") : Tr.t("Choose"), this::pickDisc);
+        rows.actionRow(updating ? Tr.t("Checking…") : Tr.t("Check for Updates"),
+                Tr.t("Installed: ") + Updater.displayVersion(this), updating ? null : Tr.t("Check"),
+                () -> checkForUpdates(false));
+        rows.toggleRow(Tr.t("Auto Update"), BuildConfig.ONLINE_UPDATES ? Tr.t("Update on launch")
+                        : Tr.t("Updates are sent by hand for now."),
+                settings.autoUpdate(), BuildConfig.ONLINE_UPDATES, on -> settings.setAutoUpdate(on));
+        final LinearLayout lan = rows.card(Tr.t("Tailscale & LAN Devices"), Tr.t("Coming soon"), null, false, false);
+        lan.setClickable(false);
+        rows.actionRow(Tr.t("Project page on GitHub"), PROJECT_URL.replace("https://", ""), Tr.t("Open"),
+                () -> openWeb(PROJECT_URL));
     }
 
     @Override
@@ -286,6 +436,7 @@ public final class LauncherActivity extends Activity {
         }
         outState.putBoolean(STATE_WAITING_FILE_ACCESS, waitingFileAccess);
         outState.putBoolean(STATE_WAITING_PLAY_ACCESS, waitingPlayAccess);
+        if (menu != null) outState.putInt(STATE_SECTION, menu.section());
     }
 
     @Override
@@ -390,20 +541,19 @@ public final class LauncherActivity extends Activity {
         }
     }
 
+    /** The page is drawn edge to edge under visible system bars (a dialog may have hidden them). */
     private void hideSystemBars() {
         getWindow().setDecorFitsSystemWindows(false);
         final WindowInsetsController controller = getWindow().getInsetsController();
-        if (controller != null) {
-            controller.hide(WindowInsets.Type.systemBars());
-            controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        }
+        if (controller != null) controller.show(WindowInsets.Type.systemBars());
+    }
+
+    /** While an update check runs, System says so. */
+    private void showChecking() {
+        if (menu != null && menu.section() == SettingsMenu.SYSTEM) menu.show(SettingsMenu.SYSTEM);
     }
 
     // --- updates -------------------------------------------------------------------------------
-
-    private void updateAutoUpdateButton() {
-        showToggle(autoUpdate.pill, settings.autoUpdate());
-    }
 
     /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
     private void checkForUpdates(boolean automatic) {
@@ -427,8 +577,7 @@ public final class LauncherActivity extends Activity {
             return;
         }
         updating = true;
-        updateCheck.view.setEnabled(false);
-        updateCheck.name.setText(Tr.t("Checking…"));
+        showChecking();
         new Thread(() -> {
             Updater.Release found = null;
             String failure = null;
@@ -441,8 +590,7 @@ public final class LauncherActivity extends Activity {
             final String error = failure;
             main.post(() -> {
                 updating = false;
-                updateCheck.view.setEnabled(true);
-                updateCheck.name.setText(Tr.t("Check for Updates"));
+                showChecking();
                 final String installed = Updater.installedVersion(this);
                 if (release != null && release.apkUrl != null && Updater.isNewer(release.version, installed)) {
                     startUpdate(release);
@@ -519,8 +667,7 @@ public final class LauncherActivity extends Activity {
             return;
         }
         updating = true;
-        updateCheck.view.setEnabled(false);
-        updateCheck.name.setText(Tr.t("Checking…"));
+        showChecking();
         new Thread(() -> {
             String ended = null;
             String failure = null;
@@ -536,8 +683,7 @@ public final class LauncherActivity extends Activity {
             final Updater.Release beta = found;
             main.post(() -> {
                 updating = false;
-                updateCheck.view.setEnabled(true);
-                updateCheck.name.setText(Tr.t("Check for Updates"));
+                showChecking();
                 if (reason != null) {
                     settings.setBetaEnded(reason);
                     showBetaEnded();
@@ -585,69 +731,89 @@ public final class LauncherActivity extends Activity {
                 .show();
     }
 
-    private void updateSkipButton() {
-        showToggle(skip.pill, settings.skipBoot());
-    }
+    /** A game waits in the background (left for the Start Menu). */
+    boolean gameRunning() { return gameProcess() != 0; }
 
     private void refresh() {
         final boolean present = AppFiles.hasGameData(this);
         final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
         final boolean ready = present && problem == null;
+        final boolean running = ready && gameRunning();
         if (!present) {
             showStatus(Tr.t("No game loaded yet"), AMBER);
         } else if (problem != null) {
             showStatus(Tr.t("The game can't be played. ") + problem, ACCENT);
         } else {
-            showStatus(Tr.t("Ready to play"), GREEN);
+            showStatus(running ? "RBSJ08 • " + Tr.t("Paused in background") : "RBSJ08 • " + Tr.t("Ready to play"),
+                    running ? AMBER : GREEN);
         }
-        play.setText(ready ? (gameProcess() != 0 ? Tr.t("Continue") : Tr.t("Play")) : Tr.t("Choose Game File"));
-        gameFile.about.setText(ready ? Tr.t("Loaded (RBSJ08)")
-                : Tr.t("Your ISO or RVZ (RBSJ08)"));
-        showAction(gameFile.pill, ready ? Tr.t("Change") : Tr.t("Choose"));
-        showActiveSettings();
+        playLabel.setText(ready ? (running ? Tr.t("Continue") : Tr.t("Play")) : Tr.t("Choose Game File"));
+        stop.setVisibility(running ? View.VISIBLE : View.GONE);
+        sessionLine.setText(running ? Tr.t("The game is paused in the background: Continue goes back to it.")
+                : ready ? Tr.t("Settings are saved as you change them.")
+                : Tr.t("Choose your own ISO or RVZ of the game first."));
+        showSummary();
+        if (menu != null) {
+            menu.show(menu.section());
+            showTabs();
+        }
     }
 
-    /** The left panel's summary of the settings in use, with the experimental ones on their own line. */
-    private void showActiveSettings() {
-        if (activeSettings == null) return;
-        settings = new AppSettings(this);  // the settings screen and the game write the same file
-        activeSettings.removeAllViews();
+    /** The "In use" chips, drawn again after any change. */
+    private void showSummary() {
+        settings = new AppSettings(this);  // the settings panel and the game write the same file
+        showConfigStrip();
+    }
+
+    private void showConfigStrip() {
+        configStrip.removeAllViews();
         final String[] aspects = {"4:3", "16:9", Tr.t("Fill")};
-        final String[] fsr = {Tr.t("FSR Off"), Tr.t("FSR Light"), Tr.t("FSR Full"), Tr.t("SGSR")};
-        final String[] detail = {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")};
-        settingLine(AppSettings.resolutionLabel(settings.resolutionScale()) + "  ·  "
-                + aspects[Math.max(0, Math.min(2, settings.aspectMode()))] + "  ·  " + fsr[settings.fsr()], Color.WHITE);
-        settingLine((settings.fpsLock30() ? Tr.t("30 FPS Lock") : Tr.t("Frameskip ") + (settings.frameskip() ? Tr.t("Auto") : Tr.t("Off")))
-                + Tr.t("  ·  V-Sync ") + (settings.vsync() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Textures ")
-                + detail[settings.textureFilter()], MUTED);
-        settingLine(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")) + Tr.t("  ·  Overlay ")
-                + (settings.showFps() ? Tr.t("On") : Tr.t("Off")),
-                MUTED);
-        if (settings.anyCheat()) {
-            final java.util.List<String> cheats = new java.util.ArrayList<>();
-            if (settings.cheatMoney() == AppSettings.MONEY_INFINITE) cheats.add(Tr.t("Infinite Money"));
-            if (settings.cheatInfiniteHp()) cheats.add(Tr.t("Infinite HP"));
-            if (settings.cheatInfiniteBasara()) cheats.add(Tr.t("Infinite Basara"));
-            settingLine(Tr.t("⚠  Cheats: ") + String.join(", ", cheats), Sheet.WARNING_TEXT);
-        }
+        final String[] detail = {Tr.t("Textures Original"), Tr.t("Textures Sharp"), Tr.t("Textures Sharpest")};
+        stripChip(AppSettings.resolutionLabel(settings.resolutionScale()), SettingsMenu.DISPLAY, false);
+        stripChip(aspects[Math.max(0, Math.min(2, settings.aspectMode()))], SettingsMenu.DISPLAY, false);
+        stripChip(Tr.t(SettingsMenu.UPSCALERS[settings.fsr()]).equals(Tr.t("Off")) ? Tr.t("Upscaler Off")
+                : Tr.t(SettingsMenu.UPSCALERS[settings.fsr()]), SettingsMenu.GRAPHICS, false);
+        stripChip(detail[settings.textureFilter()], SettingsMenu.GRAPHICS, false);
+        if (!settings.gpuDriver().isEmpty()) stripChip(Tr.t("Custom GPU driver"), SettingsMenu.GRAPHICS, false);
+        stripChip(settings.fpsLock30() ? Tr.t("30 FPS Lock")
+                : Tr.t("Frameskip ") + (settings.frameskip() ? Tr.t("Auto") : Tr.t("Off")), SettingsMenu.PERFORMANCE, false);
+        if (settings.showFps()) stripChip(Tr.t("Overlay"), SettingsMenu.DISPLAY, false);
+        stripChip(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")), SettingsMenu.CONTROLS, false);
+        if (settings.anyCheat()) stripChip(Tr.t("Cheats on"), SettingsMenu.CHEATS, true);
         final java.util.List<String> experimental = new java.util.ArrayList<>();
+        if (settings.renderer() == 1) experimental.add(Tr.t("Vulkan"));
         if (settings.thermalControl()) experimental.add(Tr.t("Thermal Control"));
         if (settings.hdTextures() != 0) experimental.add(Tr.t("HD Textures"));
         if (settings.gxThread()) experimental.add(Tr.t("GX Thread"));
         if (settings.dynamicResolution()) experimental.add(Tr.t("Dynamic Resolution"));
         if (settings.customTextures()) experimental.add(settings.dumpTextures() ? Tr.t("Custom + Dump Textures") : Tr.t("Custom Textures"));
         if (settings.textureKeyReport()) experimental.add(Tr.t("Texture Keys"));
-        if (!experimental.isEmpty()) {
-            settingLine(Tr.t("⚠  Experimental: ") + String.join(", ", experimental), Sheet.WARNING_TEXT);
-        }
+        for (String name : experimental) stripChip(name, SettingsMenu.EXPERIMENTAL, true);
     }
 
-    private void settingLine(String value, int color) {
-        final TextView line = text(value, 12);
-        line.setGravity(Gravity.START);
-        line.setTextColor(color);
-        line.setPadding(0, dp(2), 0, 0);
-        activeSettings.addView(line, matchWidth(0));
+    private void stripChip(String label, int section, boolean warning) {
+        final LinearLayout chip = new LinearLayout(this);
+        chip.setGravity(Gravity.CENTER_VERTICAL);
+        chip.setPadding(dp(8), dp(4), dp(9), dp(4));
+        chip.setBackground(Ui.touchBox(this, Ui.SURFACE, warning ? Sheet.WARNING_TEXT : Ui.BORDER, 6));
+        final View dot = new View(this);
+        final GradientDrawable round = new GradientDrawable();
+        round.setShape(GradientDrawable.OVAL);
+        round.setColor(warning ? Ui.WARNING : Ui.ACCENT);
+        dot.setBackground(round);
+        chip.addView(dot, new LinearLayout.LayoutParams(dp(5), dp(5)));
+        final TextView text = Ui.text(this, (warning ? "⚠ " : "") + label, 11.5f, warning ? Sheet.WARNING_TEXT : Ui.TEXT);
+        text.setSingleLine(true);
+        final LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        textParams.leftMargin = dp(5);
+        chip.addView(text, textParams);
+        chip.setClickable(true);
+        chip.setOnClickListener(v -> selectSection(section, true));
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.rightMargin = dp(6);
+        configStrip.addView(chip, params);
     }
 
     /** Getting Started. */
@@ -851,163 +1017,37 @@ public final class LauncherActivity extends Activity {
         return view;
     }
 
-    private TextView link(String label, View.OnClickListener onClick) {
-        final TextView view = text(label, 16);
-        view.setTextColor(Color.rgb(255, 138, 128));
-        view.setTypeface(Typeface.DEFAULT_BOLD);
-        view.setPadding(dp(12), dp(10), dp(12), dp(10));
-        view.setOnClickListener(onClick);
-        view.setBackgroundResource(android.R.drawable.list_selector_background);
+    /** A 1 px border line between the page's bands. */
+    private View line() {
+        final View view = new View(this);
+        view.setBackgroundColor(Ui.BORDER);
         return view;
     }
 
-    // The start menu's colors, on the theme's #101418 background (the settings screen shares them).
-    static final int ACCENT = Color.rgb(229, 57, 53);
-    static final int HERO_GLOW = Color.rgb(84, 24, 26);
-    static final int SURFACE = Color.rgb(24, 31, 38);
-    static final int BACKGROUND = Color.rgb(16, 20, 24);
-    static final int RAISED = Color.rgb(38, 48, 58);
-    static final int MUTED = Color.rgb(170, 178, 186);
-    static final int FAINT = Color.rgb(120, 128, 136);
-    static final int GREEN = Color.rgb(102, 187, 106);
-    static final int AMBER = Color.rgb(255, 183, 77);
-    static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
-    /** Between the screen's edge, its two sides and the tiles, in dp. */
-    private static final int GAP = 10;
-
-    /** A rounded shape that ripples when touched; `disabled` is its color while disabled. */
-    private RippleDrawable rounded(int color, int disabled, int radius) {
-        final GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(radius);
-        shape.setColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
-                new int[] {disabled, color}));
-        final GradientDrawable mask = new GradientDrawable();
-        mask.setCornerRadius(radius);
-        mask.setColor(Color.WHITE);
-        return new RippleDrawable(ColorStateList.valueOf(Color.argb(56, 255, 255, 255)), shape, mask);
-    }
-
-    /** The big red pill. */
-    private Button button(String label) {
-        final Button view = new Button(this);
-        view.setText(label);
-        view.setAllCaps(false);
-        view.setStateListAnimator(null);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        view.setTypeface(Typeface.DEFAULT_BOLD);
-        view.setTextColor(Color.WHITE);
-        final int height = dp(56);
-        view.setMinHeight(height);
-        view.setMinimumHeight(height);
-        view.setPadding(dp(20), 0, dp(20), 0);
-        view.setBackground(rounded(ACCENT, RAISED, height / 2));
-        return view;
-    }
-
-    /** A tappable tile: a name, a line about it, and on the right a pill for its state or action. */
-    private static final class Tile {
-        final View view;
-        final TextView name, about, pill;
-        Tile(View view, TextView name, TextView about, TextView pill) {
-            this.view = view;
-            this.name = name;
-            this.about = about;
-            this.pill = pill;
-        }
-    }
-
-    private Tile tile(String label, String help, View.OnClickListener onClick) {
-        final LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(16), dp(6), dp(12), dp(6));
-        row.setBackground(rounded(SURFACE, SURFACE, dp(18)));
-        if (onClick != null) {
-            row.setClickable(true);
-            row.setOnClickListener(onClick);
-        }
-        final LinearLayout words = new LinearLayout(this);
-        words.setOrientation(LinearLayout.VERTICAL);
-        final TextView name = text(label, 15);
-        name.setTypeface(MEDIUM);
-        name.setGravity(Gravity.START);
-        words.addView(name);
-        final TextView about = text(help, 12);
-        about.setGravity(Gravity.START);
-        about.setTextColor(MUTED);
-        words.addView(about);
-        row.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        final TextView pill = text("", 13);
-        pill.setTypeface(Typeface.DEFAULT_BOLD);
-        pill.setGravity(Gravity.CENTER);
-        pill.setPadding(dp(14), dp(6), dp(14), dp(6));
-        pill.setVisibility(View.GONE);
-        final LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pillParams.leftMargin = dp(8);
-        row.addView(pill, pillParams);
-        return new Tile(row, name, about, pill);
-    }
-
-    /** Tiles side by side, sharing the width. */
-    private LinearLayout tileRow(Tile... tiles) {
-        final LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        for (int i = 0; i < tiles.length; ++i) {
-            final LinearLayout.LayoutParams params =
-                    new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
-            params.leftMargin = i == 0 ? 0 : dp(GAP);
-            row.addView(tiles[i].view, params);
-        }
-        return row;
-    }
-
-    /** A row takes its share of the side's height, and never less than a comfortable tap. */
-    private LinearLayout.LayoutParams tileRowParams(int topMarginDp) {
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(56), 1f);
-        params.topMargin = dp(topMarginDp);
-        return params;
-    }
-
-    private void showToggle(TextView pill, boolean on) {
-        pill.setVisibility(View.VISIBLE);
-        pill.setText(on ? Tr.t("On") : Tr.t("Off"));
-        pill.setTextColor(on ? Color.WHITE : MUTED);
-        showPill(pill, on ? ACCENT : RAISED);
-    }
-
-    private void showAction(TextView pill, String label) {
-        pill.setVisibility(View.VISIBLE);
-        pill.setText(label);
-        pill.setTextColor(Color.WHITE);
-        showPill(pill, RAISED);
-    }
-
-    private void showPill(TextView pill, int color) {
-        final GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(16));
-        shape.setColor(color);
-        pill.setBackground(shape);
-    }
+    // The app's colors (Ui), under the names the other screens use.
+    static final int ACCENT = Ui.ACCENT;
+    static final int SURFACE = Ui.SURFACE;
+    static final int BACKGROUND = Ui.BG;
+    static final int RAISED = Ui.ACTIVE;
+    static final int MUTED = Ui.SECONDARY;
+    static final int FAINT = Ui.MUTED;
+    static final int GREEN = Ui.SUCCESS;
+    static final int AMBER = Ui.WARNING;
+    static final Typeface MEDIUM = Ui.MEDIUM;
 
     private void showStatus(String text, int color) {
         status.setText(text);
         final GradientDrawable dot = new GradientDrawable();
         dot.setShape(GradientDrawable.OVAL);
         dot.setColor(color);
-        dot.setSize(dp(10), dp(10));
-        status.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null);
+        statusDot.setBackground(dot);
     }
 
     private LinearLayout.LayoutParams matchWidth(int topMargin) {
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = topMargin;
-        return params;
+        return Ui.matchWidth(topMargin);
     }
 
     private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return Ui.dp(this, value);
     }
 }

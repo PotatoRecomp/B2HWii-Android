@@ -3,7 +3,6 @@ package com.shiinobu.basara;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.CornerPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
@@ -35,6 +34,8 @@ final class TouchControlsView extends View {
     static final int B = 0x0010, A = 0x0020, X = 0x0040, PLUS = 0x0080, MINUS = 0x0100;
     static final int Y = 0x0200, L = 0x0400, R = 0x0800, ZL = 0x1000, ZR = 0x2000, HOME = 0x4000;
     private static final int NATIVE_MASK = 0x7FFF;
+    /** The settings gear: never sent to the game, opens the in-game menu when lifted on it. */
+    static final int MENU = 0x8000;
 
     private static final int MODE_BUTTONS = 1;  // the finger presses whatever button it is over
     private static final int MODE_PAD = 2;      // the finger steers the D-pad until lifted
@@ -110,8 +111,9 @@ final class TouchControlsView extends View {
         new Button(L, "L", SHAPE_PILL, 1.3f), new Button(ZL, "ZL", SHAPE_PILL, 1.3f),
         new Button(R, "R", SHAPE_PILL, 1.3f), new Button(ZR, "ZR", SHAPE_PILL, 1.3f),
         new Button(MINUS, null, SHAPE_ROUND, 1.25f), new Button(HOME, null, SHAPE_ROUND, 1.25f),
-        new Button(PLUS, null, SHAPE_ROUND, 1.25f),
+        new Button(PLUS, null, SHAPE_ROUND, 1.25f), new Button(MENU, null, SHAPE_ROUND, 1.3f),
     };
+    private int gearFinger = -1;  // the finger on the gear, or -1
     private final Stick leftStick = new Stick(), rightStick = new Stick();
     private float padX, padY, padR;
     private final SparseIntArray pointerModes = new SparseIntArray();  // pointer id -> MODE_*
@@ -129,7 +131,7 @@ final class TouchControlsView extends View {
 
     // The player's layout: element key -> {centre x / width, centre y / height, size multiplier}.
     private static final String[] ELEMENTS = {"lstick", "rstick", "pad", "face", "L", "ZL", "R", "ZR",
-        "minus", "home", "plus"};
+        "minus", "home", "plus", "menu"};
     private final java.util.HashMap<String, float[]> custom = new java.util.HashMap<>();
     private boolean editing;
     private String selected;
@@ -141,6 +143,7 @@ final class TouchControlsView extends View {
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path shape = new Path();
+    private final TouchIcons icons = new TouchIcons();
     private final RectF rect = new RectF();
 
     TouchControlsView(Context context) {
@@ -155,7 +158,7 @@ final class TouchControlsView extends View {
 
     void setListener(Listener listener) { this.listener = listener; }
 
-    void setOpacity(float opacity) { this.opacity = opacity; invalidate(); }
+    void setOpacity(float opacity) { this.opacity = opacity; icons.setOpacity(opacity); invalidate(); }
 
     void setHaptics(boolean haptics) { this.haptics = haptics; }
 
@@ -304,6 +307,9 @@ final class TouchControlsView extends View {
         place(MINUS, w / 2f - centreGap, centreY, centreR);
         place(HOME, w / 2f, centreY, centreR);
         place(PLUS, w / 2f + centreGap, centreY, centreR);
+        // The gear sits just right of ZL, clear of the performance bar in the top centre.
+        final float gearR = 0.042f * u;
+        place(MENU, leftEdge + 4 * pillWidth + gap + 0.035f * u + gearR, pillY, gearR);
         for (java.util.Map.Entry<String, float[]> e : custom.entrySet()) {
             final float[] v = e.getValue();
             transform(e.getKey(), v[0] * w, v[1] * h, v[2]);
@@ -348,6 +354,7 @@ final class TouchControlsView extends View {
             case "minus": return MINUS;
             case "home": return HOME;
             case "plus": return PLUS;
+            case "menu": return MENU;
             default: return 0;
         }
     }
@@ -501,7 +508,24 @@ final class TouchControlsView extends View {
         final int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_CANCEL) {
             endDrag(e.getX(), e.getY());
+            gearFinger = -1;
             release();
+            return true;
+        }
+        // The gear works in every mode (game menus, controls hidden); its finger does nothing else.
+        if ((action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) && gearFinger < 0
+                && button(MENU).hit(e.getX(e.getActionIndex()), e.getY(e.getActionIndex()))) {
+            gearFinger = e.getPointerId(e.getActionIndex());
+            if (haptics) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            invalidate();
+            return true;
+        }
+        if (gearFinger >= 0 && e.getPointerId(e.getActionIndex()) == gearFinger
+                && (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)) {
+            final int i = e.getActionIndex();
+            gearFinger = -1;
+            invalidate();
+            if (button(MENU).hit(e.getX(i), e.getY(i)) && listener != null) listener.onMenu();
             return true;
         }
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -719,7 +743,7 @@ final class TouchControlsView extends View {
         if (!showsControls()) return 0;
         int bits = 0;
         for (Button b : buttons) {
-            if (b.hit(x, y)) bits |= b.bit;
+            if (b.bit != MENU && b.hit(x, y)) bits |= b.bit;
         }
         return bits;
     }
@@ -755,13 +779,18 @@ final class TouchControlsView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (!showsControls()) return;
         final int base = Math.round(255 * opacity);
+        icons.setOpacity(Math.max(opacity, showsControls() ? 0f : 0.47f));
+        if (!showsControls()) {
+            drawGear(canvas, button(MENU), Math.max(base, 120));
+            return;
+        }
         drawStick(canvas, leftStick, base);
         drawStick(canvas, rightStick, base);
         drawPad(canvas, base);
         for (Button b : buttons) {
-            drawButton(canvas, b, base);
+            if (b.bit == MENU) drawGear(canvas, b, base);
+            else drawButton(canvas, b, base);
         }
         if (editing) drawEditor(canvas);
     }
@@ -797,120 +826,31 @@ final class TouchControlsView extends View {
         canvas.drawText(hint, getWidth() / 2f, 0.36f * h, text);
     }
 
-    private void drawSurface(Canvas canvas, Button b, boolean down, int base) {
-        fill.setStyle(Paint.Style.FILL);
-        fill.setColor(down ? seal(base + 60) : ink(base * 3 / 4));
-        stroke.setStrokeWidth(Math.max(1.5f, getHeight() * 0.0035f));
-        stroke.setColor(down ? seal(base + 60) : paper(base * 4 / 5));
-        rect.set(b.x - b.halfWidth, b.y - b.r, b.x + b.halfWidth, b.y + b.r);
-        canvas.drawRoundRect(rect, b.r, b.r, fill);
-        canvas.drawRoundRect(rect, b.r, b.r, stroke);
+    /** The settings gear, the same face as − and +. */
+    private void drawGear(Canvas canvas, Button b, int base) {
+        icons.system(canvas, MENU, b.x, b.y, b.r, gearFinger >= 0);
     }
 
     private void drawButton(Canvas canvas, Button b, int base) {
         final boolean down = (held & b.bit) != 0;
-        drawSurface(canvas, b, down, base);
-        final int glyph = paper(down ? 255 : base + 90);
-        if (b.label != null) {
-            text.setColor(glyph);
-            text.setTextSize(b.shape == SHAPE_PILL ? b.r * 1.05f : b.r * 1.15f);
-            canvas.drawText(b.label, b.x, b.y - (text.descent() + text.ascent()) / 2, text);
-            return;
-        }
-        stroke.setColor(glyph);
-        stroke.setStrokeWidth(Math.max(2f, b.r * 0.14f));
-        final float arm = b.r * 0.42f;
-        if (b.bit == MINUS || b.bit == PLUS) {
-            canvas.drawLine(b.x - arm, b.y, b.x + arm, b.y, stroke);
-            if (b.bit == PLUS) canvas.drawLine(b.x, b.y - arm, b.x, b.y + arm, stroke);
-        } else {
-            // A house: roof and walls in one line.
-            final float wall = arm * 0.72f;
-            shape.reset();
-            shape.moveTo(b.x - arm * 1.1f, b.y - arm * 0.05f);
-            shape.lineTo(b.x, b.y - arm);
-            shape.lineTo(b.x + arm * 1.1f, b.y - arm * 0.05f);
-            shape.moveTo(b.x - wall, b.y - arm * 0.2f);
-            shape.lineTo(b.x - wall, b.y + arm * 0.85f);
-            shape.lineTo(b.x + wall, b.y + arm * 0.85f);
-            shape.lineTo(b.x + wall, b.y - arm * 0.2f);
-            canvas.drawPath(shape, stroke);
+        switch (b.bit) {
+            case A: case B: case X: case Y:
+                icons.face(canvas, b.bit, b.x, b.y, b.r, down);
+                break;
+            case L: case R: case ZL: case ZR:
+                icons.shoulder(canvas, b.bit, b.x, b.y, b.halfWidth, b.r, down);
+                break;
+            default:
+                icons.system(canvas, b.bit, b.x, b.y, b.r, down);
+                break;
         }
     }
 
-    /** One outline with rounded corners, the pressed arm lit from the inside. */
     private void drawPad(Canvas canvas, int base) {
-        final float arm = padR * 0.34f, reach = padR;
-        shape.reset();
-        shape.moveTo(padX - arm, padY - reach);
-        shape.lineTo(padX + arm, padY - reach);
-        shape.lineTo(padX + arm, padY - arm);
-        shape.lineTo(padX + reach, padY - arm);
-        shape.lineTo(padX + reach, padY + arm);
-        shape.lineTo(padX + arm, padY + arm);
-        shape.lineTo(padX + arm, padY + reach);
-        shape.lineTo(padX - arm, padY + reach);
-        shape.lineTo(padX - arm, padY + arm);
-        shape.lineTo(padX - reach, padY + arm);
-        shape.lineTo(padX - reach, padY - arm);
-        shape.lineTo(padX - arm, padY - arm);
-        shape.close();
-        final CornerPathEffect corners = new CornerPathEffect(arm * 0.35f);
-        fill.setStyle(Paint.Style.FILL);
-        fill.setPathEffect(corners);
-        fill.setColor(ink(base * 3 / 4));
-        canvas.drawPath(shape, fill);
-        fill.setPathEffect(null);
-        stroke.setPathEffect(corners);
-        stroke.setStrokeWidth(Math.max(1.5f, getHeight() * 0.0035f));
-        stroke.setColor(paper(base * 4 / 5));
-        canvas.drawPath(shape, stroke);
-        stroke.setPathEffect(null);
-        drawPadArm(canvas, base, LEFT, -1, 0);
-        drawPadArm(canvas, base, RIGHT, 1, 0);
-        drawPadArm(canvas, base, UP, 0, -1);
-        drawPadArm(canvas, base, DOWN, 0, 1);
-    }
-
-    private void drawPadArm(Canvas canvas, int base, int bit, int ux, int uy) {
-        final boolean down = (held & bit) != 0;
-        final float inner = padR * 0.40f, outer = padR * 0.90f, half = padR * 0.26f;
-        final float cx = padX + ux * (inner + outer) / 2, cy = padY + uy * (inner + outer) / 2;
-        if (down) {
-            final float hx = ux != 0 ? (outer - inner) / 2 : half, hy = uy != 0 ? (outer - inner) / 2 : half;
-            rect.set(cx - hx, cy - hy, cx + hx, cy + hy);
-            fill.setColor(seal(base + 60));
-            canvas.drawRoundRect(rect, half * 0.35f, half * 0.35f, fill);
-        }
-        // A short rule across the arm instead of an arrow: enough to find it by eye.
-        stroke.setStrokeWidth(Math.max(2f, padR * 0.045f));
-        stroke.setColor(paper(down ? 255 : base + 40));
-        final float mark = padR * 0.11f;
-        final float mx = padX + ux * padR * 0.68f, my = padY + uy * padR * 0.68f;
-        canvas.drawLine(mx - uy * mark, my - ux * mark, mx + uy * mark, my + ux * mark, stroke);
+        icons.pad(canvas, padX, padY, padR, held & (LEFT | RIGHT | UP | DOWN));
     }
 
     private void drawStick(Canvas canvas, Stick stick, int base) {
-        final boolean active = stick.finger >= 0;
-        fill.setStyle(Paint.Style.FILL);
-        fill.setColor(ink(base * 3 / 5));
-        canvas.drawCircle(stick.x, stick.y, stick.r, fill);
-        stroke.setStrokeWidth(Math.max(1.5f, getHeight() * 0.0035f));
-        stroke.setColor(paper(base * 4 / 5));
-        canvas.drawCircle(stick.x, stick.y, stick.r, stroke);
-        // Compass ticks on the rim.
-        stroke.setColor(paper(base / 2));
-        final float tickIn = stick.r * 0.86f, tickOut = stick.r * 0.95f;
-        canvas.drawLine(stick.x, stick.y - tickOut, stick.x, stick.y - tickIn, stroke);
-        canvas.drawLine(stick.x, stick.y + tickIn, stick.x, stick.y + tickOut, stroke);
-        canvas.drawLine(stick.x - tickOut, stick.y, stick.x - tickIn, stick.y, stroke);
-        canvas.drawLine(stick.x + tickIn, stick.y, stick.x + tickOut, stick.y, stroke);
-        // The knob travels so its edge reaches the rim, and stays on the ring at full tilt.
-        final float knobR = stick.r * 0.46f, travel = stick.r - knobR;
-        final float kx = stick.x + stick.valueX * travel, ky = stick.y + stick.valueY * travel;
-        fill.setColor(active ? seal(base + 60) : paper(base * 2 / 3));
-        canvas.drawCircle(kx, ky, knobR, fill);
-        stroke.setColor(active ? paper(200) : ink(base));
-        canvas.drawCircle(kx, ky, knobR * 0.62f, stroke);
+        icons.stick(canvas, stick.x, stick.y, stick.r, stick.valueX, stick.valueY, stick.finger >= 0);
     }
 }

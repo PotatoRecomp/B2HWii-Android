@@ -39,6 +39,9 @@ public final class GameActivity extends SDLActivity
     static native void nativeApplyCheats(int money, int amount, int onceSeq, boolean infiniteHp,
             boolean infiniteBasara);
 
+    /** The in-game settings: upscaler (0 off, 1 FSR Light, 2 FSR Full, 3 SGSR), frameskip (0 off, 1 auto, 2 30 FPS lock). */
+    static native void nativeApplyLiveSettings(int upscaler, int frameskip);
+
     /** "GPU name\n1|0":the GPU the game draws with and whether its compatibility fixes are on. */
     static native String nativeGraphicsInfo();
 
@@ -86,6 +89,7 @@ public final class GameActivity extends SDLActivity
         CrashReport.installJavaHandler(this);
         CrashReport.testCrashIfAsked();
         settings = new AppSettings(this);
+        Tr.init(this);  // the in-game menu speaks the launcher's language
         bootWidescreen = settings.aspectMode() != AppSettings.ASPECT_4_3;
         try {
             AppFiles.prepareRuntime(this);
@@ -225,11 +229,7 @@ public final class GameActivity extends SDLActivity
             // Back from the Start Menu (Continue): what was changed there applies now. The launcher
             // wrote it from its own process, so read the settings file again first.
             settings = new AppSettings(this);
-            nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
-                    settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
-                    settings.thermalControl(), settings.textureFilter());
-            nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
-                    settings.cheatInfiniteHp(), settings.cheatInfiniteBasara());
+            applyNativeSettings();
         }
         applyControlSettings();
         menuPoll.removeCallbacks(pollMenu);
@@ -418,6 +418,32 @@ public final class GameActivity extends SDLActivity
         touch.setLayout(settings.touchLayout());
     }
 
+    /** What the game can change while it runs: picture, upscaler, frame pacing, overlay, cheats. */
+    private void applyNativeSettings() {
+        if (!nativeReady) return;
+        nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
+                settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
+                settings.thermalControl(), settings.textureFilter());
+        nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
+                settings.cheatInfiniteHp(), settings.cheatInfiniteBasara());
+        try {
+            nativeApplyLiveSettings(settings.fsr(), settings.fpsLock30() ? 2 : settings.frameskip() ? 1 : 0);
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "live settings bridge missing from libmain.so", e);
+        }
+    }
+
+    /** A change in the in-game settings: everything that applies while playing, at once. */
+    private void applyLiveSettings() {
+        settings = new AppSettings(this);
+        applyNativeSettings();
+        applyControlSettings();
+        if (motion != null) {
+            motion.stop();
+            motion.start(settings.motionTilt(), settings.motionShake());
+        }
+    }
+
     private void hideSystemBars() {
         getWindow().setDecorFitsSystemWindows(false);
         final WindowInsetsController controller = getWindow().getInsetsController();
@@ -430,9 +456,8 @@ public final class GameActivity extends SDLActivity
     // --- menu ----------------------------------------------------------------------------------
 
     /**
-     * The phone's Back gesture: back to the start menu (where the settings are), leave a LAN game,
-     * or quit. There is no on-screen menu button; the game's own settings window (the gear on the
-     * save file screen and the pause menus) covers resolution and the FPS counter while playing.
+     * The in-game menu, from the phone's Back gesture or the gear on the touch controls: the game
+     * pauses while it is open.
      */
     @Override
     public void onMenu() {
@@ -441,29 +466,244 @@ public final class GameActivity extends SDLActivity
         // The game stands still while the menu is open (no backup save: it isn't leaving the screen).
         menuOpen = true;
         setMenuPause(true);
-        final Runnable resume = () -> {
-            menuOpen = false;
-            setMenuPause(false);
-        };
-        final Sheet sheet = new Sheet(this, "Paused", "Basara 2 Heroes").horizontal()
-                .action("Resume", "Back to the game", true, false, resume)
-                .action("Start Menu", "Settings and the launcher; Continue brings you back", false, false, () -> {
-                    resume.run();
-                    openStartMenu(inSession);
-                })
-                .action("Edit Controls", "Move and resize the touch buttons", false, false, () -> {
-                    resume.run();
-                    touch.setEditMode(true);
-                });
-        if (inSession) {
-            sheet.action("Leave LAN Game", null, false, false, () -> {
-                resume.run();
-                leaveSession();
+        new PauseMenu(inSession).show();
+    }
+
+    /**
+     * The in-game menu: a landscape card, actions on the left (Resume, Edit Controls, Start Menu,
+     * Leave LAN, Quit) and the settings on the right. What the game can change while playing applies
+     * at once; settings read only at start carry a red restart warning.
+     */
+    private final class PauseMenu {
+        private final android.app.Dialog dialog;
+        private final android.widget.TextView telemetry;
+        private final android.widget.TextView heading;
+        private final android.widget.LinearLayout sectionList;
+        private final android.widget.ScrollView rowsScroll;
+        private final SettingsMenu menu;
+        private final int[] sections = SettingsMenu.gameSections();
+
+        PauseMenu(boolean inSession) {
+            final GameActivity a = GameActivity.this;
+            final android.widget.LinearLayout card = new android.widget.LinearLayout(a);
+            card.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            card.setBackground(Ui.box(a, Ui.SURFACE, Ui.BORDER_STRONG, 18));
+            card.setClipToOutline(true);
+
+            // Left: PAUSED, Resume, the sections, then the actions in one row at the foot.
+            final android.widget.LinearLayout nav = new android.widget.LinearLayout(a);
+            nav.setOrientation(android.widget.LinearLayout.VERTICAL);
+            nav.setBackgroundColor(Ui.ELEVATED);
+            nav.setPadding(dp(10), dp(12), dp(10), dp(10));
+            final android.widget.LinearLayout title = new android.widget.LinearLayout(a);
+            title.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            final android.widget.TextView badge = Ui.text(a, Tr.t("PAUSED"), 9.5f, android.graphics.Color.WHITE);
+            badge.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            badge.setLetterSpacing(0.1f);
+            badge.setPadding(dp(7), dp(2), dp(7), dp(2));
+            badge.setBackground(Ui.box(a, Ui.ACCENT, 0, 4));
+            title.addView(badge);
+            final android.widget.TextView game = Ui.text(a, "BASARA 2 HEROES", 10f, Ui.SECONDARY);
+            game.setTypeface(Ui.MONO);
+            game.setSingleLine(true);
+            game.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            final android.widget.LinearLayout.LayoutParams gameParams = new android.widget.LinearLayout.LayoutParams(
+                    0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            gameParams.leftMargin = dp(8);
+            title.addView(game, gameParams);
+            nav.addView(title, Ui.matchWidth(0));
+            nav.addView(Ui.button(a, R.drawable.ic_play, Tr.t("Resume Game"), Ui.PRIMARY, v -> close()),
+                    Ui.matchWidth(dp(10)));
+            sectionList = new android.widget.LinearLayout(a);
+            sectionList.setOrientation(android.widget.LinearLayout.VERTICAL);
+            nav.addView(sectionList, Ui.matchWidth(dp(10)));
+            nav.addView(new android.view.View(a), new android.widget.LinearLayout.LayoutParams(1, 0, 1f));
+            final android.widget.LinearLayout actions = new android.widget.LinearLayout(a);
+            actions.addView(action(R.drawable.ic_move, Tr.t("Layout"), false, v -> {
+                close();
+                touch.setEditMode(true);
+            }), actionParams(false));
+            actions.addView(action(R.drawable.ic_home, Tr.t("Menu"), false, v -> {
+                close();
+                openStartMenu(inSession);
+            }), actionParams(true));
+            if (inSession) {
+                actions.addView(action(R.drawable.ic_logout, Tr.t("Leave LAN"), false, v -> {
+                    close();
+                    leaveSession();
+                }), actionParams(true));
+            }
+            actions.addView(action(R.drawable.ic_power, Tr.t("Quit"), true, v -> quitApp()), actionParams(true));
+            nav.addView(actions, Ui.matchWidth(dp(10)));
+            final android.widget.ScrollView navScroll = new android.widget.ScrollView(a);
+            navScroll.setFillViewport(true);
+            navScroll.setVerticalScrollBarEnabled(false);
+            navScroll.addView(nav);
+            card.addView(navScroll, new android.widget.LinearLayout.LayoutParams(dp(196),
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT));
+            final android.view.View split = new android.view.View(a);
+            split.setBackgroundColor(Ui.BORDER);
+            card.addView(split, new android.widget.LinearLayout.LayoutParams(1,
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT));
+
+            // Right: the section's name, what shapes the picture now, then its settings.
+            final android.widget.LinearLayout right = new android.widget.LinearLayout(a);
+            right.setOrientation(android.widget.LinearLayout.VERTICAL);
+            right.setPadding(dp(16), dp(12), dp(14), 0);
+            final android.widget.LinearLayout head = new android.widget.LinearLayout(a);
+            head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            heading = Ui.text(a, "", 16, Ui.TEXT);
+            heading.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            head.addView(heading, new android.widget.LinearLayout.LayoutParams(0,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            telemetry = Ui.text(a, "", 10.5f, Ui.SECONDARY);
+            telemetry.setTypeface(Ui.MONO);
+            telemetry.setSingleLine(true);
+            telemetry.setPadding(dp(9), dp(3), dp(9), dp(3));
+            telemetry.setBackground(Ui.box(a, Ui.BG, Ui.BORDER, 6));
+            head.addView(telemetry);
+            right.addView(head, Ui.matchWidth(0));
+            final android.widget.TextView note = Ui.text(a,
+                    Tr.t("Changes apply at once, except those marked Restart needed."), 11, Ui.MUTED);
+            note.setPadding(0, dp(2), 0, 0);
+            right.addView(note, Ui.matchWidth(0));
+            final android.widget.LinearLayout rows = new android.widget.LinearLayout(a);
+            rows.setOrientation(android.widget.LinearLayout.VERTICAL);
+            rows.setPadding(0, dp(10), 0, dp(14));
+            rowsScroll = new android.widget.ScrollView(a);
+            rowsScroll.setVerticalScrollBarEnabled(false);
+            rowsScroll.addView(rows);
+            right.addView(rowsScroll, new android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+            card.addView(right, new android.widget.LinearLayout.LayoutParams(0,
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+
+            menu = new SettingsMenu(a, rows, true, () -> {
+                applyLiveSettings();
+                showTelemetry();
             });
+
+            // The backdrop dims the game; the card nearly fills it (a phone is short in landscape).
+            final android.widget.FrameLayout backdrop = new android.widget.FrameLayout(a);
+            backdrop.setBackgroundColor(android.graphics.Color.argb(190, 10, 11, 13));
+            final android.util.DisplayMetrics screen = getResources().getDisplayMetrics();
+            final int width = Math.min(dp(900), Math.round(screen.widthPixels * 0.92f));
+            final int height = Math.min(dp(520), Math.round(screen.heightPixels * 0.92f));
+            backdrop.addView(card, new android.widget.FrameLayout.LayoutParams(width, height,
+                    android.view.Gravity.CENTER));
+
+            dialog = new android.app.Dialog(a, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen);
+            dialog.setContentView(backdrop);
+            final android.view.Window window = dialog.getWindow();
+            if (window != null) {
+                window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                        android.graphics.Color.TRANSPARENT));
+                window.setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                        android.view.WindowManager.LayoutParams.MATCH_PARENT);
+            }
+            dialog.setOnShowListener(d -> {
+                if (window == null) return;
+                window.setDecorFitsSystemWindows(false);
+                final WindowInsetsController controller = window.getInsetsController();
+                if (controller != null) {
+                    controller.hide(WindowInsets.Type.systemBars());
+                    controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
+            });
+            dialog.setOnCancelListener(d -> resumeFromMenu());
+            dialog.setOnDismissListener(d -> hideSystemBars());
+            select(SettingsMenu.DISPLAY);
+            showTelemetry();
         }
-        sheet.action("Quit Game", "Close the app completely", false, true, this::quitApp)
-                .onCancel(resume)
-                .onDismiss(this::hideSystemBars)
-                .show();
+
+        void show() { dialog.show(); }
+
+        private void close() {
+            dialog.dismiss();
+            resumeFromMenu();
+        }
+
+        /** An action at the foot of the left column: its icon over a short name. */
+        private android.widget.LinearLayout action(int icon, String label, boolean danger,
+                                                   android.view.View.OnClickListener onClick) {
+            final GameActivity a = GameActivity.this;
+            final android.widget.LinearLayout box = new android.widget.LinearLayout(a);
+            box.setOrientation(android.widget.LinearLayout.VERTICAL);
+            box.setGravity(android.view.Gravity.CENTER);
+            box.setPadding(dp(2), dp(7), dp(2), dp(6));
+            box.setBackground(Ui.touchBox(a, danger ? Ui.DANGER_FILL : Ui.SURFACE,
+                    danger ? Ui.DANGER_BORDER : Ui.BORDER, 8));
+            box.addView(Ui.icon(a, icon, danger ? android.graphics.Color.rgb(248, 113, 113) : Ui.SECONDARY, 16));
+            final android.widget.TextView name = Ui.text(a, label, 9.5f, danger ? Ui.DANGER_TEXT : Ui.SECONDARY);
+            name.setSingleLine(true);
+            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            name.setGravity(android.view.Gravity.CENTER);
+            name.setPadding(0, dp(3), 0, 0);
+            box.addView(name, Ui.matchWidth(0));
+            box.setClickable(true);
+            box.setOnClickListener(onClick);
+            box.setContentDescription(label);
+            return box;
+        }
+
+        private android.widget.LinearLayout.LayoutParams actionParams(boolean gap) {
+            final android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
+                    0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            if (gap) params.leftMargin = dp(6);
+            return params;
+        }
+
+        private void select(int section) {
+            menu.show(section);
+            rowsScroll.scrollTo(0, 0);
+            heading.setText(SettingsMenu.name(section));
+            sectionList.removeAllViews();
+            for (int id : sections) {
+                final boolean open = id == section;
+                final int color = open ? Ui.TEXT : SettingsMenu.risky(id) ? Sheet.WARNING_TEXT : Ui.SECONDARY;
+                final android.widget.LinearLayout item = new android.widget.LinearLayout(GameActivity.this);
+                item.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                item.setPadding(dp(10), dp(7), dp(10), dp(7));
+                item.setBackground(open ? Ui.touchBox(GameActivity.this, Ui.ACTIVE, Ui.BORDER_STRONG, 8)
+                        : Ui.touchBox(GameActivity.this, android.graphics.Color.TRANSPARENT,
+                                android.graphics.Color.TRANSPARENT, 8));
+                item.addView(Ui.icon(GameActivity.this, SettingsMenu.icon(id),
+                        open ? Ui.ACCENT : SettingsMenu.risky(id) ? Sheet.WARNING_TEXT : Ui.MUTED, 16));
+                final android.widget.TextView name = Ui.text(GameActivity.this, SettingsMenu.name(id), 13, color);
+                name.setTypeface(open ? android.graphics.Typeface.DEFAULT_BOLD : Ui.MEDIUM);
+                final android.widget.LinearLayout.LayoutParams nameParams = new android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+                nameParams.leftMargin = dp(10);
+                item.addView(name, nameParams);
+                item.setClickable(true);
+                item.setOnClickListener(v -> select(id));
+                sectionList.addView(item, Ui.matchWidth(sectionList.getChildCount() == 0 ? 0 : dp(2)));
+            }
+        }
+
+        /** "0.75x · SGSR · Frameskip Auto": the settings shaping the picture right now. */
+        private void showTelemetry() {
+            final String[] upscalers = {Tr.t("Upscaler Off"), "FSR Light", "FSR Full", "SGSR"};
+            telemetry.setText(AppSettings.resolutionLabel(settings.resolutionScale()) + " · "
+                    + upscalers[settings.fsr()] + " · "
+                    + (settings.fpsLock30() ? Tr.t("30 FPS Lock")
+                            : Tr.t("Frameskip ") + (settings.frameskip() ? Tr.t("Auto") : Tr.t("Off"))));
+        }
+    }
+
+    private void resumeFromMenu() {
+        menuOpen = false;
+        setMenuPause(false);
+    }
+
+    private android.view.View line() {
+        final android.view.View view = new android.view.View(this);
+        view.setBackgroundColor(Ui.BORDER);
+        return view;
+    }
+
+    private int dp(int value) {
+        return Ui.dp(this, value);
     }
 }

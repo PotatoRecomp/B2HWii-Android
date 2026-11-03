@@ -9,14 +9,14 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
-import android.view.WindowInsetsController;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * What changed in each build, laid out like the Settings screen: every version down the left, the
- * chosen version's changes on the right. Opens once after an install or update (on the newest
+ * What changed in each build: the versions in a strip across the top, the
+ * chosen version's changes below. Opens once after an install or update (on the newest
  * version) and from the launcher's What's New tile. The newest entry is first and describes the
  * build installed; add one for every release, listing only what that build changed.
  */
@@ -35,11 +35,27 @@ final class ReleaseNotes {
     }
 
     private static final Entry[] ENTRIES = {
+        new Entry("Beta 5", "New launcher, settings in game and GPU drivers", "2026-11-03",
+                new String[] {
+                    "A new upright launcher: Play and the settings in use on the first page, every setting in the tabs below it.",
+                    "Settings in game: tap the gear at the top left (or press Back). Resolution, upscaler, frameskip, 30 FPS Lock, overlay, texture detail, cheats and touch controls change at once. Settings that need the game to start again are marked in red.",
+                    "Stop button in the launcher: closes the game waiting in the background.",
+                    "SGSR upscaling option (Graphics > Upscaler).",
+                    "Graphics > GPU Driver: install a custom Vulkan driver .zip (Turnip for Adreno, malisx2 for Mali). If the game does not start with it, it switches back to System.",
+                    "Experimental > Renderer: the Vulkan renderer, lighter than the default on some phones.",
+                },
+                new String[] {
+                    "The game closed in Story while riding a horse (\"Missing translated function\").",
+                    "The game closed on Adreno 610 phones (Poco M3, Redmi 9T) when Dynamic Resolution changed the resolution. It now changes at most every 5 seconds.",
+                    "malisx2 on Mali-G52 showed a black screen.",
+                },
+                new String[] {
+                    "malisx2 on Mali-G52 works, but is not faster than the phone's own driver.",
+                }),
         new Entry("Beta 4", "Clean voices, cheats and save backups", "2026-11-02",
                 new String[] {
                     "Settings > Save Data: back up your save to a .zip and import it again.",
                     "Settings > Cheats: money (infinite, or set once to any amount), infinite HP and infinite Basara gauge.",
-                    "SGSR upscaling option.",
                 },
                 new String[] {
                     "Dialogue and cutscene voices no longer stutter or repeat when the game runs below 60 fps (Low resolution, 30 FPS Lock, busy battles).",
@@ -158,68 +174,64 @@ final class ReleaseNotes {
     private ReleaseNotes(Activity activity) {
         this.activity = activity;
 
-        // Left column: the title, the versions (scrolling, there are more than fit), Done always in view.
-        final LinearLayout column = new LinearLayout(activity);
-        column.setOrientation(LinearLayout.VERTICAL);
+        // Upright page: the title, a sideways strip of versions, the chosen version's notes, Done in view.
         final TextView title = text(Tr.t("What's New"), 24, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(dp(8), 0, 0, dp(2));
-        column.addView(title);
         final TextView installed = text(Tr.t("Installed: Basara ") + Updater.displayVersion(activity), 12,
                 LauncherActivity.MUTED);
-        installed.setPadding(dp(8), 0, 0, dp(8));
-        column.addView(installed);
+        installed.setPadding(0, dp(2), 0, dp(10));
         nav = new LinearLayout(activity);
-        nav.setOrientation(LinearLayout.VERTICAL);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
         for (int i = 0; i < ENTRIES.length; ++i) {
             final int index = i;
             final LinearLayout item = new LinearLayout(activity);
             item.setOrientation(LinearLayout.VERTICAL);
-            item.setPadding(dp(16), dp(10), dp(16), dp(10));
+            item.setPadding(dp(14), dp(8), dp(14), dp(8));
             item.setClickable(true);
             item.setOnClickListener(v -> showEntry(index));
-            final TextView name = text(ENTRIES[i].version + (i == 0 ? Tr.t(" · this version") : ""), 16, Color.WHITE);
+            final TextView name = text(ENTRIES[i].version, 15, Color.WHITE);
             name.setTypeface(LauncherActivity.MEDIUM);
             item.addView(name);
-            item.addView(text(Tr.t(ENTRIES[i].title) + " · " + ENTRIES[i].date, 12, LauncherActivity.MUTED));
-            nav.addView(item, matchWidth(i == 0 ? dp(4) : dp(6)));
+            item.addView(text(i == 0 ? Tr.t("this version") : ENTRIES[i].date, 11, LauncherActivity.MUTED));
+            final LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) itemParams.leftMargin = dp(6);
+            nav.addView(item, itemParams);
         }
-        final ScrollView navScroll = new ScrollView(activity);
-        navScroll.setVerticalScrollBarEnabled(false);
+        final HorizontalScrollView navScroll = new HorizontalScrollView(activity);
+        navScroll.setHorizontalScrollBarEnabled(false);
         navScroll.addView(nav);
-        column.addView(navScroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        rows = new LinearLayout(activity);
+        rows.setOrientation(LinearLayout.VERTICAL);
+        rows.setPadding(0, dp(14), 0, 0);
+        rowsScroll = new ScrollView(activity);
+        rowsScroll.setVerticalScrollBarEnabled(false);
+        rowsScroll.addView(rows);
+
         final TextView done = text(Tr.t("Done"), 17, Color.WHITE);
         done.setTypeface(Typeface.DEFAULT_BOLD);
         done.setGravity(Gravity.CENTER);
         done.setPadding(0, dp(12), 0, dp(12));
         done.setBackground(rounded(LauncherActivity.ACCENT, dp(24)));
-        column.addView(done, matchWidth(dp(10)));
-
-        rows = new LinearLayout(activity);
-        rows.setOrientation(LinearLayout.VERTICAL);
-        rowsScroll = new ScrollView(activity);
-        rowsScroll.setVerticalScrollBarEnabled(false);
-        rowsScroll.addView(rows);
 
         final LinearLayout page = new LinearLayout(activity);
-        page.setOrientation(LinearLayout.HORIZONTAL);
-        page.setPadding(dp(16), dp(16), dp(16), dp(16));
+        page.setOrientation(LinearLayout.VERTICAL);
         page.setBackgroundColor(LauncherActivity.BACKGROUND);
-        page.addView(column, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.3f));
-        final LinearLayout.LayoutParams rowsParams =
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.7f);
-        rowsParams.leftMargin = dp(16);
-        page.addView(rowsScroll, rowsParams);
+        page.addView(title);
+        page.addView(installed);
+        page.addView(navScroll, matchWidth(0));
+        page.addView(rowsScroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        page.addView(done, matchWidth(dp(10)));
 
         dialog = new Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen);
         dialog.setContentView(page);
-        dialog.setOnShowListener(d -> {
-            dialog.getWindow().setDecorFitsSystemWindows(false);
-            final WindowInsetsController controller = dialog.getWindow().getInsetsController();
-            if (controller != null) {
-                controller.hide(WindowInsets.Type.systemBars());
-                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
+        // Bars stay visible (like the launcher); the page keeps clear of them.
+        dialog.getWindow().setDecorFitsSystemWindows(false);
+        page.setOnApplyWindowInsetsListener((v, insets) -> {
+            final android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+            v.setPadding(dp(16) + bars.left, dp(16) + bars.top, dp(16) + bars.right, dp(16) + bars.bottom);
+            return WindowInsets.CONSUMED;
         });
         done.setOnClickListener(v -> dialog.dismiss());
         showEntry(0);

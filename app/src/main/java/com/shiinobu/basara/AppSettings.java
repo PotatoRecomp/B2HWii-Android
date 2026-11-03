@@ -109,6 +109,11 @@ final class AppSettings {
     void setUpscaler(int mode) { prefs.edit().putInt("upscaler", Math.max(0, Math.min(2, mode))).commit(); }
     /** The config value: 0 off, 1 FSR light, 2 FSR full, 3 SGSR. */
     int fsr() { return fsrOn() ? (upscaler() + 1) : 0; }
+    /** 0 off, 1 FSR Light, 2 FSR Full, 3 SGSR (Upscaling on/off plus the upscaler). */
+    void setFsr(int mode) {
+        setFsrOn(mode > 0);
+        if (mode > 0) setUpscaler(mode - 1);
+    }
 
     /**
      * Texture Detail for the 3D world: 0 original (as the game asks), 1 sharp (default: the Wii's

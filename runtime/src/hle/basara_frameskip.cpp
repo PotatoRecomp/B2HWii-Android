@@ -59,17 +59,27 @@ uint64_t g_bootFrames = 0;
 std::atomic<uint64_t> g_frames{0};
 std::atomic<uint64_t> g_skipped{0};
 
+const char* ModeName(int value) { return value == 0 ? "off" : value == 1 ? "auto" : "30 fps lock"; }
+
+// -1 until first read. The in-game settings can change it while playing (BasaraFrameskip_SetMode),
+// unless BASARA_FRAMESKIP fixed it.
+std::atomic<int> g_mode{-1};
+std::atomic<bool> g_modeFromEnv{false};
+
 int Mode() {
-    static const int mode = [] {
-        int value = RuntimeConfigFile::Frameskip();
-        if (const char* env = std::getenv("BASARA_FRAMESKIP")) {
-            value = std::atoi(env);
-        }
-        value = std::clamp(value, 0, 2);
-        RT_LOGF(RT_TAG_VI, "frameskip: %s\n", value == 0 ? "off" : value == 1 ? "auto" : "30 fps lock");
-        return value;
-    }();
-    return mode;
+    int value = g_mode.load(std::memory_order_relaxed);
+    if (value >= 0) return value;
+    value = RuntimeConfigFile::Frameskip();
+    if (const char* env = std::getenv("BASARA_FRAMESKIP")) {
+        value = std::atoi(env);
+        g_modeFromEnv.store(true, std::memory_order_relaxed);
+    }
+    value = std::clamp(value, 0, 2);
+    int expected = -1;
+    if (g_mode.compare_exchange_strong(expected, value, std::memory_order_relaxed)) {
+        RT_LOGF(RT_TAG_VI, "frameskip: %s\n", ModeName(value));
+    }
+    return g_mode.load(std::memory_order_relaxed);
 }
 
 void Call(CpuContext* ctx, uint32_t target) {
@@ -92,6 +102,15 @@ void BasaraBootSkip_SaveAccess() {
             static_cast<unsigned long long>(g_frames.load(std::memory_order_relaxed)));
 }
 
+void BasaraFrameskip_SetMode(int mode) {
+    Mode();  // the config (and the env) are read first
+    if (g_modeFromEnv.load(std::memory_order_relaxed)) return;
+    mode = std::clamp(mode, 0, 2);
+    if (g_mode.exchange(mode, std::memory_order_relaxed) != mode) {
+        RT_LOGF(RT_TAG_VI, "frameskip: %s (changed in game)\n", ModeName(mode));
+    }
+}
+
 void BasaraFrameskip_Stats(uint64_t* frames, uint64_t* skipped) {
     *frames = g_frames.load(std::memory_order_relaxed);
     *skipped = g_skipped.load(std::memory_order_relaxed);
@@ -107,7 +126,6 @@ extern "C" void BasaraMainLoop_HLE_802be4f4(CpuContext* ctx) {
     Call(ctx, 0x800A0C18u, 0x806626C8u);
     Call(ctx, 0x802BE69Cu);
 
-    const int mode = Mode();
     g_bootStart = Clock::now();
     if (RuntimeConfigFile::SkipBoot()) {
         g_bootSkip.store(true, std::memory_order_relaxed);
@@ -129,6 +147,7 @@ extern "C" void BasaraMainLoop_HLE_802be4f4(CpuContext* ctx) {
     uint64_t gxFrameMark = 0;
     for (;;) {
         Cheats::Apply();
+        const int mode = Mode();
         if (mode != 2 && ++loopFrames % kThermalCheckFrames == 0) {
             const Clock::time_point t = Clock::now();
             const bool hot = Thermal::Warm();

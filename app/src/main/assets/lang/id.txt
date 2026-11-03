@@ -398,3 +398,54 @@ SGSR	SGSR
 Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's edge-aware upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware upscale in one pass, lighter than FSR Full.	Light menajamkan gambar yang diperbesar dan hampir tanpa biaya. Full menambah upscale FSR1 yang peka tepi: paling tajam, tetapi beberapa ms di GPU HP kecil. SGSR: upscale peka tepi dari Qualcomm dalam satu pass, lebih ringan dari FSR Full.
 Turn Upscaling on to choose.	Nyalakan Upscaling untuk memilih.
 SGSR upscaling option.	Opsi upscaling SGSR.
+All settings	Semua pengaturan
+ sections	 bagian
+In use	Dipakai
+TAP TO OPEN	KETUK UNTUK BUKA
+Stop	Stop
+Stop the game?	Hentikan game?
+The game waiting in the background is closed without saving. Play starts it fresh.	Game yang menunggu di latar ditutup tanpa menyimpan. Main akan memulainya dari awal.
+Paused in background	Dijeda di latar
+The game is paused in the background: Continue goes back to it.	Game dijeda di latar: Lanjutkan kembali ke game.
+Settings are saved as you change them.	Pengaturan langsung tersimpan saat diubah.
+Choose your own ISO or RVZ of the game first.	Pilih dulu ISO atau RVZ game milikmu sendiri.
+Upscaler Off	Upscaler Mati
+Quick switches	Saklar cepat
+Frameskip Auto	Frameskip Auto
+Textures Original	Tekstur Asli
+Textures Sharp	Tekstur Tajam
+Textures Sharpest	Tekstur Paling Tajam
+Custom GPU driver	Driver GPU custom
+Overlay	Overlay
+Cheats on	Cheat aktif
+Check	Cek
+Open	Buka
+Updates are sent by hand for now.	Untuk sekarang update dikirim manual.
+Restart needed	Perlu mulai ulang
+Saved now, applies the next time the game starts.	Sudah tersimpan, berlaku saat game dimulai lagi.
+Switching between Original 4:3 and 16:9 or Fill applies when the game starts again.	Ganti antara Asli 4:3 dan 16:9 atau Penuh berlaku saat game dimulai lagi.
+PAUSED	DIJEDA
+Resume Game	Lanjutkan Game
+Edit Touch Controls	Atur Kontrol Sentuh
+Applies now	Langsung berlaku
+Money set.	Uang sudah diatur.
+With your save loaded, tap Set Now: the money becomes 	Dengan save sudah dimuat, ketuk Atur Sekarang: uang menjadi 
+Skips the logos at start, straight to the save check.	Lewati logo saat mulai, langsung ke cek save.
+this version	versi ini
+New launcher, settings in game and GPU drivers	Launcher baru, pengaturan dalam game, dan driver GPU
+A new upright launcher: Play and the settings in use on the first page, every setting in the tabs below it.	Launcher baru tegak: Main dan pengaturan yang dipakai ada di halaman pertama, semua pengaturan di tab di bawahnya.
+Settings in game: tap the gear at the top left (or press Back). Resolution, upscaler, frameskip, 30 FPS Lock, overlay, texture detail, cheats and touch controls change at once. Settings that need the game to start again are marked in red.	Pengaturan dalam game: ketuk ikon gear di kiri atas (atau tekan Kembali). Resolusi, upscaler, frameskip, Kunci 30 FPS, overlay, detail tekstur, cheat, dan kontrol sentuh langsung berubah. Pengaturan yang perlu game dimulai ulang ditandai merah.
+Stop button in the launcher: closes the game waiting in the background.	Tombol Stop di launcher: menutup game yang menunggu di latar.
+SGSR upscaling option (Graphics > Upscaler).	Opsi upscaling SGSR (Grafis > Upscaler).
+Graphics > GPU Driver: install a custom Vulkan driver .zip (Turnip for Adreno, malisx2 for Mali). If the game does not start with it, it switches back to System.	Grafis > Driver GPU: pasang .zip driver Vulkan custom (Turnip untuk Adreno, malisx2 untuk Mali). Bila game tidak bisa mulai dengannya, kembali ke Sistem.
+Experimental > Renderer: the Vulkan renderer, lighter than the default on some phones.	Eksperimen > Renderer: renderer Vulkan, lebih ringan dari bawaan di sebagian HP.
+The game closed in Story while riding a horse ("Missing translated function").	Game tertutup di Story saat naik kuda ("Missing translated function").
+The game closed on Adreno 610 phones (Poco M3, Redmi 9T) when Dynamic Resolution changed the resolution. It now changes at most every 5 seconds.	Game tertutup di HP Adreno 610 (Poco M3, Redmi 9T) saat Resolusi Dinamis mengganti resolusi. Kini paling cepat berganti tiap 5 detik.
+malisx2 on Mali-G52 showed a black screen.	malisx2 di Mali-G52 menampilkan layar hitam.
+malisx2 on Mali-G52 works, but is not faster than the phone's own driver.	malisx2 di Mali-G52 jalan, tetapi tidak lebih cepat dari driver bawaan HP.
+Quit Game	Keluar Game
+Leave LAN Game	Keluar Game LAN
+Layout	Tata Letak
+Leave LAN	Keluar LAN
+Quit	Keluar
+Changes apply at once, except those marked Restart needed.	Perubahan langsung berlaku, kecuali yang bertanda Perlu mulai ulang.

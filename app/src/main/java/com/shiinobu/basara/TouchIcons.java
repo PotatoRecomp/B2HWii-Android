@@ -1,51 +1,76 @@
 package com.shiinobu.basara;
 
 import android.graphics.Canvas;
-import android.graphics.DashPathEffect;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RadialGradient;
 import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.Typeface;
 
 /**
- * The touch controls' faces ("Ink & Seal"): every control is drawn in an 80x80 box centred on 40,40
- * and scaled onto the screen, ink fill with a paper outline, a vermilion seal mark, and vermilion
- * when held. Alphas are the design's at the default opacity (0.6) and follow the opacity setting.
+ * The touch controls' faces, in two styles on one blue theme (A green, B red, X blue, Y amber):
+ * <ul>
+ * <li>Modern: round buttons with a layered metal ring, a silhouette with a vertical gradient
+ * (TouchGlyphs), a caption inside and the controller letter in a badge.</li>
+ * <li>Classic: no pictures. A large gradient letter with a small caption, a seal dot toward the
+ * outside of the diamond, pill shoulders and a cross D-pad.</li>
+ * </ul>
+ * Every control is drawn in an 80x80 box centred on 40,40 and scaled onto the screen, so the shaders
+ * are made once in box space. Alphas follow the opacity setting; held controls stay clear.
  */
 final class TouchIcons {
-    private static final int INK = 0x0E0F12, INK_INNER = 0x14161B, PAPER = 0xF4F0E6;
-    private static final int SEAL = 0xD03A26, SEAL_BRIGHT = 0xE11D48;
-    private static final float DEFAULT_OPACITY = 0.6f;
+    /** One set of colours and the shaders made from it. */
+    private static final class Palette {
+        final int ring, ringHi, ringLo, fillB, ic2, label;
+        final Shader base, hot, glyph, glyphHeld, letter, letterSmall;
+        Palette(int ring, int ringHi, int ringLo, int fillA, int fillB, int ic1, int ic2, int ic3, int glow, int label) {
+            this.ring = ring;
+            this.ringHi = ringHi;
+            this.ringLo = ringLo;
+            this.fillB = fillB;
+            this.ic2 = ic2;
+            this.label = label;
+            base = new RadialGradient(40f, 31f, 52f, rgb(fillA), rgb(fillB), Shader.TileMode.CLAMP);
+            hot = new RadialGradient(40f, 32f, 27f, argb(0.45f, glow), 0, Shader.TileMode.CLAMP);
+            final int[] stops = {rgb(ic1), rgb(ic2), rgb(ic3)};
+            final float[] at = {0f, 0.55f, 1f};
+            glyph = new LinearGradient(0f, 0f, 0f, TouchGlyphs.BOX, stops, at, Shader.TileMode.CLAMP);
+            glyphHeld = new LinearGradient(0f, 0f, 0f, TouchGlyphs.BOX,
+                    new int[] {rgb(0xFFFFFF), rgb(0xFFFFFF), rgb(ic2)}, new float[] {0f, 0.6f, 1f}, Shader.TileMode.CLAMP);
+            letter = new LinearGradient(0f, 21f, 0f, 52f, stops, at, Shader.TileMode.CLAMP);
+            letterSmall = new LinearGradient(0f, 27f, 0f, 53f, stops, at, Shader.TileMode.CLAMP);
+        }
+    }
 
-    // Face buttons: seal arc and dot on the outer side, the letter.
-    private static final Path A_SEAL = svg("M 64.2 28.5 A 26.5 26.5 0 0 1 64.2 51.5");
-    private static final Path A_GLYPH = svg("M 32.5 50 L 40 29.5 L 47.5 50 M 35.2 43.2 H 44.8");
-    private static final Path B_SEAL = svg("M 51.5 64.2 A 26.5 26.5 0 0 1 28.5 64.2");
-    private static final Path B_GLYPH = svg("M 34 30 V 50 H 42.5 C 45.5 50 47.2 48.2 47.2 45.2 C 47.2 42.2 45.2 40 42 40 "
-            + "H 34 M 34 30 H 41.5 C 44.3 30 46 31.6 46 35 C 46 38.2 44.2 40 41.5 40");
-    private static final Path X_SEAL = svg("M 28.5 15.8 A 26.5 26.5 0 0 1 51.5 15.8");
-    private static final Path X_GLYPH = svg("M 33 30 L 47 50 M 47 30 L 33 50");
-    private static final Path Y_SEAL = svg("M 15.8 32 A 26.5 26.5 0 0 0 15.8 48");
-    private static final Path Y_GLYPH = svg("M 32.5 30 L 40 40.5 L 47.5 30 M 40 40.5 V 50");
+    private static final Palette BLUE = new Palette(0x2F7FE0, 0x8CC4FF, 0x0D2C5C, 0x0F1D33, 0x05090F,
+            0xE6F3FF, 0x4EA4FF, 0x10408A, 0x3C96FF, 0xDCECFF);
+    private static final Palette GREEN = new Palette(0x2FAE5F, 0x8BE3A8, 0x0D4224, 0x10291A, 0x050C08,
+            0xE3FBE9, 0x48D17C, 0x0F6A33, 0x3CD278, 0xD8F7E3);
+    private static final Palette RED = new Palette(0xD8343E, 0xFF8A7A, 0x5E1016, 0x2A1013, 0x0C0607,
+            0xFFE1D8, 0xFF5A4A, 0x8E1620, 0xFF4632, 0xFFE3DC);
+    private static final Palette AMBER = new Palette(0xE0A92A, 0xFFE08A, 0x5A420C, 0x2A2210, 0x0D0A04,
+            0xFFF6D6, 0xF2BE3C, 0x7A5510, 0xFFBE3C, 0xFFF2CC);
 
-    // Shoulders: L and R bevel the outer top corner, ZL and ZR are deeper with a seal rule.
-    private static final Path L_BODY = svg("M 22 21 H 64 A 10 10 0 0 1 74 31 V 49 A 10 10 0 0 1 64 59 H 16 "
-            + "A 10 10 0 0 1 6 49 V 35 Q 6 21 22 21 Z");
-    private static final Path L_RULE = svg("M 22 26.5 H 60");
-    private static final Path L_GLYPH = svg("M 35 32 V 48 H 46");
-    private static final Path R_BODY = svg("M 16 21 H 58 Q 74 21 74 35 V 49 A 10 10 0 0 1 64 59 H 16 "
-            + "A 10 10 0 0 1 6 49 V 31 A 10 10 0 0 1 16 21 Z");
-    private static final Path R_RULE = svg("M 20 26.5 H 58");
-    private static final Path R_GLYPH = svg("M 34 48 V 32 H 42 C 45 32 46.8 33.8 46.8 36.5 C 46.8 39.2 45 41 42 41 "
-            + "H 34 M 41 41 L 46.8 48");
-    private static final Path Z_BODY = svg("M 16 19 H 64 A 8 8 0 0 1 72 27 V 46 A 15 15 0 0 1 57 61 H 23 "
-            + "A 15 15 0 0 1 8 46 V 27 A 8 8 0 0 1 16 19 Z");
-    private static final Path Z_RULE = svg("M 28 24.5 H 52");
-    private static final Path ZL_GLYPH = svg("M 27 33.5 H 38 L 27 47.5 H 38 M 44 33.5 V 47.5 H 53.5");
-    private static final Path ZR_GLYPH = svg("M 25.5 33.5 H 36.5 L 25.5 47.5 H 36.5 M 42 47.5 V 33.5 H 49.5 "
-            + "C 52.2 33.5 54 35.1 54 37.8 C 54 40.3 52.2 42 49.5 42 H 42 M 48.5 42 L 54 47.5");
+    /** A face button's colours (A green, B red, X blue, Y amber); everything else is the theme's. */
+    private static Palette paletteOf(int bit) {
+        switch (bit) {
+            case TouchControlsView.A: return GREEN;
+            case TouchControlsView.B: return RED;
+            case TouchControlsView.Y: return AMBER;
+            default: return BLUE;
+        }
+    }
 
-    // D-pad: one cross, an arm lit per direction, chevrons, and ticks for the diagonals.
-    private static final Path PAD = svg("M 33 6 H 47 A 4 4 0 0 1 51 10 V 29 H 70 A 4 4 0 0 1 74 33 V 47 "
+    /** Button radius in the box: the ring's outer edge. */
+    private static final float R = 38f, D = 2f * R;
+    private static final float WELL = 38f, KNOB = 0.18f * 2f * WELL;
+    /** Classic pills: width over height. */
+    static final float PILL_RATIO = 1.62f;
+
+    // Classic: the D-pad's cross, its arms, chevrons, and the Home outline (24 box).
+    private static final Path CROSS = svg("M 33 6 H 47 A 4 4 0 0 1 51 10 V 29 H 70 A 4 4 0 0 1 74 33 V 47 "
             + "A 4 4 0 0 1 70 51 H 51 V 70 A 4 4 0 0 1 47 74 H 33 A 4 4 0 0 1 29 70 V 51 H 10 "
             + "A 4 4 0 0 1 6 47 V 33 A 4 4 0 0 1 10 29 H 29 V 10 A 4 4 0 0 1 33 6 Z");
     private static final Path ARM_UP = svg("M 33 7 H 47 A 3 3 0 0 1 50 10 V 30 H 30 V 10 A 3 3 0 0 1 33 7 Z");
@@ -56,44 +81,53 @@ final class TouchIcons {
     private static final Path CHEV_DOWN = svg("M 35.5 61 L 40 66.5 L 44.5 61");
     private static final Path CHEV_LEFT = svg("M 19 35.5 L 13.5 40 L 19 44.5");
     private static final Path CHEV_RIGHT = svg("M 61 35.5 L 66.5 40 L 61 44.5");
-    private static final Path DIAG_UL = svg("M 22 25 L 25 22");
-    private static final Path DIAG_UR = svg("M 58 25 L 55 22");
-    private static final Path DIAG_DL = svg("M 22 55 L 25 58");
-    private static final Path DIAG_DR = svg("M 58 55 L 55 58");
-
-    // Sticks: a dashed well with compass ticks, and a cap with its own ticks and a seal dot.
-    private static final Path WELL_TICKS = svg("M 40 4 V 8 M 40 72 V 76 M 4 40 H 8 M 72 40 H 76");
-    private static final Path WELL_CROSS = svg("M 37 40 H 43 M 40 37 V 43");
-    private static final Path CAP_TICKS = svg("M 40 26.5 V 29.5 M 40 50.5 V 53.5 M 26.5 40 H 29.5 M 50.5 40 H 53.5");
-
-    // System buttons.
-    private static final Path MINUS_GLYPH = svg("M 31 40 H 49");
-    private static final Path PLUS_GLYPH = svg("M 31 40 H 49 M 40 31 V 49");
-    private static final Path HOME_GLYPH = svg("M 29.5 40.5 L 40 30.5 L 50.5 40.5 M 33 38.5 V 49.5 H 47 V 38.5");
-    private static final Path GEAR_GLYPH = gear();
-
-    static final float FACE_R = 32f, SYSTEM_R = 23f, HOME_R = 25f, PAD_R = 34f, WELL_R = 34f, CAP_R = 16.5f;
+    private static final Path HOUSE = svg("M 5 11.5 L 12 5 L 19 11.5 M 7.5 10 V 18.5 H 16.5 V 10");
 
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final DashPathEffect dash = new DashPathEffect(new float[] {6f, 4f}, 0f);
-    private float k = 1f;  // opacity relative to the design's
+    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path tri = new Path();
+    private final RectF cell = new RectF();
+    private float opacity = 0.6f;
+
+    private final Shader gloss = new LinearGradient(40f, 2f, 40f, 40f, argb(0.15f, 0xFFFFFF), 0, Shader.TileMode.CLAMP);
+    private final Shader wellShade = new RadialGradient(40f, 40f, WELL, argb(0.05f, 0), argb(0.32f, 0),
+            Shader.TileMode.CLAMP);
+    // Knob shaders are in the knob's own space (centred on 0,0).
+    private final Shader knobShade = new RadialGradient(-0.1f * KNOB, -0.2f * KNOB, 1.4f * KNOB, rgb(0xE6F3FF),
+            rgb(0x4EA4FF), Shader.TileMode.CLAMP);
+    private final Shader knobGlow = new RadialGradient(0f, 0f, 2.2f * KNOB, argb(0.4f, 0x3C96FF), 0, Shader.TileMode.CLAMP);
+    private final Shader knobGlowHeld = new RadialGradient(0f, 0f, 2.4f * KNOB, argb(0.7f, 0x3C96FF), 0,
+            Shader.TileMode.CLAMP);
 
     TouchIcons() {
         fill.setStyle(Paint.Style.FILL);
         line.setStyle(Paint.Style.STROKE);
         line.setStrokeCap(Paint.Cap.ROUND);
         line.setStrokeJoin(Paint.Join.ROUND);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
     }
 
-    void setOpacity(float opacity) { k = opacity / DEFAULT_OPACITY; }
+    void setOpacity(float opacity) { this.opacity = Math.max(0f, Math.min(1f, opacity)); }
 
-    private int idle(int rgb, float alpha) { return color(rgb, alpha * k); }
-    /** Held controls stay clear even at a low opacity setting. */
-    private int held(int rgb, float alpha) { return color(rgb, alpha * Math.max(k, 1f)); }
-    private static int color(int rgb, float alpha) {
-        return (Math.round(Math.max(0f, Math.min(1f, alpha)) * 255) << 24) | (rgb & 0xFFFFFF);
+    private static int rgb(int rgb) { return 0xFF000000 | rgb; }
+    private static int argb(float alpha, int rgb) { return (Math.round(alpha * 255) << 24) | (rgb & 0xFFFFFF); }
+
+    /** Sets a paint's colour at `alpha` of the current opacity. */
+    private void tint(Paint p, int rgb, float alpha, boolean held) {
+        p.setShader(null);
+        p.setColor(rgb(rgb));
+        p.setAlpha(Math.round(255 * Math.max(0f, Math.min(1f, alpha * level(held)))));
     }
+
+    private void shade(Paint p, Shader s, float alpha, boolean held) {
+        p.setColor(0xFFFFFFFF);
+        p.setShader(s);
+        p.setAlpha(Math.round(255 * Math.max(0f, Math.min(1f, alpha * level(held)))));
+    }
+
+    private float level(boolean held) { return held ? Math.max(opacity, 0.95f) : opacity; }
 
     /** Moves the canvas so the 80x80 box sits centred on cx,cy at `unit` pixels per step. */
     private static void enter(Canvas c, float cx, float cy, float unit, boolean down) {
@@ -104,207 +138,281 @@ final class TouchIcons {
         c.translate(-40f, -40f);
     }
 
-    private void body(Canvas c, Path shape, float circleR, boolean down) {
-        fill.setColor(down ? held(SEAL, 0.78f) : idle(INK, 0.45f));
-        line.setColor(down ? held(0xFFFFFF, 1f) : idle(PAPER, 0.85f));
-        line.setStrokeWidth(down ? 2.35f : 1.95f);
-        if (shape != null) {
-            c.drawPath(shape, fill);
-            c.drawPath(shape, line);
+    /** The disc under every round button: fill, held light, glow, gloss and the three-part ring. */
+    private void disc(Canvas c, Palette p, boolean down, boolean hot) {
+        shade(fill, p.base, 1f, down);
+        c.drawCircle(40f, 40f, R, fill);
+        if (down) {
+            tint(fill, 0xFFFFFF, 0.1f, true);
+            c.drawCircle(40f, 40f, R, fill);
+        }
+        if (hot || down) {
+            shade(fill, p.hot, down ? 1.5f : 1f, down);
+            c.drawCircle(40f, 40f, R, fill);
+        }
+        shade(fill, gloss, 1f, down);
+        c.drawCircle(40f, 40f, R, fill);
+        tint(line, down ? 0xFFFFFF : p.ring, 1f, down);
+        line.setStrokeWidth(2.3f);
+        c.drawCircle(40f, 40f, R - 1.15f, line);
+        tint(line, p.ringLo, 1f, down);
+        line.setStrokeWidth(1.7f);
+        c.drawCircle(40f, 40f, R - 3.15f, line);
+        tint(line, p.ringHi, 0.9f, down);
+        line.setStrokeWidth(0.75f);
+        c.drawCircle(40f, 40f, R - 4.4f, line);
+    }
+
+    private void caption(Canvas c, Palette p, String caption, float size, float spacing, boolean down) {
+        text.setTextSize(size);
+        text.setLetterSpacing(spacing);
+        final float fit = 0.74f * D / Math.max(1f, text.measureText(caption));
+        if (fit < 1f) text.setTextSize(size * fit);
+        tint(text, p.label, 1f, down);
+        text.setShadowLayer(1.6f, 0f, 0.8f, argb(0.9f * level(down), 0));
+        c.drawText(caption, 40f, 2f + 0.85f * D - text.descent() * 0.4f, text);
+        text.clearShadowLayer();
+        text.setLetterSpacing(0f);
+    }
+
+    /**
+     * Modern: a round button of radius `r` on screen. `glyph` from TouchGlyphs; `caption` drawn
+     * inside under it (null for none); `key` the controller letter (null for none), in a badge on top,
+     * or under the button when `keyBelow` (the small system buttons); `hot` adds a glow.
+     */
+    void button(Canvas c, int bit, Path glyph, String caption, String key, float cx, float cy, float r,
+            boolean down, boolean hot, boolean keyBelow) {
+        final Palette p = paletteOf(bit);
+        enter(c, cx, cy, r / R, down);
+        disc(c, p, down, hot);
+        final boolean captioned = caption != null;
+        final float size = (captioned ? 0.54f : 0.6f) * D;
+        final float gy = captioned ? 40f - 0.1f * D : 40f;
+        c.save();
+        c.translate(40f - size / 2f, gy - size / 2f);
+        final float k = size / TouchGlyphs.BOX;
+        c.scale(k, k);
+        c.save();
+        c.translate(0f, 1.6f / k);
+        tint(fill, 0, 0.7f, down);
+        c.drawPath(glyph, fill);
+        c.restore();
+        shade(fill, down ? p.glyphHeld : p.glyph, 1f, down);
+        c.drawPath(glyph, fill);
+        c.restore();
+        if (captioned) caption(c, p, caption, 0.13f * D, 0.05f, down);
+        if (key != null) badge(c, p, key, keyBelow, down);
+        c.restore();
+    }
+
+    private void badge(Canvas c, Palette p, String key, boolean below, boolean down) {
+        final float r = (below ? 0.18f : 0.135f) * D;
+        final float y = below ? 2f + D + 0.12f * D - r : 2f - 0.1f * D + r;
+        tint(fill, p.fillB, 1f, down);
+        c.drawCircle(40f, y, r, fill);
+        tint(line, down ? 0xFFFFFF : p.ring, 1f, down);
+        line.setStrokeWidth(1.6f);
+        c.drawCircle(40f, y, r - 0.8f, line);
+        text.setTextSize(0.15f * D);
+        tint(text, 0xF1F2F5, 1f, down);
+        c.drawText(key, 40f, y - (text.descent() + text.ascent()) / 2f, text);
+    }
+
+    /**
+     * Classic: a round button with its letter, a small caption under it (null for none) and, for
+     * the face buttons, a seal dot on the side facing out of the diamond (`seal`: 0 none, 1 right,
+     * 2 bottom, 3 top, 4 left).
+     */
+    void classic(Canvas c, int bit, String letter, String caption, float cx, float cy, float r,
+            boolean down, boolean hot, int seal) {
+        final Palette p = paletteOf(bit);
+        enter(c, cx, cy, r / R, down);
+        disc(c, p, down, hot);
+        tint(line, p.ringHi, 0.28f, down);
+        line.setStrokeWidth(0.8f);
+        c.drawCircle(40f, 40f, 0.7f * R, line);
+        letter(c, p, letter, caption != null ? 37f : 40f, caption != null ? 0.46f * D : 0.5f * D, down);
+        if (caption != null) caption(c, p, caption, 0.11f * D, 0.12f, down);
+        if (seal != 0) {
+            final float dot = 0.035f * D, edge = 2f + 0.085f * D + dot;
+            final float sx = seal == 1 ? 80f - edge : seal == 4 ? edge : 40f;
+            final float sy = seal == 2 ? 80f - 2f - 0.05f * D - dot : seal == 3 ? edge : 40f;
+            tint(fill, p.ringHi, 1f, down);
+            c.drawCircle(sx, sy, dot, fill);
+        }
+        c.restore();
+    }
+
+    /** Classic shoulder: a pill `hw` x `hh` (half sizes) on screen with its letters and caption. */
+    void classicPill(Canvas c, int bit, String letter, String caption, float cx, float cy, float hw, float hh,
+            boolean down, boolean hot) {
+        final Palette p = paletteOf(bit);
+        enter(c, cx, cy, hh / R, down);
+        final float half = R * hw / hh;
+        cell.set(40f - half, 2f, 40f + half, 78f);
+        shade(fill, p.base, 1f, down);
+        c.drawRoundRect(cell, R, R, fill);
+        if (hot || down) {
+            shade(fill, p.hot, down ? 1.5f : 1f, down);
+            c.drawRoundRect(cell, R, R, fill);
+        }
+        shade(fill, gloss, 1f, down);
+        c.drawRoundRect(cell, R, R, fill);
+        tint(line, down ? 0xFFFFFF : p.ring, 1f, down);
+        line.setStrokeWidth(2.3f);
+        cell.inset(1.15f, 1.15f);
+        c.drawRoundRect(cell, R, R, line);
+        tint(line, p.ringLo, 1f, down);
+        line.setStrokeWidth(1.7f);
+        cell.inset(2f, 2f);
+        c.drawRoundRect(cell, R, R, line);
+        tint(line, p.ringHi, 0.28f, down);
+        line.setStrokeWidth(0.8f);
+        cell.inset(8f, 8f);
+        c.drawRoundRect(cell, R, R, line);
+        letter(c, p, letter, caption != null ? 37f : 40f, 0.42f * D, down);
+        if (caption != null) caption(c, p, caption, 0.11f * D, 0.12f, down);
+        c.restore();
+    }
+
+    /** Classic −, + (a letter), Home (an outline) and the gear (its glyph), without captions. */
+    void classicSystem(Canvas c, int bit, String letter, Path glyph, float cx, float cy, float r, boolean down) {
+        final Palette p = paletteOf(bit);
+        enter(c, cx, cy, r / R, down);
+        disc(c, p, down, false);
+        if (bit == TouchControlsView.HOME) {
+            c.save();
+            c.translate(40f - 0.26f * D, 40f - 0.26f * D);
+            c.scale(0.52f * D / 24f, 0.52f * D / 24f);
+            line.setShader(null);
+            line.setColor(0xFFFFFFFF);
+            line.setShader(p.letterSmall);
+            line.setAlpha(Math.round(255 * level(down)));
+            line.setStrokeWidth(2.2f);
+            c.drawPath(HOUSE, line);
+            line.setShader(null);
+            c.restore();
+        } else if (glyph != null) {
+            final float size = 0.52f * D, k = size / TouchGlyphs.BOX;
+            c.save();
+            c.translate(40f - size / 2f, 40f - size / 2f);
+            c.scale(k, k);
+            shade(fill, down ? p.glyphHeld : p.glyph, 1f, down);
+            c.drawPath(glyph, fill);
+            c.restore();
         } else {
-            c.drawCircle(40, 40, circleR, fill);
-            c.drawCircle(40, 40, circleR, line);
-        }
-    }
-
-    private void dim(Canvas c, Path p, float circleR, boolean down) {
-        line.setColor(down ? held(0xFFFFFF, 0.8f) : idle(PAPER, 0.32f));
-        line.setStrokeWidth(1.35f);
-        if (p != null) c.drawPath(p, line);
-        else c.drawCircle(40, 40, circleR, line);
-    }
-
-    private void glyph(Canvas c, Path p, boolean down, float width) {
-        line.setColor(down ? held(0xFFFFFF, 1f) : idle(PAPER, 0.92f));
-        line.setStrokeWidth(down ? width + 0.3f : width);
-        c.drawPath(p, line);
-    }
-
-    private void seal(Canvas c, Path p, boolean down, float width) {
-        line.setColor(down ? held(0xFFFFFF, 1f) : idle(SEAL, 0.88f));
-        line.setStrokeWidth(width);
-        c.drawPath(p, line);
-    }
-
-    private void sealDot(Canvas c, float x, float y, float r, boolean down) {
-        fill.setColor(down ? held(0xFFFFFF, 1f) : idle(SEAL, 0.9f));
-        c.drawCircle(x, y, r, fill);
-    }
-
-    /** A, B, X or Y, `r` = the button's radius on screen. */
-    void face(Canvas c, int which, float cx, float cy, float r, boolean down) {
-        enter(c, cx, cy, r / FACE_R, down);
-        body(c, null, FACE_R, down);
-        dim(c, null, 26.5f, down);
-        switch (which) {
-            case TouchControlsView.A:
-                seal(c, A_SEAL, down, 2.1f);
-                sealDot(c, 68.5f, 40f, 1.8f, down);
-                glyph(c, A_GLYPH, down, 2.2f);
-                break;
-            case TouchControlsView.B:
-                seal(c, B_SEAL, down, 2.1f);
-                sealDot(c, 40f, 68.5f, 1.8f, down);
-                glyph(c, B_GLYPH, down, 2.2f);
-                break;
-            case TouchControlsView.X:
-                seal(c, X_SEAL, down, 2.1f);
-                sealDot(c, 40f, 11.5f, 1.8f, down);
-                glyph(c, X_GLYPH, down, 2.2f);
-                break;
-            default:
-                seal(c, Y_SEAL, down, 2.1f);
-                sealDot(c, 11.5f, 40f, 1.8f, down);
-                glyph(c, Y_GLYPH, down, 2.2f);
-                break;
+            letter(c, p, letter, 40f, 0.56f * D, down);
         }
         c.restore();
     }
 
-    /** L, R, ZL or ZR inside the pill's box (half width `hw`, half height `hh`). */
-    void shoulder(Canvas c, int which, float cx, float cy, float hw, float hh, boolean down) {
-        // The shapes span 68 x 42 steps; fit the box without stretching the strokes.
-        enter(c, cx, cy, Math.min(2f * hw / 68f, 2f * hh / 42f), down);
-        switch (which) {
-            case TouchControlsView.L:
-                body(c, L_BODY, 0, down);
-                dim(c, L_RULE, 0, down);
-                glyph(c, L_GLYPH, down, 2.2f);
-                break;
-            case TouchControlsView.R:
-                body(c, R_BODY, 0, down);
-                dim(c, R_RULE, 0, down);
-                glyph(c, R_GLYPH, down, 2.2f);
-                break;
-            default:
-                body(c, Z_BODY, 0, down);
-                seal(c, Z_RULE, down, 2.1f);
-                glyph(c, which == TouchControlsView.ZL ? ZL_GLYPH : ZR_GLYPH, down, 2.2f);
-                break;
-        }
+    private void letter(Canvas c, Palette p, String letter, float centreY, float size, boolean down) {
+        text.setTextSize(size);
+        final float y = centreY - (text.descent() + text.ascent()) / 2f;
+        tint(text, 0, 0.75f, down);
+        c.drawText(letter, 40f, y + 1.8f, text);
+        if (down) tint(text, 0xFFFFFF, 1f, true);
+        else shade(text, p.letter, 1f, false);
+        c.drawText(letter, 40f, y, text);
+        text.setShader(null);
+    }
+
+    /** A stick ("minimal"): a thin ring over a clear well, a small lit knob moved by vx, vy (-1..1). */
+    void stick(Canvas c, float cx, float cy, float r, float vx, float vy, boolean active) {
+        enter(c, cx, cy, r / WELL, false);
+        shade(fill, wellShade, 1f, active);
+        c.drawCircle(40f, 40f, WELL, fill);
+        tint(line, active ? BLUE.ringHi : BLUE.ring, 1f, active);
+        line.setStrokeWidth(active ? 2.4f : 2f);
+        c.drawCircle(40f, 40f, WELL - 1.2f, line);
+        final float travel = WELL - KNOB;
+        c.translate(40f + vx * travel, 40f + vy * travel);
+        shade(fill, active ? knobGlowHeld : knobGlow, 1f, active);
+        c.drawCircle(0f, 0f, 2.4f * KNOB, fill);
+        tint(fill, 0, 0.35f, active);
+        c.drawCircle(0f, 0f, KNOB + 0.03f * 2f * WELL, fill);
+        shade(fill, knobShade, 1f, active);
+        c.drawCircle(0f, 0f, KNOB, fill);
         c.restore();
     }
 
-    /** −, HOME, + or the settings gear, `r` = the button's radius on screen. */
-    void system(Canvas c, int which, float cx, float cy, float r, boolean down) {
-        final boolean home = which == TouchControlsView.HOME;
-        final float own = home ? HOME_R : SYSTEM_R;
-        enter(c, cx, cy, r / own, down);
-        body(c, null, own, down);
-        if (home) {
-            line.setColor(down ? held(0xFFFFFF, 1f) : idle(SEAL, 0.88f));
-            line.setStrokeWidth(1.4f);
-            c.drawCircle(40, 40, 20f, line);
-            glyph(c, HOME_GLYPH, down, 2.0f);
-            sealDot(c, 40f, 43f, 1.8f, down);
-        } else {
-            dim(c, null, 18.5f, down);
-            glyph(c, which == TouchControlsView.MINUS ? MINUS_GLYPH
-                    : which == TouchControlsView.PLUS ? PLUS_GLYPH : GEAR_GLYPH, down, 2.2f);
-            if (which == TouchControlsView.MENU) sealDot(c, 40f, 40f, 1.8f, down);
-        }
-        c.restore();
-    }
-
-    /** The D-pad, `r` = half its width on screen; `held` = the direction bits down now. */
+    /** Modern D-pad: four keys, `r` = half its width on screen; `heldBits` = the directions down. */
     void pad(Canvas c, float cx, float cy, float r, int heldBits) {
-        enter(c, cx, cy, r / PAD_R, false);
-        fill.setColor(idle(INK, 0.45f));
-        c.drawPath(PAD, fill);
+        enter(c, cx, cy, r / R, false);
+        final float s = 0.34f * D, round = 0.18f * s;
+        key(c, 2f + 0.33f * D, 2f, s, round, 0, (heldBits & TouchControlsView.UP) != 0);
+        key(c, 2f + 0.33f * D, 2f + D - s, s, round, 1, (heldBits & TouchControlsView.DOWN) != 0);
+        key(c, 2f, 2f + 0.33f * D, s, round, 2, (heldBits & TouchControlsView.LEFT) != 0);
+        key(c, 2f + D - s, 2f + 0.33f * D, s, round, 3, (heldBits & TouchControlsView.RIGHT) != 0);
+        c.restore();
+    }
+
+    private void key(Canvas c, float left, float top, float s, float round, int dir, boolean lit) {
+        final Palette p = BLUE;
+        cell.set(left, top, left + s, top + s);
+        shade(fill, p.base, 1f, lit);
+        c.drawRoundRect(cell, round, round, fill);
+        if (lit) {
+            tint(fill, 0xFFFFFF, 0.22f, true);
+            c.drawRoundRect(cell, round, round, fill);
+        }
+        tint(line, lit ? 0xFFFFFF : p.ring, 1f, lit);
+        line.setStrokeWidth(1.6f);
+        c.drawRoundRect(cell, round, round, line);
+        final float mx = cell.centerX(), my = cell.centerY(), a = 0.055f * D;
+        tri.reset();
+        switch (dir) {
+            case 0: tri.moveTo(mx, my - a * 0.8f); tri.lineTo(mx + a, my + a * 0.6f); tri.lineTo(mx - a, my + a * 0.6f); break;
+            case 1: tri.moveTo(mx, my + a * 0.8f); tri.lineTo(mx - a, my - a * 0.6f); tri.lineTo(mx + a, my - a * 0.6f); break;
+            case 2: tri.moveTo(mx - a * 0.8f, my); tri.lineTo(mx + a * 0.6f, my - a); tri.lineTo(mx + a * 0.6f, my + a); break;
+            default: tri.moveTo(mx + a * 0.8f, my); tri.lineTo(mx - a * 0.6f, my + a); tri.lineTo(mx - a * 0.6f, my - a); break;
+        }
+        tri.close();
+        tint(fill, lit ? 0xFFFFFF : p.ic2, 1f, lit);
+        c.drawPath(tri, fill);
+    }
+
+    /** Classic D-pad: one cross, the held arms lit, chevrons and a centre dot. */
+    void classicPad(Canvas c, float cx, float cy, float r, int heldBits) {
+        final Palette p = BLUE;
+        enter(c, cx, cy, r / 34f, false);
+        shade(fill, p.base, 1f, false);
+        c.drawPath(CROSS, fill);
         final boolean up = (heldBits & TouchControlsView.UP) != 0, down = (heldBits & TouchControlsView.DOWN) != 0;
         final boolean left = (heldBits & TouchControlsView.LEFT) != 0;
         final boolean right = (heldBits & TouchControlsView.RIGHT) != 0;
-        fill.setColor(held(SEAL, 0.78f));
+        tint(fill, 0xFFFFFF, 0.22f, true);
         if (up) c.drawPath(ARM_UP, fill);
         if (down) c.drawPath(ARM_DOWN, fill);
         if (left) c.drawPath(ARM_LEFT, fill);
         if (right) c.drawPath(ARM_RIGHT, fill);
-        line.setColor(idle(PAPER, 0.85f));
-        line.setStrokeWidth(1.95f);
-        c.drawPath(PAD, line);
-        diagonal(c, DIAG_UL, up && left);
-        diagonal(c, DIAG_UR, up && right);
-        diagonal(c, DIAG_DL, down && left);
-        diagonal(c, DIAG_DR, down && right);
-        dim(c, null, 5.5f, false);
-        sealDot(c, 40f, 40f, 2.2f, false);
-        chevron(c, CHEV_UP, up);
-        chevron(c, CHEV_DOWN, down);
-        chevron(c, CHEV_LEFT, left);
-        chevron(c, CHEV_RIGHT, right);
+        tint(line, p.ring, 1f, false);
+        line.setStrokeWidth(2f);
+        c.drawPath(CROSS, line);
+        c.save();
+        c.translate(40f, 40f);
+        c.scale(0.9f, 0.9f);
+        c.translate(-40f, -40f);
+        tint(line, p.ringHi, 0.35f, false);
+        line.setStrokeWidth(0.7f);
+        c.drawPath(CROSS, line);
+        c.restore();
+        chevron(c, p, CHEV_UP, up);
+        chevron(c, p, CHEV_DOWN, down);
+        chevron(c, p, CHEV_LEFT, left);
+        chevron(c, p, CHEV_RIGHT, right);
+        tint(fill, p.ringHi, 1f, false);
+        c.drawCircle(40f, 40f, 3f, fill);
         c.restore();
     }
 
-    private void diagonal(Canvas c, Path p, boolean lit) {
-        line.setColor(lit ? held(SEAL_BRIGHT, 1f) : idle(PAPER, 0.32f));
-        line.setStrokeWidth(lit ? 2.8f : 1.6f);
-        c.drawPath(p, line);
+    private void chevron(Canvas c, Palette p, Path path, boolean lit) {
+        tint(line, lit ? 0xFFFFFF : p.ic2, 1f, lit);
+        line.setStrokeWidth(lit ? 2.8f : 2.4f);
+        c.drawPath(path, line);
     }
 
-    private void chevron(Canvas c, Path p, boolean lit) {
-        line.setColor(lit ? held(0xFFFFFF, 1f) : idle(PAPER, 0.92f));
-        line.setStrokeWidth(lit ? 2.6f : 2.1f);
-        c.drawPath(p, line);
-    }
-
-    /** A stick: the well of radius `r` on screen, the cap moved by `vx`,`vy` (-1..1). */
-    void stick(Canvas c, float cx, float cy, float r, float vx, float vy, boolean active) {
-        enter(c, cx, cy, r / WELL_R, false);
-        fill.setColor(idle(INK_INNER, 0.32f));
-        c.drawCircle(40, 40, WELL_R, fill);
-        line.setPathEffect(dash);
-        dim(c, null, WELL_R, false);
-        line.setPathEffect(null);
-        dim(c, WELL_TICKS, 0, false);
-        dim(c, WELL_CROSS, 0, false);
-        final float travel = WELL_R - CAP_R;
-        final float kx = 40f + vx * travel, ky = 40f + vy * travel;
-        if (active) {
-            line.setColor(held(SEAL_BRIGHT, 1f));
-            line.setStrokeWidth(2.2f);
-            c.drawLine(40, 40, kx, ky, line);
-        }
-        c.translate(kx - 40f, ky - 40f);
-        fill.setColor(active ? held(SEAL, 0.78f) : idle(INK, 0.45f));
-        line.setColor(active ? held(0xFFFFFF, 1f) : idle(PAPER, 0.85f));
-        line.setStrokeWidth(active ? 2.35f : 1.95f);
-        c.drawCircle(40, 40, CAP_R, fill);
-        c.drawCircle(40, 40, CAP_R, line);
-        dim(c, null, 10.2f, active);
-        dim(c, CAP_TICKS, 0, active);
-        sealDot(c, 40f, 40f, 2.2f, active);
-        c.restore();
-    }
-
-    /** A cog of eight teeth round a hole, in the 80x80 box. */
-    private static Path gear() {
-        final Path p = new Path();
-        final float outer = 12.5f, inner = 9f;
-        final int teeth = 8;
-        for (int t = 0; t < teeth * 4; ++t) {
-            final double angle = Math.PI * 2 * t / (teeth * 4) - Math.PI / (teeth * 4);
-            final int phase = t % 4;
-            final float radius = phase == 1 || phase == 2 ? outer : inner;
-            final float x = 40f + (float) Math.cos(angle) * radius, y = 40f + (float) Math.sin(angle) * radius;
-            if (t == 0) p.moveTo(x, y);
-            else p.lineTo(x, y);
-        }
-        p.close();
-        p.addCircle(40f, 40f, 4.2f, Path.Direction.CW);
-        return p;
-    }
-
-    /** SVG path data, absolute commands only (M L H V C Q A Z), as used above. */
+    /** SVG path data, absolute commands only (M L H V C Q A Z), as used by TouchGlyphs. */
     static Path svg(String data) {
         final Path p = new Path();
         final String[] tok = data.trim().replace(",", " ").split("\\s+");
@@ -372,7 +480,7 @@ final class TouchIcons {
 
     private static float f(String s) { return Float.parseFloat(s); }
 
-    /** SVG endpoint arc to Path.arcTo (circles and unrotated ellipses, all the icons use). */
+    /** SVG endpoint arc to Path.arcTo (circles and unrotated ellipses). */
     private static void arc(Path p, float x0, float y0, float rx, float ry, float rotation,
             boolean large, boolean sweep, float x1, float y1) {
         if (rx == 0 || ry == 0) { p.lineTo(x1, y1); return; }

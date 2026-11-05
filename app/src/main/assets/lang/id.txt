@@ -180,7 +180,7 @@ A short buzz when a touch button is pressed.	Getar singkat saat tombol sentuh di
 Touch camera	Kamera sentuh
 Invert Camera	Balik Kamera
 On: the scene follows the finger (drag right, the view turns left). Off: drag right, the view turns right.	On: pemandangan ikut jari (geser kanan, pandangan berputar ke kiri). Off: geser kanan, pandangan berputar ke kanan.
-Drag on the empty right side of the screen to turn the camera.	Seret di sisi kanan layar yang kosong untuk memutar kamera.
+Drag on the empty right side of the screen to turn the camera. The right stick is hidden while this is on.	Seret di sisi kanan layar yang kosong untuk memutar kamera. Stik kanan disembunyikan selama ini aktif.
 Tilt	Miring
 Turn the phone like a steering wheel.	Putar HP seperti setir.
 Shake	Guncang
@@ -643,3 +643,38 @@ For screen recordings: some phones play the game's sound on a fast path that rec
 Texture Detail now starts at Original, like most phone emulators: less GPU work on every phone. Sharp is one tap away in Graphics.	Detail Tekstur kini mulai dari Asli, seperti kebanyakan emulator HP: kerja GPU lebih ringan di semua HP. Tajam tinggal satu ketukan di Grafis.
 New Recording-Friendly Audio (System): on phones whose screen recordings come out silent, keeps the game's sound where the recording hears it.	Baru: Audio Ramah Rekaman (Sistem): di HP yang rekaman layarnya bisu, menjaga suara game tetap terekam.
 Phones with less than 4.5 GB of RAM keep a smaller cache of HD and custom textures, so the system is less likely to close the game.	HP dengan RAM di bawah 4,5 GB menyimpan cache tekstur HD dan custom yang lebih kecil, jadi sistem lebih jarang menutup game.
+The Low-End Preset also turns on the Performance Overlay with only the FPS counter, so you see what the preset gives. It can be turned off or changed while the preset is on.	Preset Low-End kini juga menyalakan Overlay Performa dengan penghitung FPS saja, supaya kamu bisa melihat hasil preset. Overlay tetap bisa dimatikan atau diubah selama preset aktif.
+Phones whose GPU the default renderer cannot use (Adreno 610, such as the Redmi Pad SE) closed as soon as the game started. The game now switches to the Vulkan renderer by itself.	HP yang GPU-nya tidak bisa dipakai renderer bawaan (Adreno 610, seperti Redmi Pad SE) keluar sendiri begitu game dimulai. Kini game otomatis beralih ke renderer Vulkan.
+The Low-End Preset is now offered on mid-low phones too (Helio G99, Mali-G57 MC2/MC3, Snapdragon 845, and 4 GB phones): Basara arts and busy battles hold their speed better.	Preset Low-End kini juga ditawarkan di HP menengah-bawah (Helio G99, Mali-G57 MC2/MC3, Snapdragon 845, dan HP RAM 4 GB): basara dan battle ramai lebih stabil kecepatannya.
+The picture could freeze while the game and its sound went on (seen on Adreno 616 with Turnip, when the resolution changed). The screen now recovers by itself within about two seconds.	Gambar bisa macet sementara game dan suaranya tetap jalan (terlihat di Adreno 616 dengan Turnip, saat resolusi berubah). Kini layar pulih sendiri dalam sekitar dua detik.
+Left Stick	Stik Kiri
+Right Stick	Stik Kanan
+Edit Layout	Edit Tata Letak
+Drag to move · Pinch to resize	Seret untuk memindah · Cubit untuk ubah ukuran
+Size	Ukuran
+Opacity	Transparansi
+Reset Control	Reset Kontrol
+Reset All	Reset Semua
+All Controls	Semua Kontrol
+Left Stick: Fixed	Stik Kiri: Tetap
+Left Stick: Floating	Stik Kiri: Mengambang
+Move panel	Pindahkan panel
+Button Style	Gaya Tombol
+Modern: pictures for what each button does. Classic: the controller's letters.	Modern: gambar sesuai fungsi tiap tombol. Classic: huruf tombol kontroler.
+First release, new touch controls	Rilis pertama, kontrol sentuh baru
+New touch controls in two styles (Settings > Controls > Button Style): Modern shows a picture for what each button does, Classic shows the controller's letters. Blue, with A green, B red, X blue and Y amber.	Kontrol sentuh baru dengan dua gaya (Pengaturan > Kontrol > Gaya Tombol): Modern menampilkan gambar sesuai fungsi tiap tombol, Classic menampilkan huruf tombol kontroler. Warna biru, dengan A hijau, B merah, X biru, dan Y kuning.
+A new layout editor (Back > Layout): the game pauses and dims, every control moves on its own (A, B, X and Y too), and its size goes from 50% to 200% with the slider, the - and + buttons or a pinch. Opacity, the left stick's mode, Reset and Cancel are on the same panel, and controls snap to the centre lines and to each other.	Editor tata letak baru (Kembali > Layout): game dijeda dan digelapkan, tiap kontrol bisa dipindah sendiri (termasuk A, B, X, dan Y), dan ukurannya 50% sampai 200% lewat slider, tombol - dan +, atau cubit. Transparansi, mode stik kiri, Reset, dan Batal ada di panel yang sama, dan kontrol menempel ke garis tengah dan ke kontrol lain.
+-, the menu gear, Home and + sit in one row at the bottom centre.	-, gear menu, Home, dan + kini berjejer di tengah bawah.
+The right stick hides while Touch camera is on, and comes back when it is off. Touch camera is now off by default.	Stik kanan disembunyikan selama Kamera sentuh aktif, dan muncul lagi saat dimatikan. Kamera sentuh kini mati secara bawaan.
+Dynamic Resolution with the 30 FPS Lock lowered the picture down to half for no reason (it measured the GPU against 60 fps). The picture now stays sharp while the game holds 30 fps.	Dynamic Resolution dengan 30 FPS Lock menurunkan gambar sampai setengah tanpa alasan (GPU diukur terhadap 60 fps). Kini gambar tetap tajam selama game bertahan di 30 fps.
+Adreno 610 with the phone's own driver (Redmi Pad SE): use Turnip from Settings > Graphics > GPU Driver.	Adreno 610 dengan driver bawaan HP (Redmi Pad SE): pakai Turnip dari Pengaturan > Grafis > GPU Driver.
+The whole game runs on Android, from boot through Story battles, with sound, saving and loading. The game's code is recompiled for the phone ahead of time: nothing is emulated.	Seluruh game jalan di Android, dari awal sampai pertempuran Story, lengkap dengan suara, simpan, dan muat. Kode game dikompilasi ulang untuk HP sebelumnya: tidak ada yang diemulasikan.
+Load your own disc dump (.iso or .rvz, Wii NTSC-J RBSJ08) straight from the phone.	Muat dump disc milikmu sendiri (.iso atau .rvz, Wii NTSC-J RBSJ08) langsung dari HP.
+Runs on most phones: the Low-End Preset sets the lightest settings in one tap, with Display Resolution, Dynamic Resolution, Frameskip, the 30 FPS Lock, GX Thread, Thermal Control and Sustained Performance for the rest.	Jalan di kebanyakan HP: Low-End Preset memasang setelan paling ringan dalam satu ketukan, ditambah Display Resolution, Dynamic Resolution, Frameskip, 30 FPS Lock, GX Thread, Thermal Control, dan Sustained Performance.
+A sharper picture on stronger phones: render resolution from 0.5x to 4x, FSR1 and SGSR upscaling, HD Textures and custom texture packs (.png or .dds).	Gambar lebih tajam di HP kuat: resolusi render 0.5x sampai 4x, upscaling FSR1 dan SGSR, HD Textures, dan paket tekstur kustom (.png atau .dds).
+Touch controls in two styles, Modern (a picture for each button) or Classic (the controller's letters), and a layout editor that pauses the game: move every button on its own and size it from 50% to 200%. Touch camera, gamepads, tilt and shake work too.	Kontrol sentuh dengan dua gaya, Modern (gambar tiap tombol) atau Classic (huruf tombol kontroler), dan editor tata letak yang menjeda game: pindahkan tiap tombol sendiri-sendiri dan atur ukurannya 50% sampai 200%. Kamera sentuh, gamepad, tilt, dan guncang juga bisa dipakai.
+Clean sound without crackle on slow phones, and Recording-Friendly Audio for screen recordings.	Suara bersih tanpa kresek di HP lambat, dan Recording-Friendly Audio untuk rekaman layar.
+Two renderers and custom GPU drivers (Turnip for Adreno, malisx2 for Mali).	Dua renderer dan driver GPU kustom (Turnip untuk Adreno, malisx2 untuk Mali).
+Settings in the launcher and in game, cheats, save backup and import, Share Log for bug reports, English and Indonesian.	Pengaturan di launcher dan di dalam game, cheat, backup dan impor save, Share Log untuk laporan bug, bahasa Inggris dan Indonesia.
+The first release	Rilis pertama
+Fill Screen on a phone wider than 16:9: the HUD, text and menus keep their shape in the middle instead of stretching to the edges. The 3D picture still fills the screen.	Fill Screen di HP yang lebih lebar dari 16:9: HUD, teks, dan menu tetap proporsional di tengah, tidak ditarik ke pinggir. Gambar 3D tetap memenuhi layar.

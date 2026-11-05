@@ -91,17 +91,20 @@ final class AppSettings {
     // --- Low-End preset -----------------------------------------------------------------------------
     /** Every setting the Low-End preset may change; what they were before is kept for Undo. */
     static final String[] LOW_END_KEYS = {"display_lines", "resolution_scale", "texture_filter", "fsr_on",
-        "frameskip", "dynamic_resolution", "hd_textures", "show_fps"};
+        "frameskip", "dynamic_resolution", "hd_textures", "show_fps", "overlay_items", "frame_graph"};
+    /** Preset keys the player may still change while it is on. */
+    private static final java.util.Set<String> LOW_END_FREE = new java.util.HashSet<>(java.util.Arrays.asList(
+            "resolution_scale", "show_fps", "overlay_items", "frame_graph"));
 
     boolean lowEndApplied() { return prefs.contains("low_end_backup"); }
 
     /**
      * A setting the Low-End preset holds while it is on: it still has the preset's value, so it cannot be
      * changed by hand (a key the preset left alone, like V-Sync the player had set, stays free). Render
-     * Resolution is never held.
+     * Resolution and the performance overlay are never held (LOW_END_FREE).
      */
     boolean lowEndHolds(String key) {
-        if (!lowEndApplied() || key.equals("resolution_scale")) return false;
+        if (!lowEndApplied() || LOW_END_FREE.contains(key)) return false;
         final Object want = DeviceProfile.lowEndValues(gpuName()).get(key);
         return want != null && want.equals(prefs.getAll().get(key));
     }
@@ -123,6 +126,26 @@ final class AppSettings {
             else if (v instanceof Float) e.putFloat(entry.getKey(), (Float) v);
         }
         e.commit();
+    }
+
+    /**
+     * A Low-End preset applied by an older build (its backup has no overlay_items) gets the overlay keys the
+     * preset now sets, once; their old values join the backup so Undo still puts them back.
+     */
+    void upgradeLowEnd() {
+        final String backup = prefs.getString("low_end_backup", null);
+        if (backup == null || backup.contains("overlay_items=")) return;
+        final java.util.Map<String, ?> all = prefs.getAll();
+        final StringBuilder more = new StringBuilder(backup);
+        if (more.length() > 0 && more.charAt(more.length() - 1) != '\n') more.append('\n');
+        for (String key : new String[] {"overlay_items", "frame_graph"}) {
+            final Object v = all.get(key);
+            final String type = v instanceof Boolean ? "b" : v instanceof Integer ? "i" : "-";
+            more.append(key).append('=').append(type).append(':').append(v == null ? "" : v).append('\n');
+        }
+        prefs.edit().putString("low_end_backup", more.toString())
+                .putBoolean("show_fps", true).putInt("overlay_items", OVERLAY_FPS).putBoolean("frame_graph", false)
+                .commit();
     }
 
     /** Puts back the settings from before the Low-End preset. */
@@ -238,7 +261,10 @@ final class AppSettings {
 
     boolean haptics() { return prefs.getBoolean("haptics", true); }
     void setHaptics(boolean on) { prefs.edit().putBoolean("haptics", on).commit(); }
-    boolean touchCamera() { return prefs.getBoolean("touch_camera", true); }
+    boolean touchCamera() { return prefs.getBoolean("touch_camera", false); }
+    /** TouchControlsView.STYLE_MODERN or STYLE_CLASSIC. */
+    int touchStyle() { return prefs.getInt("touch_style", TouchControlsView.STYLE_MODERN); }
+    void setTouchStyle(int style) { prefs.edit().putInt("touch_style", style).commit(); }
     void setTouchCamera(boolean on) { prefs.edit().putBoolean("touch_camera", on).commit(); }
     /** Off: a drag to the right turns the view to the right. On (default): the scene follows the finger. */
     boolean invertCamera() { return prefs.getBoolean("invert_camera", true); }

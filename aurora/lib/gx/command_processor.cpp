@@ -458,6 +458,9 @@ static void apply_xf_viewport() {
 
 // NSMBW: the screen's aspect while the game's view is widened past 16:9 (0 = off). See below.
 std::atomic<float> g_widePerspectiveAspect{0.0f};
+// Basara: squeeze screen-sized 2D back to 16:9 while the picture fills a wider screen (see below).
+std::atomic<bool> g_fill2D{false};
+static const bool g_logOrtho = std::getenv("BASARA_LOG_ORTHO") != nullptr;
 
 static void apply_xf_projection() {
   const auto& raw = g_gxState.xfProjection;
@@ -475,6 +478,25 @@ static void apply_xf_projection() {
     const bool screenSized = g_gxState.projType != GX_ORTHOGRAPHIC || 2.0f / raw[2] > 150.0f;
     if (aspect > 1.68f && aspect < 1.88f && screenSized) {
       widen = aspect / wide;
+    }
+  }
+  // Basara: its 2D (HUD, text, menus) is drawn with screen-sized orthographic views made for the
+  // Wii's anamorphic 16:9 (a 4:3-shaped view the TV stretched). Filling a screen wider than 16:9
+  // stretches it further; with Fill 2D on it is squeezed back to 16:9 around the centre instead.
+  if (wide > 0.0f && widen == 1.0f && g_fill2D.load(std::memory_order_relaxed) &&
+      g_gxState.projType == GX_ORTHOGRAPHIC && raw[0] != 0.0f && raw[2] != 0.0f && 2.0f / std::fabs(raw[2]) > 150.0f &&
+      wide > 16.0f / 9.0f + 0.01f) {
+    widen = (16.0f / 9.0f) / wide;
+  }
+  if (g_logOrtho && g_gxState.projType == GX_ORTHOGRAPHIC) {
+    static std::mutex s_lock;
+    static std::vector<std::array<float, 4>> s_seen;
+    std::lock_guard<std::mutex> lock(s_lock);
+    const std::array<float, 4> key{raw[0], raw[1], raw[2], raw[3]};
+    if (s_seen.size() < 64 && std::find(s_seen.begin(), s_seen.end(), key) == s_seen.end()) {
+      s_seen.push_back(key);
+      std::fprintf(stderr, "[gx] ortho: %.0f x %.0f units (x scale %g offset %g, y scale %g offset %g), widen %.3f\n",
+                   2.0f / std::fabs(raw[0]), 2.0f / std::fabs(raw[2]), raw[0], raw[1], raw[2], raw[3], widen);
     }
   }
   proj.m0[0] = raw[0] * widen;
@@ -2761,6 +2783,10 @@ extern "C" void AuroraTakeGxStats(uint64_t* processNanos, uint64_t* lockNanos, u
   *processNanos = aurora::gx::fifo::g_statProcessNanos.exchange(0, std::memory_order_relaxed);
   *lockNanos = aurora::gx::fifo::g_statLockNanos.exchange(0, std::memory_order_relaxed);
   *draws = aurora::gx::fifo::g_statDraws.exchange(0, std::memory_order_relaxed);
+}
+
+extern "C" void AuroraSetFill2D(bool on) {
+  aurora::gx::fifo::g_fill2D.store(on, std::memory_order_relaxed);
 }
 
 extern "C" void AuroraSetWidePerspectiveAspect(float aspect) {

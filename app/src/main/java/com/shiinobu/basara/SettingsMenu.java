@@ -35,20 +35,17 @@ final class SettingsMenu {
     static int icon(int section) { return ICONS[section]; }
     /** Sections a player should know are risky (warning colour on their tab). */
     static boolean risky(int section) { return section == CHEATS; }
+    /** A tab shown greyed out that cannot be opened: Cheats in a build without them (-PbasaraCheats). */
+    static boolean disabled(int section) { return section == CHEATS && !BuildConfig.CHEATS; }
 
-    /** The launcher: everything, with Cheats only in a build that has them, and System last. */
+    /** The launcher: everything, System last. Cheats is listed in every build, greyed out without BuildConfig.CHEATS. */
     static int[] launcherSections() {
-        return BuildConfig.CHEATS
-                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS,
-                        SYSTEM}
-                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, SYSTEM};
+        return new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, SYSTEM};
     }
 
     /** The game: no save import (it would close the game) and no launcher things. */
     static int[] gameSections() {
-        return BuildConfig.CHEATS
-                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, CHEATS}
-                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS};
+        return new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, CHEATS};
     }
 
     /** The launcher's own rows for System (game file, updates). */
@@ -623,7 +620,7 @@ final class SettingsMenu {
                 .show();
     }
 
-    /** Only in a build with cheats (BuildConfig.CHEATS); applied at once in the game. */
+    /** Only opened in a build with cheats (BuildConfig.CHEATS); applied at once in the game. */
     private void showCheats() {
         rows.addView(Sheet.warningBox(activity, Tr.t("Cheats"),
                 Tr.t("They change your save: money and anything bought with it stay after the game saves. Back up "
@@ -697,6 +694,9 @@ final class SettingsMenu {
         final int opacity = Math.max(0, Math.min(4, Math.round(settings.touchOpacity() * 5f) - 1));
         choiceRow(Tr.t("Touch Control Opacity"), Tr.t("How solid the controls look over the game."), opacities, opacity,
                 settings.touchControls(), which -> settings.setTouchOpacity((which + 1) / 5f));
+        choiceRow(Tr.t("Button Style"), Tr.t("Modern: pictures for what each button does. Classic: the controller's letters."),
+                new String[] {"Modern", "Classic"}, settings.touchStyle() == TouchControlsView.STYLE_CLASSIC ? 1 : 0,
+                settings.touchControls(), which -> settings.setTouchStyle(which));
         actionRow(Tr.t("Touch Control Layout"), settings.touchLayout().isEmpty()
                         ? Tr.t("Move and resize the controls while playing: Back > Edit Controls Layout.")
                         : Tr.t("Arranged by you. Change it while playing: Back > Edit Controls Layout."),
@@ -706,7 +706,7 @@ final class SettingsMenu {
                 settings.fixedStick(), on -> settings.setFixedStick(on));
         toggleRow(Tr.t("Vibration"), Tr.t("A short buzz when a touch button is pressed."), settings.haptics(),
                 on -> settings.setHaptics(on));
-        toggleRow(Tr.t("Touch camera"), Tr.t("Drag on the empty right side of the screen to turn the camera."),
+        toggleRow(Tr.t("Touch camera"), Tr.t("Drag on the empty right side of the screen to turn the camera. The right stick is hidden while this is on."),
                 settings.touchCamera(), on -> settings.setTouchCamera(on));
         toggleRow(Tr.t("Invert Camera"), Tr.t("On: the scene follows the finger (drag right, the view turns left), and the "
                         + "right touch stick is reversed both ways. Off: the game's own directions."),

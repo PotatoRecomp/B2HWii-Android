@@ -21,33 +21,39 @@ Port made by Xu, continuing the work of WitherBlitz with the help of WiiCompiled
 
 ## Status
 
-**0.0.1 Beta 5** (November 2026). The whole game is playable on Android and Windows, from boot through Story battles, with sound, saving and loading.
+**1.0** (November 2026), the first release. The whole game is playable on Android and Windows, from boot through Story battles, with sound, saving and loading.
 
-| Class | Tested on | Battles |
-|---|---|---|
-| Flagship | RedMagic 8S Pro (Snapdragon 8 Gen 2) | 60 fps |
-| Mid-range | Poco X7 Pro (Dimensity 8400), Infinix GT30 (Dimensity 7300), Redmi Note 12 Pro (Snapdragon 732G) | 35–60 fps with Frameskip |
-| Low-end | Poco M3 and Redmi 9T (Snapdragon 662), Helio G81, Helio G99, Unisoc T606 | 35–60 fps with Frameskip |
+| Class | Phone | Chip / GPU | Battles |
+|---|---|---|---|
+| Flagship | RedMagic 8S Pro | Snapdragon 8 Gen 2 / Adreno 740 | 60 fps |
+| Upper mid | Poco X7 Pro | Dimensity 8400 / Mali-G720 MC7 | 48–60 fps |
+| Mid | Infinix GT30 | Dimensity 7300 / Mali-G615 | 48–60 fps |
+| Mid-low | phone with Helio G99 | Helio G99 / Mali-G57 MC2 | about 30 fps in busy battles, with the Low-End Preset |
+| Low | Redmi Note 12 Pro | Snapdragon 732G / Adreno 618 | 35–57 fps |
+| Low | TECNO KN4n | Helio G81 / Mali-G52 MC2 | 37–60 fps |
+| Low | realme RMX3710 | Helio G85-class / Mali-G52 MC2 | steady 30 fps with the 30 FPS Lock |
+| Entry | itel A666LN | Unisoc T606 / Mali-G57 MP1 | 23–38 fps, with the Low-End Preset |
+| Tablet | Redmi Pad SE | Snapdragon 680 / Adreno 610 | needs Turnip (Settings > Graphics > GPU Driver) |
 
 The full change history is in the app (**What's New**) and on the [Releases](../../releases) page.
 
-### New in Beta 5
+### New in 1.0
 
-- Upright launcher: Play and the settings in use on the first page, every setting in the tabs below.
-- Settings in game: tap the gear at the top left (or press Back). Most settings apply at once.
-- Custom GPU drivers (Turnip for Adreno, malisx2 for Mali) and a lighter Vulkan renderer.
-- SGSR upscaling, and GX Thread (graphics on its own CPU core) now without flicker.
-- Save import also takes a `data.bin` copied from a Wii or from Dolphin.
-- Fixes: horse riding and boss crashes, Adreno 610 crash, voice repeats at 30 fps, crackling sound, slow touch camera.
+- Touch controls in two styles (Settings > Controls > Button Style): **Modern** shows a picture for what each button does, **Classic** shows the controller's letters. A green, B red, X blue, Y amber.
+- A layout editor that pauses the game (Back > Layout): move every control on its own, A, B, X and Y too, and size it from 50% to 200% with the slider, the − and + buttons or a pinch. Controls snap to the centre lines and to each other.
+- The right stick hides while Touch camera is on, and comes back when it is off.
+- Low-End Preset, Display Resolution (960p, 720p, 480p), Sustained Performance and a Textures tab.
+- Sound straight to Android's low-latency output: less crackle on slow phones.
+- Fix: Dynamic Resolution with the 30 FPS Lock no longer lowers the picture while the game holds 30 fps.
 
 ## Features
 
 | Area | What it has |
 |---|---|
-| **Performance** | Frameskip, 30 FPS Lock, Dynamic Resolution, GX Thread, Thermal Control. A device profile picks resolution and frameskip on first start. |
+| **Performance** | Low-End Preset, Display Resolution, Frameskip, 30 FPS Lock, Dynamic Resolution, GX Thread, Thermal Control, Sustained Performance. A device profile picks the settings on first start. |
 | **Graphics** | Render resolution 0.5×–4×, FSR1 and SGSR upscaling, Texture Detail (trilinear and anisotropic filtering), Vulkan renderer choice, custom GPU drivers (Turnip, malisx2). |
-| **Controls** | Touch controls with a layout editor and touch camera (with Invert Camera), gamepads in the Classic Controller layout, and on Windows a keyboard with rebindable keys. |
-| **Launcher** | Imports ISO or RVZ on the phone, Continue and Stop, in-game pause menu, performance overlay, cheats, save backup and import, What's New, English and Indonesian. |
+| **Controls** | Touch controls in Modern or Classic style with a layout editor (move and size every button), touch camera (with Invert Camera), tilt and shake, gamepads in the Classic Controller layout, and on Windows a keyboard with rebindable keys. |
+| **Launcher** | Imports ISO or RVZ on the phone, Continue and Stop, in-game pause menu, performance overlay, cheats, save backup and import, Share Log, What's New, English and Indonesian. |
 | **Textures** | Custom textures (.png or .dds, Dolphin names), texture dumping, texture key reports, HD Textures Live (2× upscale while playing). |
 
 ## Getting started
@@ -59,13 +65,13 @@ The full change history is in the app (**What's New**) and on the [Releases](../
 3. Pick your own dump of the game (`.iso` or `.rvz`, Wii NTSC-J `RBSJ08`). The app imports it once.
 4. Tap **Play**. The first start chooses settings for your phone; you can change them any time in the tabs.
 
-Beta builds install next to the release build and over each other. Coming from the old 0.9.0 Beta, uninstall it once.
+The release (`Basara 2 Heroes`) is its own app, installed next to the Final Beta (`Basara Beta`). To bring your Beta save over: in Basara Beta, Settings > Save Data > **Back Up**; in Basara 2 Heroes, **Import** that backup; then uninstall Basara Beta.
 
 ## Saves
 
 The save lives in the app's own storage. In **Settings > Save Data**:
 
-- **Back Up** writes `basara2heroes-save-DATE.zip` to `Basara2Heroes-Beta/Saves`. Copy it to a PC or cloud drive to keep it safe.
+- **Back Up** writes `basara2heroes-save-DATE.zip` to `Basara2Heroes/Saves` (`Basara2Heroes-Beta/Saves` in the Beta). Copy it to a PC or cloud drive to keep it safe.
 - **Import** replaces the save on the phone. It accepts:
   - a `.zip` made by Back Up,
   - a bare `basara2w.dat`,
@@ -74,7 +80,13 @@ The save lives in the app's own storage. In **Settings > Save Data**:
 
 ## Reporting a problem
 
-Each game start writes its own folder, `Basara2Heroes-Beta/Logs/<date and time>/`, with `log/console.log` and, after a crash, a report in `crash/`. Attach that folder, your phone model and the settings in use (shown at the top of the launcher) to your report.
+In the app, Settings > System > **Share Log** puts the logs of the runs you pick (the crashed one first) and your device info in one zip. Send it, with what you were doing, to one of:
+
+- a new [GitHub issue](../../issues),
+- the Telegram channel: [t.me/indonesiarecompcomunity](https://t.me/indonesiarecompcomunity),
+- the Discord server: [discord.gg/qcXXP7A2](https://discord.gg/qcXXP7A2).
+
+The logs are also on the phone, one folder per game start: `Basara2Heroes/Logs/<date and time>/` (`Basara2Heroes-Beta/...` in the Beta).
 
 ## Building
 
@@ -90,7 +102,8 @@ tools\b-android.ps1 -Mode configure   # once
 tools\b-android.ps1 -Mode build
 tools\b-android.ps1 -Mode stage       # libmain.so and data for the APK
 cd app
-..\third_party\gradle\bin\gradle.bat assembleRelease   # add -PbasaraBeta -PbasaraBetaNumber=N for a Beta
+..\third_party\gradle\bin\gradle.bat assembleRelease '-PbasaraVersionName=1.0' '-PbasaraVersionCode=19' '-PbasaraCheats=true'
+# a Beta: -PbasaraBeta '-PbasaraBetaNumber=N'. In PowerShell quote each -P...=x.y, or "1.0" splits.
 ```
 
 Optional: `tools\b-pgo.ps1` for a profile-guided (PGO + ThinLTO) Android build.
@@ -118,6 +131,7 @@ This project is a modified version of NSMB-Wii-Multiplayer-Recompilation, which 
 - **[Dawn](https://dawn.googlesource.com/dawn)**: Google's WebGPU implementation, used by aurora for Vulkan and Direct3D.
 - **[Dolphin Emulator](https://github.com/dolphin-emu/dolphin)**: the reference for Wii hardware behavior, the free DSP coefficient ROM and the default WiiConnect24 tree in the runtime, the RVZ format the launcher reads, and the Wii save (`data.bin`) format.
 - **The NSMBW reverse-engineering community**: RootCubed's [NSMBW symbols](https://github.com/RootCubed/nsmbw-symbols), the NSMBW decompilation and the NSMBW address maps. The NSMBW function map was the starting point for this game's map.
+- **[game-icons.net](https://game-icons.net)** by Lorc, Delapouite and contributors (CC BY 3.0): the touch controls' Modern icons.
 - **[DriftDroid](https://github.com/dorPXP/driftdroid)** and **[Galaxy-Android](https://github.com/OpenPort-Labs/Galaxy-Android)**: other Wii-to-Android ports, read for reference.
 
 Bundled third-party components and their licenses are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

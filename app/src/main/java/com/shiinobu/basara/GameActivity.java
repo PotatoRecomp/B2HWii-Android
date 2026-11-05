@@ -166,6 +166,18 @@ public final class GameActivity extends SDLActivity
         addContentView(touch, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         motion = new MotionInput(this, this);
+        layoutEditor = new LayoutEditor(this, touch, new LayoutEditor.Host() {
+            @Override public AppSettings settings() { return settings; }
+            @Override public void onEditorClosed() { resumeFromMenu(); }
+        });
+    }
+
+    /** The touch layout editor, over the paused game (it carries on when the editor closes). */
+    private void startLayoutEdit() {
+        touch.release();
+        menuOpen = true;
+        setMenuPause(true);
+        layoutEditor.open();
     }
 
     /** SDL is linked into libmain.so, so that one library is all there is to load. */
@@ -180,6 +192,7 @@ public final class GameActivity extends SDLActivity
     private long lastTapScreen;
     private long lastBattery = -100000;
     private boolean menuOpen;
+    private LayoutEditor layoutEditor;
 
     private void setMenuPause(boolean paused) {
         if (!nativeReady) return;
@@ -242,12 +255,6 @@ public final class GameActivity extends SDLActivity
     @Override
     public void onPointer(float x, float y, boolean held) {
         if (nativeReady) nativePointer(x, y, held);
-    }
-
-    @Override
-    public void onLayoutDone(String layout, boolean fixedStick) {
-        settings.setTouchLayout(layout);
-        settings.setFixedStick(fixedStick);
     }
 
     @Override
@@ -447,10 +454,12 @@ public final class GameActivity extends SDLActivity
 
     private void applyControlSettings() {
         touch.setControlsVisible(settings.touchControls());
-        touch.setOpacity(settings.touchOpacity());
         touch.setHaptics(settings.haptics());
         touch.setTouchCamera(settings.touchCamera());
+        touch.setStyle(settings.touchStyle());
         touch.setInvertCamera(settings.invertCamera());
+        if (layoutEditor != null && layoutEditor.isOpen()) return;  // the editor holds unsaved changes
+        touch.setOpacity(settings.touchOpacity());
         touch.setFixedStick(settings.fixedStick());
         touch.setLayout(settings.touchLayout());
     }
@@ -498,6 +507,10 @@ public final class GameActivity extends SDLActivity
      */
     @Override
     public void onMenu() {
+        if (layoutEditor != null && layoutEditor.isOpen()) {
+            layoutEditor.save();  // Back while editing: keep what was arranged
+            return;
+        }
         touch.release();
         final boolean inSession = nativeReady && nativeSessionActive();
         // The game stands still while the menu is open (no backup save: it isn't leaving the screen).
@@ -558,7 +571,7 @@ public final class GameActivity extends SDLActivity
             final android.widget.LinearLayout actions = new android.widget.LinearLayout(a);
             actions.addView(action(R.drawable.ic_move, Tr.t("Layout"), false, v -> {
                 close();
-                touch.setEditMode(true);
+                startLayoutEdit();
             }), actionParams(false));
             actions.addView(action(R.drawable.ic_home, Tr.t("Menu"), false, v -> {
                 close();
@@ -713,8 +726,13 @@ public final class GameActivity extends SDLActivity
                         android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
                 nameParams.leftMargin = dp(10);
                 item.addView(name, nameParams);
-                item.setClickable(true);
-                item.setOnClickListener(v -> select(id));
+                if (SettingsMenu.disabled(id)) {
+                    item.setAlpha(0.35f);
+                    item.setEnabled(false);
+                } else {
+                    item.setClickable(true);
+                    item.setOnClickListener(v -> select(id));
+                }
                 sectionList.addView(item, Ui.matchWidth(sectionList.getChildCount() == 0 ? 0 : dp(2)));
             }
         }

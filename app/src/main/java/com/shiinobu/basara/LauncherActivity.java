@@ -385,8 +385,13 @@ public final class LauncherActivity extends Activity {
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             beside.leftMargin = dp(8);
             tab.addView(name, beside);
-            tab.setClickable(true);
-            tab.setOnClickListener(v -> selectSection(id, false));
+            if (SettingsMenu.disabled(id)) {
+                tab.setAlpha(0.35f);
+                tab.setEnabled(false);
+            } else {
+                tab.setClickable(true);
+                tab.setOnClickListener(v -> selectSection(id, false));
+            }
             final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             params.leftMargin = i == 0 ? 0 : dp(8);

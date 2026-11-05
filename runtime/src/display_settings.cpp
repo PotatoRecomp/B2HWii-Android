@@ -1,5 +1,6 @@
 #include "det_clock.h"
 #include "display_settings.h"
+#include "hle_stubs.h"
 
 #include "memory.h"
 #include "runtime_log.h"
@@ -166,6 +167,10 @@ bool DynamicResolutionTick() {
 
     int step = g_dynStep;
     const char* reason = "";
+    // The thresholds are for a 60 fps picture. Under the 30 FPS Lock a picture has two retraces, so the
+    // worker and the GPU get twice the time: a GPU at 16-22 ms there costs no frame, and the 60 fps
+    // thresholds took a Mali-G52 MC2 at a steady 30 fps from 720 down to 360 lines for nothing.
+    const double budget = BasaraFrameskip_Mode() == 2 ? 2.0 : 1.0;
     static const bool s_cycleTest = [] {
         const char* v = std::getenv("BASARA_DYNRES");
         return v && *v == '2';
@@ -175,14 +180,14 @@ bool DynamicResolutionTick() {
         static int s_dir = 1;
         if (step + s_dir < 0 || step + s_dir >= kDynStepCount) s_dir = -s_dir;
         step += s_dir;
-    } else if (dynamic && (busyMs > kDynDownBusyMs || gpuMs > kDynDownGpuMs ||
-                           (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs))) {
+    } else if (dynamic && (busyMs > kDynDownBusyMs * budget || gpuMs > kDynDownGpuMs * budget ||
+                           (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs * budget))) {
         g_dynCalm = 0;
         step = std::min(step + 1, kDynStepCount - 1);
         if (step != g_dynStep && g_dynSinceUp <= kDynBounceWindows) {
             g_dynUpNeed = std::min(g_dynUpNeed * 2, kDynUpWindowsMax);  // the last step up did not hold
         }
-    } else if (hot && step < kDynHotStep && std::max(busyMs, gpuMs) >= kDynHotBusyMs) {
+    } else if (hot && step < kDynHotStep && std::max(busyMs, gpuMs) >= kDynHotBusyMs * budget) {
         g_dynCalm = 0;
         step += 1;
         reason = ", running hot";
@@ -199,7 +204,7 @@ bool DynamicResolutionTick() {
         // Linear like the worker's: on the Redmi (Adreno 618) a calm battle took 12.8 ms at 100% and still
         // 10.5 ms at 60%, most of it in passes at the display's size. The square kept it at 60% for good.
         const double predictedGpu = gpuMs * ratio;
-        const bool fits = predicted < kDynUpBusyMs && predictedGpu < kDynUpGpuMs;
+        const bool fits = predicted < kDynUpBusyMs * budget && predictedGpu < kDynUpGpuMs * budget;
         if (fits && ++g_dynCalm >= g_dynUpNeed) {
             g_dynCalm = 0;
             step -= 1;
@@ -231,6 +236,13 @@ void ApplyGameCanvas(int32_t aspect) {
     const bool fitted = aspect == kAspectFill && g_surfaceWidth != 0 && g_surfaceHeight != 0;
     AuroraSetWidePerspectiveAspect(
         fitted ? static_cast<float>(g_surfaceWidth) / static_cast<float>(g_surfaceHeight) : 0.0f);
+    // BASARA_FILL_2D=1 (test): 2D (HUD, text, menus) keeps its 16:9 shape in the middle instead of
+    // stretching to the edges. Off: players found the narrowed HUD and the bars in menus worse.
+    static const bool s_fill2D = [] {
+        const char* v = std::getenv("BASARA_FILL_2D");
+        return v && *v == '1';
+    }();
+    AuroraSetFill2D(fitted && s_fill2D);
 }
 
 } // namespace

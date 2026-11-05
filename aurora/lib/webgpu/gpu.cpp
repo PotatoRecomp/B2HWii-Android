@@ -1089,7 +1089,7 @@ static void reset_instance() {
 // own Vulkan backend (lib/vulkan/vk_webgpu.cpp), which needs fewer Vulkan features (no 4x MSAA, Vulkan
 // 1.1) so it also runs drivers Dawn rejects, such as malisx2 on Mali. The order:
 //   BASARA_RENDERER=vulkan: the Vulkan backend first, then Dawn;
-//   otherwise Dawn, then (only with a player-installed driver) the Vulkan backend on that driver;
+//   otherwise Dawn, then the Vulkan backend (on the player's driver when one is installed);
 //   a player driver that neither starts is dropped, and Dawn runs on the system driver.
 bool initialize(AuroraBackend auroraBackend) {
   const bool custom = custom_driver::begin();
@@ -1101,7 +1101,9 @@ bool initialize(AuroraBackend auroraBackend) {
   const bool vulkanTarget = auroraBackend == BACKEND_VULKAN || auroraBackend == BACKEND_AUTO;
   std::vector<bool> order;
   if (vulkanFirst && vulkanTarget) order = {true, false};
-  else if (custom && vulkanTarget) order = {false, true};
+  // Dawn first, then the Vulkan backend, on the system driver too: Dawn finds no adapter on some
+  // drivers (Adreno 610, Redmi Pad SE), and the Null fallback after it cannot present.
+  else if (vulkanTarget) order = {false, true};
   else order = {false};
 #else
   const std::vector<bool> order{false};

@@ -34,9 +34,28 @@ final class ReleaseNotes {
         }
     }
 
-    private static final Entry[] ENTRIES = {
+    private static final Entry[] ALL = {
+        new Entry("1.0", "The first release", "2026-11-06",
+                new String[] {
+                    "The whole game runs on Android, from boot through Story battles, with sound, saving and loading. The game's code is recompiled for the phone ahead of time: nothing is emulated.",
+                    "Load your own disc dump (.iso or .rvz, Wii NTSC-J RBSJ08) straight from the phone.",
+                    "Runs on most phones: the Low-End Preset sets the lightest settings in one tap, with Display Resolution, Dynamic Resolution, Frameskip, the 30 FPS Lock, GX Thread, Thermal Control and Sustained Performance for the rest.",
+                    "A sharper picture on stronger phones: render resolution from 0.5x to 4x, FSR1 and SGSR upscaling, HD Textures and custom texture packs (.png or .dds).",
+                    "Touch controls in two styles, Modern (a picture for each button) or Classic (the controller's letters), and a layout editor that pauses the game: move every button on its own and size it from 50% to 200%. Touch camera, gamepads, tilt and shake work too.",
+                    "Clean sound without crackle on slow phones, and Recording-Friendly Audio for screen recordings.",
+                    "Two renderers and custom GPU drivers (Turnip for Adreno, malisx2 for Mali).",
+                    "Settings in the launcher and in game, cheats, save backup and import, Share Log for bug reports, English and Indonesian.",
+                },
+                new String[] {},
+                new String[] {
+                    "Adreno 618 (Redmi Note 10 Pro and similar): very heavy effects still drop to about 40 fps, the limit of the GPU.",
+                    "Adreno 610 with the phone's own driver (Redmi Pad SE): use Turnip from Settings > Graphics > GPU Driver.",
+                }),
         new Entry("Final Beta", "Experimental features passed testing, new Textures tab", "2026-11-04",
                 new String[] {
+                    "New touch controls in two styles (Settings > Controls > Button Style): Modern shows a picture for what each button does, Classic shows the controller's letters. Blue, with A green, B red, X blue and Y amber.",
+                    "A new layout editor (Back > Layout): the game pauses and dims, every control moves on its own (A, B, X and Y too), and its size goes from 50% to 200% with the slider, the - and + buttons or a pinch. Opacity, the left stick's mode, Reset and Cancel are on the same panel, and controls snap to the centre lines and to each other.",
+                    "The right stick hides while Touch camera is on, and comes back when it is off. Touch camera is now off by default.",
                     "Every Experimental feature passed testing and is now a regular setting, without warnings: HD Textures, Custom Textures, Dump Textures, Report Texture Keys, the Vulkan renderer, GPU drivers and Thermal Control. The Experimental tab is gone.",
                     "New Textures tab: Custom Textures (.png or .dds), Dump Textures, Report Texture Keys and HD Textures in one place. Renderer and GPU Driver moved to Graphics, Thermal Control to Performance.",
                     "New Display Resolution (Display): the game sends a smaller picture (960p, 720p or 480p) that the screen stretches for free. Every frame, menus too, takes less GPU work: steadier fps on a slow phone, blurrier picture.",
@@ -52,8 +71,11 @@ final class ReleaseNotes {
                     "Custom Textures also reads .dds packs (BC1 to BC7). On a GPU without BC textures (most Mali) they are unpacked while loading, so the same pack works on every phone.",
                     "Dynamic Resolution with the Vulkan renderer now follows the GPU's own time, so it also lowers the resolution when heavy effects slow the GPU down.",
                     "New Upload Memory (Performance, Vulkan renderer): Auto measures at start which memory is faster on this phone; Standard or Cached sets it by hand.",
+                    "The Low-End Preset also turns on the Performance Overlay with only the FPS counter, so you see what the preset gives. It can be turned off or changed while the preset is on.",
+                    "The Low-End Preset is now offered on mid-low phones too (Helio G99, Mali-G57 MC2/MC3, Snapdragon 845, and 4 GB phones): Basara arts and busy battles hold their speed better.",
                 },
                 new String[] {
+                    "Dynamic Resolution with the 30 FPS Lock lowered the picture down to half for no reason (it measured the GPU against 60 fps). The picture now stays sharp while the game holds 30 fps.",
                     "Sound goes straight to Android's low-latency audio output: less crackle and fewer dialog stutters on slow phones. It falls back to the regular output on phones that refuse it, comes back by itself after headphones or Bluetooth change, and pauses while the game is in the background.",
                     "Leaving the game from its menu no longer shows \"The game closed unexpectedly\" in the launcher on some phones (Android 16).",
                     "HD Textures Live no longer slows the game down while the sharper textures are being made.",
@@ -62,6 +84,8 @@ final class ReleaseNotes {
                     "The launcher showed Continue and Stop after the game had closed normally.",
                     "Thermal Control stayed at 30 fps on a phone that had only been warm for a moment.",
                     "Vulkan renderer: .dds textures on GPUs without BC textures no longer fail to load.",
+                    "Phones whose GPU the default renderer cannot use (Adreno 610, such as the Redmi Pad SE) closed as soon as the game started. The game now switches to the Vulkan renderer by itself.",
+                    "The picture could freeze while the game and its sound went on (seen on Adreno 616 with Turnip, when the resolution changed). The screen now recovers by itself within about two seconds.",
                 },
                 new String[] {
                     "Adreno 618 (Redmi Note 10 Pro and similar): very heavy effects still drop to about 40 fps, the limit of the GPU.",
@@ -185,6 +209,24 @@ final class ReleaseNotes {
                 new String[] {"Crashes on phones with little RAM."},
                 new String[] {}),
     };
+
+    /** The release shows its own notes from 1.0 on; the Beta keeps the Beta history too. */
+    private static final Entry[] ENTRIES = BuildConfig.BETA ? betaEntries() : releaseEntries();
+
+    /** The Beta ends at the Final Beta: the release's own notes are not its. */
+    private static Entry[] betaEntries() {
+        for (int i = 0; i < ALL.length; ++i) {
+            if (ALL[i].version.equals("Final Beta")) return java.util.Arrays.copyOfRange(ALL, i, ALL.length);
+        }
+        return ALL;
+    }
+
+    private static Entry[] releaseEntries() {
+        for (int i = 0; i < ALL.length; ++i) {
+            if (ALL[i].version.equals(BetaGate.RELEASE_VERSION)) return java.util.Arrays.copyOf(ALL, i + 1);
+        }
+        return ALL;
+    }
 
     /** The build installed: its notes are shown once. */
     private static String build(Activity activity) {

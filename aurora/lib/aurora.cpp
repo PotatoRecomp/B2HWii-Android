@@ -665,7 +665,9 @@ constexpr std::array PreferredBackendOrder{
 // #ifdef DAWN_ENABLE_BACKEND_OPENGLES
 //     BACKEND_OPENGLES,
 // #endif
-#ifdef DAWN_ENABLE_BACKEND_NULL
+// Not on Android: a Null device has no surface to present to, so the game would stop at the first
+// frame ("Surface is not configured"); failing here shows the graphics error instead.
+#if defined(DAWN_ENABLE_BACKEND_NULL) && !defined(__ANDROID__)
     BACKEND_NULL,
 #endif
 };
@@ -845,6 +847,10 @@ std::optional<AcquiredSurfaceTexture> acquire_surface_texture() noexcept {
 
   wgpu::SurfaceTexture surfaceTexture;
   g_surface.GetCurrentTexture(&surfaceTexture);
+  // Timeouts in a row (each waits up to 1 s) mean the swapchain has no free image left, or the
+  // driver stopped returning them: rebuild it instead of timing out on every frame after.
+  static int s_timeoutsInRow = 0;
+  s_timeoutsInRow = surfaceTexture.status == wgpu::SurfaceGetCurrentTextureStatus::Timeout ? s_timeoutsInRow + 1 : 0;
   switch (surfaceTexture.status) {
   case wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal:
     return AcquiredSurfaceTexture{
@@ -860,6 +866,11 @@ std::optional<AcquiredSurfaceTexture> acquire_surface_texture() noexcept {
     };
   case wgpu::SurfaceGetCurrentTextureStatus::Timeout:
     Log.warn("Surface texture acquisition timed out");
+    if (s_timeoutsInRow >= 2) {
+      Log.warn("Surface timed out {} times in a row, rebuilding the swapchain", s_timeoutsInRow);
+      s_timeoutsInRow = 0;
+      request_surface_reconfigure();
+    }
     return std::nullopt;
   case wgpu::SurfaceGetCurrentTextureStatus::Outdated:
     Log.info("Surface texture is {}, reconfiguring swapchain", magic_enum::enum_name(surfaceTexture.status));
@@ -1068,6 +1079,10 @@ bool present_presentation_job(const PresentationJob& job) {
             Log.warn("Surface present failed: {}", static_cast<int>(presentStatus));
             request_surface_reconfigure();
           }
+        } else {
+          // The image stays acquired until the swapchain is rebuilt: a few skipped presents use up
+          // every image and each later acquire times out (frozen screen, Adreno 616 with Turnip).
+          request_surface_reconfigure();
         }
         acquired.reset();
       }

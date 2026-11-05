@@ -20,7 +20,7 @@ import java.net.HttpURLConnection;
  * Testing: debug.basara.update_url and debug.basara.beta_url point both checks at a local server.
  */
 final class BetaGate {
-    static final String RELEASE_VERSION = "1.0.0";
+    static final String RELEASE_VERSION = "1.0";
     private static final String BETA_STATUS =
             "https://raw.githubusercontent.com/shiinobu/basara2heroes-beta-android/main/beta-channel.json";
 

@@ -119,6 +119,14 @@ fallback - though this project's x86_64-only target only ever compiles amd64.c) 
 Source: <https://github.com/higan-emu/libco>. Full license text:
 `runtime/third_party/libco/LICENSE`.
 
+### game-icons.net icons - CC BY 3.0
+
+Icons by Lorc, Delapouite and contributors, <https://game-icons.net>, licensed under Creative Commons
+Attribution 3.0 (<https://creativecommons.org/licenses/by/3.0/>). The touch controls' Modern style
+draws saber-slash, sword-spin, fire-dash, jump-across, eye-target, bordered-shield, lightning-helix,
+crosshair, pause-button, shouting, cog and house, converted to absolute path data in
+`app/src/main/java/com/shiinobu/basara/TouchGlyphs.java`; the shapes are unchanged.
+
 ---
 
 ## Fetched at build time and redistributed in release builds

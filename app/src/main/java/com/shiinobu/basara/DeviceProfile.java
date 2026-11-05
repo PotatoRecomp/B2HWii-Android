@@ -34,6 +34,7 @@ final class DeviceProfile {
 
     /** Runs the profiles this install has not had yet; true when the Low-End preset was just applied. */
     static boolean applyOnce(Context context, AppSettings settings) {
+        settings.upgradeLowEnd();
         final boolean first = settings.needsDeviceProfile();
         if (!first && !settings.needsLowEndProfile()) {
             settings.resetGxThreadOnce();
@@ -80,9 +81,9 @@ final class DeviceProfile {
     }
 
     /**
-     * A phone the Low-End preset is for: a budget GPU (the first profile's 0.75x or lower: Adreno 505..620,
-     * Mali G52 / G57 MP1, PowerVR), Android's low-RAM flag, fewer than 6 cores, or under 3.6 GB of RAM
-     * (ARMSX2's DeviceTier uses the last three).
+     * A phone the Low-End preset is for, low and mid-low: a budget GPU (the first profile's 0.75x or
+     * lower: Adreno 505..620, Mali G52 / G57 MP1, PowerVR), a mid-low one (midLowGpu), Android's
+     * low-RAM flag, fewer than 6 cores, or a 4 GB phone (under 5 GB reported).
      */
     static boolean lowEnd(Context context, AppSettings settings) {
         return lowEnd(context, settings.gpuName(), ramMb(context));
@@ -90,8 +91,30 @@ final class DeviceProfile {
 
     static boolean lowEnd(Context context, String gpu, long ramMb) {
         final ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-        return scaleFor(gpu) <= 0.75f || (am != null && am.isLowRamDevice())
-                || Runtime.getRuntime().availableProcessors() < 6 || (ramMb > 0 && ramMb < 3686);
+        return scaleFor(gpu) <= 0.75f || midLowGpu(gpu) || (am != null && am.isLowRamDevice())
+                || Runtime.getRuntime().availableProcessors() < 6 || (ramMb > 0 && ramMb < 5000);
+    }
+
+    /**
+     * A GPU that holds 60 fps at 1x in plain battles but drops in the heaviest effects (Basara arts:
+     * Helio G99 / Mali-G57 MC2 went to 24 fps): Adreno 630..639, and Mali Valhalla G57/G68/G77/G78
+     * with up to 3 cores.
+     */
+    static boolean midLowGpu(String gpu) {
+        final String g = gpu == null ? "" : gpu.toLowerCase(Locale.ROOT);
+        Matcher m = Pattern.compile("adreno[^0-9]*(\\d{3})").matcher(g);
+        if (m.find()) {
+            final int model = Integer.parseInt(m.group(1));
+            return model >= 630 && model < 640;
+        }
+        m = Pattern.compile("mali-g(\\d+)").matcher(g);
+        if (m.find()) {
+            final int model = Integer.parseInt(m.group(1));
+            final Matcher c = Pattern.compile("m[cp](\\d+)").matcher(g);
+            final int cores = c.find() ? Integer.parseInt(c.group(1)) : 1;
+            return model < 100 && cores <= 3;
+        }
+        return false;
     }
 
     /**
@@ -109,7 +132,11 @@ final class DeviceProfile {
         v.put("frameskip", true);
         v.put("dynamic_resolution", true);
         v.put("hd_textures", 0);
-        v.put("show_fps", false);
+        // The overlay on with only the FPS counter, so a slow phone's player sees what the preset gives;
+        // not held, it can be turned off or changed by hand.
+        v.put("show_fps", true);
+        v.put("overlay_items", AppSettings.OVERLAY_FPS);
+        v.put("frame_graph", false);
         return v;
     }
 

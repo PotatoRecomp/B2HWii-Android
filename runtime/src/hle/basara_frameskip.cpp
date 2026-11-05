@@ -118,6 +118,10 @@ void BasaraFrameskip_SetMode(int mode) {
     }
 }
 
+int BasaraFrameskip_Mode() {
+    return Mode();
+}
+
 void BasaraFrameskip_Stats(uint64_t* frames, uint64_t* skipped) {
     *frames = g_frames.load(std::memory_order_relaxed);
     *skipped = g_skipped.load(std::memory_order_relaxed);

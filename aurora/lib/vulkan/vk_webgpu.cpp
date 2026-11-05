@@ -395,6 +395,29 @@ static std::atomic<int> g_surfaceRotation{0};
 
 namespace {
 
+constexpr VkMemoryPropertyFlags kCachedStagingFlags =
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+
+// One pass of writes the way the GX conversion fills its staging: 28-byte vertices as 4-byte stores,
+// in order, across the buffer. Nanoseconds.
+int64_t TimeStagingWrites(uint8_t* base, size_t size) {
+  volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(base);
+  const size_t words = size / 4;
+  const auto start = std::chrono::steady_clock::now();
+  uint32_t v = 0x3f800000u;
+  for (size_t i = 0; i + 7 <= words; i += 7) {
+    p[i] = v;
+    p[i + 1] = v + 1;
+    p[i + 2] = v + 2;
+    p[i + 3] = 0xffffffffu;
+    p[i + 4] = v + 3;
+    p[i + 5] = v + 4;
+    p[i + 6] = static_cast<uint32_t>(i);
+    v += 5;
+  }
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
 void Log(const char* fmt, ...) {
   va_list args;
   va_start(args, fmt);
@@ -878,6 +901,8 @@ struct WGPUDeviceImpl : Object {
   // it drops draws whose indices a copy in the same command buffer writes. Index buffers are then
   // host-visible and a copy into one gives it fresh memory filled by the CPU (RenameIndexCopy).
   bool renameIndexCopies = false;
+  // MapWrite staging in cached, coherent memory instead of write-combined (ChooseCachedStaging).
+  bool cachedStaging = false;
   std::mutex backingMutex;
   std::vector<std::tuple<uint64_t, VkBuffer, VmaAllocation, uint8_t*>> freeBackings;
   bool hasSync2 = false;
@@ -2116,6 +2141,70 @@ std::filesystem::path PipelineCachePath() {
 // ---------------------------------------------------------------------------------------------------
 // Device creation
 
+// Write-combined or cached memory for the MapWrite staging the GX conversion writes into, by measuring
+// it here (about 10 ms): ARMSX2 found cached staging 20-30% faster on Adreno 610 but slower on Mali-G615
+// and Adreno 650, a property of the CPU and its caches that no memory table shows. Three rounds of each,
+// taken in turn so a clock still rising favours neither; cached only when its median is 10% faster.
+// AURORA_VK_CACHED_STAGING=0/1 decides instead.
+bool ChooseCachedStaging(WGPUDeviceImpl* dev) {
+  if (const char* v = std::getenv("AURORA_VK_CACHED_STAGING"); v != nullptr && *v != 0) {
+    Log("staging memory: %s (AURORA_VK_CACHED_STAGING)", *v == '1' ? "cached" : "write-combined");
+    return *v == '1';
+  }
+  constexpr size_t kSize = 1u << 20;
+  const VkBufferCreateInfo info{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = kSize,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+  };
+  VkBuffer buffers[2]{};
+  VmaAllocation allocs[2]{};
+  VmaAllocationInfo results[2]{};
+  for (int i = 0; i < 2; ++i) {
+    VmaAllocationCreateInfo allocInfo{.usage = VMA_MEMORY_USAGE_AUTO};
+    allocInfo.flags = (i == 0 ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                              : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT) |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if (i == 1) allocInfo.requiredFlags = kCachedStagingFlags;
+    if (vmaCreateBuffer(dev->vma, &info, &allocInfo, &buffers[i], &allocs[i], &results[i]) != VK_SUCCESS ||
+        results[i].pMappedData == nullptr) {
+      for (int j = 0; j <= i; ++j) {
+        if (buffers[j] != VK_NULL_HANDLE) vmaDestroyBuffer(dev->vma, buffers[j], allocs[j]);
+      }
+      Log("staging memory: write-combined (no cached, coherent memory)");
+      return false;
+    }
+  }
+  VkMemoryPropertyFlags wcFlags = 0;
+  vmaGetMemoryTypeProperties(dev->vma, results[0].memoryType, &wcFlags);
+  bool cached = false;
+  if (results[0].memoryType == results[1].memoryType || (wcFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0) {
+    Log("staging memory: cached already (one memory type for both)");
+  } else {
+    int64_t wc[3], cc[3];
+    auto* wcData = static_cast<uint8_t*>(results[0].pMappedData);
+    auto* ccData = static_cast<uint8_t*>(results[1].pMappedData);
+    TimeStagingWrites(wcData, kSize);  // first touch: page faults go here, not in the rounds
+    TimeStagingWrites(ccData, kSize);
+    for (int round = 0; round < 3; ++round) {
+      if (round % 2 == 0) {
+        wc[round] = TimeStagingWrites(wcData, kSize);
+        cc[round] = TimeStagingWrites(ccData, kSize);
+      } else {
+        cc[round] = TimeStagingWrites(ccData, kSize);
+        wc[round] = TimeStagingWrites(wcData, kSize);
+      }
+    }
+    std::sort(wc, wc + 3);
+    std::sort(cc, cc + 3);
+    cached = cc[1] * 11 < wc[1] * 10;
+    Log("staging memory: %s (writes a megabyte in %.0f us write-combined, %.0f us cached)",
+        cached ? "cached" : "write-combined", wc[1] / 1000.0, cc[1] / 1000.0);
+  }
+  for (int i = 0; i < 2; ++i) vmaDestroyBuffer(dev->vma, buffers[i], allocs[i]);
+  return cached;
+}
+
 WGPUDeviceImpl* CreateDevice() {
   auto* dev = new WGPUDeviceImpl;
   dev->instance = g_vkInstance;
@@ -2382,6 +2471,8 @@ WGPUDeviceImpl* CreateDevice() {
       Log("index buffers are written by the CPU (job-manager Mali driver)");
     }
   }
+
+  dev->cachedStaging = ChooseCachedStaging(dev);
 
   tint::Initialize();
   dev->completionThread = std::thread(CompletionThread, dev);
@@ -2808,6 +2899,9 @@ WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice dev, const WGPUBufferDescriptor* de
   VmaAllocationCreateInfo allocInfo{.usage = VMA_MEMORY_USAGE_AUTO};
   if (mapRead) {
     allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+  } else if (mapWrite && dev->cachedStaging) {
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    allocInfo.requiredFlags = kCachedStagingFlags;
   } else if (mapWrite) {
     allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
   } else if (dev->renameIndexCopies && (descriptor->usage & WGPUBufferUsage_Index)) {

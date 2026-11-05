@@ -1194,6 +1194,60 @@ void abort_frame() noexcept {
   end_pipeline_frame();
 }
 
+// Duplicate frame probe (AURORA_DUPE_PROBE=1, a test): ARMSX2 skips presenting a frame identical to the
+// last one. Before skipping anything here, count how often Basara really draws the same frame twice:
+// a frame's vertex, uniform, index and storage bytes, its draw count and texture uploads, hashed and
+// compared with the last frame's. A frame split into several batches never counts as a duplicate.
+static uint64_t hash_bytes(uint64_t h, const ByteBuffer& buf) {
+  const uint8_t* p = buf.data();
+  size_t n = buf.size();
+  for (; n >= 8; p += 8, n -= 8) {
+    uint64_t v;
+    memcpy(&v, p, 8);
+    h = (h ^ v) * 0x100000001b3ull;
+  }
+  for (; n > 0; ++p, --n) h = (h ^ *p) * 0x100000001b3ull;
+  return h;
+}
+
+static void probe_duplicate_frame(bool advanceFrame) {
+  static const bool enabled = [] {
+    const char* v = std::getenv("AURORA_DUPE_PROBE");
+    return v != nullptr && *v == '1';
+  }();
+  if (!enabled) return;
+  static bool s_split = false;
+  static uint64_t s_last = 0, s_frames = 0, s_dupes = 0, s_run = 0, s_longestRun = 0;
+  if (!advanceFrame) {
+    s_split = true;
+    return;
+  }
+  uint64_t h = 0xcbf29ce484222325ull;
+  h = hash_bytes(h, g_verts);
+  h = hash_bytes(h, g_uniforms);
+  h = hash_bytes(h, g_indices);
+  h = hash_bytes(h, g_storage);
+  h = (h ^ g_drawCallCount) * 0x100000001b3ull;
+  size_t uploads = 0;
+  if constexpr (UseTextureBuffer) uploads = g_textureUploads.size();
+  const bool dupe = !s_split && uploads == 0 && g_drawCallCount > 0 && h == s_last;
+  s_split = false;
+  s_last = h;
+  ++s_frames;
+  if (dupe) {
+    ++s_dupes;
+    s_longestRun = std::max(s_longestRun, ++s_run);
+  } else {
+    s_run = 0;
+  }
+  if (s_frames % 300 == 0) {
+    Log.info("duplicate frames: {} of the last 300 (longest run {}, {} draws now)", s_dupes, s_longestRun,
+             g_drawCallCount);
+    s_dupes = 0;
+    s_longestRun = 0;
+  }
+}
+
 static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
   ZoneScoped;
   ASSERT(!advanceFrame || !g_inOffscreen, "end_frame called while offscreen rendering is active");
@@ -1204,6 +1258,7 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
     // interpolation tasks pointing into it would dangle. Tie the clear to the rotation itself.
     gx::drop_pending_frame_interpolation_uniforms();
   }
+  probe_duplicate_frame(advanceFrame);
   g_uniforms.append_zeroes(gx::MaxUniformSize); // Pad the end of the buffer
   const auto used = staging_usage();
   for (unsigned i = 0; i < used.size(); ++i) g_stagingHighWater[i] = std::max(g_stagingHighWater[i], used[i]);

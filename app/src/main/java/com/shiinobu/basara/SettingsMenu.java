@@ -470,6 +470,11 @@ final class SettingsMenu {
                         + "highest it goes."),
                 settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
         restart(null);
+        toggleRow(Tr.t("Automatic Tuning"), Tr.t("When the game keeps running below full speed, tries one lighter "
+                        + "setting at a time (Upscaler, Texture Detail, Dynamic Resolution, Frameskip) and keeps "
+                        + "it only if the game gets faster. Only while playing: your settings here stay as they are."),
+                settings.autoTune(), on -> settings.setAutoTune(on));
+        restart(null);
         toggleRow(Tr.t("GX Thread"), Tr.t("Runs the graphics work on its own CPU core, so busy battles run faster on "
                         + "slower phones."),
                 settings.gxThread(), true, on -> {
@@ -484,6 +489,14 @@ final class SettingsMenu {
                         + "hard. Back to normal once it cools down.")
                         : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
                 settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
+        final boolean sustained = AppSettings.sustainedSupported(activity);
+        restart(null);
+        toggleRow(Tr.t("Sustained Performance"), sustained
+                        ? Tr.t("Keeps the CPU and GPU at speeds the phone can hold for hours: a little slower at the "
+                        + "start, but no sudden drop once it gets hot in a long session. The game no longer asks for "
+                        + "the fastest cores.")
+                        : Tr.t("Not available: this phone does not offer it."),
+                settings.sustainedPerformance(), sustained, on -> settings.setSustainedPerformance(on));
         restart(null);
         toggleRow(Tr.t("Skip Boot"), Tr.t("Skips the logos at start, straight to the save check."), settings.skipBoot(),
                 on -> settings.setSkipBoot(on));

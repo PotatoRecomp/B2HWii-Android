@@ -24,6 +24,7 @@
 #include "host_suspend.h"
 #include "guest_profiler.h"
 #include "cpu_boost.h"
+#include "auto_tune.h"
 #include "thermal.h"
 #include "audio_backend.h"
 #include "audio/ax_dsp.h"
@@ -1232,6 +1233,9 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
             }
         }
         s_lastEnd = now;
+    }
+    if (presentedXfb) {
+        AutoTune::OnFrame();
     }
     if (LogFpsEnabled() && presentedXfb) {
         const Clock::time_point now = Clock::now();

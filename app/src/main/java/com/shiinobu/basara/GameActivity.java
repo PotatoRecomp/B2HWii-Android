@@ -125,6 +125,10 @@ public final class GameActivity extends SDLActivity
             final java.io.File textures = settings.customTextures() ? AppFiles.textureDir() : hdCache;
             if (textures != null) Os.setenv("BASARA_TEXTURE_DIR", textures.getAbsolutePath(), true);
             if (hdCache != null) Os.setenv("BASARA_HD_CACHE_DIR", hdCache.getAbsolutePath(), true);
+            // Sustained Performance: the system holds steady clocks, so the game thread is not pinned to
+            // the fastest cores and no ADPF boost is asked for (runtime/src/cpu_boost.cpp). env.txt wins.
+            if (sustainedMode()) Os.setenv("BASARA_CPU_BOOST", "0", false);
+            if (settings.autoTune()) Os.setenv("BASARA_AUTOTUNE", "1", false);
             try {
                 // For the log's device line: the screen's refresh rate.
                 Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round(getDisplay().getRefreshRate())), true);
@@ -251,6 +255,7 @@ public final class GameActivity extends SDLActivity
             applyNativeSettings();
         }
         applyControlSettings();
+        getWindow().setSustainedPerformanceMode(sustainedMode());
         menuPoll.removeCallbacks(pollMenu);
         menuPoll.post(pollMenu);
         hideSystemBars();
@@ -279,6 +284,10 @@ public final class GameActivity extends SDLActivity
         if (motion != null) motion.stop();
         if (touch != null) touch.release();
         super.onPause();
+    }
+
+    private boolean sustainedMode() {
+        return settings.sustainedPerformance() && AppSettings.sustainedSupported(this);
     }
 
     @Override

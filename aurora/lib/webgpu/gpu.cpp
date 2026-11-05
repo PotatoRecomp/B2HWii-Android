@@ -257,8 +257,20 @@ wgpu::PresentMode best_present_mode() {
     }
     return false;
   };
-  if (g_vsyncEnabled.load(std::memory_order_acquire) && supports(wgpu::PresentMode::Fifo)) {
-    return wgpu::PresentMode::Fifo;
+  if (g_vsyncEnabled.load(std::memory_order_acquire)) {
+    // Relaxed Fifo where offered (AURORA_FIFO_RELAXED=0 turns it off): a frame that misses its vblank
+    // by a little shows at once (a short tear) instead of waiting a whole refresh, so a heavy scene
+    // dips to 55 instead of 30. The game's clock follows the Choreographer, not the present.
+    static const bool relaxed = [] {
+      const char* v = std::getenv("AURORA_FIFO_RELAXED");
+      return v == nullptr || *v != '0';
+    }();
+    if (relaxed && supports(wgpu::PresentMode::FifoRelaxed)) {
+      return wgpu::PresentMode::FifoRelaxed;
+    }
+    if (supports(wgpu::PresentMode::Fifo)) {
+      return wgpu::PresentMode::Fifo;
+    }
   }
   // Vulkan prefers Mailbox, every other backend Immediate. Under window capture the Vulkan driver
   // cannot flip and Immediate leaks about a megabyte per present until the device is lost.

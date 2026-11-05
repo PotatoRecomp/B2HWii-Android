@@ -60,6 +60,8 @@ void Audio_HLE_PollDeferred();
 void BasaraFrameskip_Stats(uint64_t* frames, uint64_t* skipped);
 // The in-game settings: 0 off, 1 auto, 2 30 FPS lock (ignored when BASARA_FRAMESKIP is set).
 void BasaraFrameskip_SetMode(int mode);
+// The mode in use (0 off, 1 auto, 2 30 FPS lock).
+int BasaraFrameskip_Mode();
 // Skip Boot: the game runs undrawn and unpaced from start until it first touches its save data
 // (nand_fs.cpp calls this for every path under the game's own NAND title directory).
 void BasaraBootSkip_SaveAccess();

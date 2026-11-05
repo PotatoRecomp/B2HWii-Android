@@ -44,6 +44,7 @@ bool SurfaceWide();
 // Dynamic resolution: lowers the render lines (down to 0.5x, never above the chosen scale) while the
 // renderer holds the game back, and raises them again once it has room. Any thread.
 void SetDynamicResolution(bool enabled);
+bool DynamicResolutionEnabled();
 // Render height for a scale (480 lines per 1x).
 float LinesForScale(float renderScale);
 

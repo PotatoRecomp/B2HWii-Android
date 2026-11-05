@@ -265,6 +265,18 @@ final class AppSettings {
     /** Thermal Control (off by default). */
     boolean thermalControl() { return prefs.getBoolean("thermal_control", false); }
     void setThermalControl(boolean on) { prefs.edit().putBoolean("thermal_control", on).commit(); }
+    /** Automatic Tuning (off by default): runtime/src/auto_tune.cpp, read when the game starts. */
+    boolean autoTune() { return prefs.getBoolean("auto_tune", false); }
+    void setAutoTune(boolean on) { prefs.edit().putBoolean("auto_tune", on).commit(); }
+    /** Sustained Performance (off by default): clocks the phone can hold for a long session. */
+    boolean sustainedPerformance() { return prefs.getBoolean("sustained_performance", false); }
+    void setSustainedPerformance(boolean on) { prefs.edit().putBoolean("sustained_performance", on).commit(); }
+
+    /** Whether the phone has Android's sustained performance mode (Window.setSustainedPerformanceMode). */
+    static boolean sustainedSupported(android.content.Context context) {
+        final android.os.PowerManager pm = context.getSystemService(android.os.PowerManager.class);
+        return pm != null && pm.isSustainedPerformanceModeSupported();
+    }
 
     /**
      * Whether the system reports a thermal headroom (Android 12+, and a thermal HAL that has the

@@ -314,6 +314,10 @@ void SetDynamicResolution(bool enabled) {
     }
 }
 
+bool DynamicResolutionEnabled() {
+    return g_dynEnabled.load(std::memory_order_relaxed);
+}
+
 Settings Current() {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_current;

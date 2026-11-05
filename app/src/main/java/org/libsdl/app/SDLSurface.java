@@ -154,6 +154,11 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
             density = (float)realMetrics.densityDpi / 160.0f;
         } catch(Exception ignored) {
         }
+        // Display Resolution (GameActivity): a fixed surface smaller than the view is stretched by the
+        // compositor, so the UI scale follows the surface's pixels, not the screen's.
+        if (getWidth() > 0 && width < getWidth() * 0.98f) {
+            density *= (float) width / getWidth();
+        }
 
         synchronized(SDLActivity.getContext()) {
             // In case we're waiting on a size change after going fullscreen, send a notification.
@@ -238,21 +243,31 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         return SDLActivity.handleKeyEvent(v, keyCode, event, null);
     }
 
+    // Display Resolution (GameActivity) gives the surface a fixed size. SurfaceView then measures itself
+    // that small under a wrap/AT_MOST parent; always fill the parent so the compositor stretches the buffer.
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        setMeasuredDimension(getDefaultSize(0, widthMeasureSpec), getDefaultSize(0, heightMeasureSpec));
+    }
+
     private float getNormalizedX(float x)
     {
-        if (mWidth <= 1) {
+        // Touches come in view pixels; the surface can be smaller (Display Resolution), so use the view's size.
+        final float w = getWidth() > 1 ? getWidth() : mWidth;
+        if (w <= 1) {
             return 0.5f;
         } else {
-            return (x / (mWidth - 1));
+            return (x / (w - 1));
         }
     }
 
     private float getNormalizedY(float y)
     {
-        if (mHeight <= 1) {
+        final float h = getHeight() > 1 ? getHeight() : mHeight;
+        if (h <= 1) {
             return 0.5f;
         } else {
-            return (y / (mHeight - 1));
+            return (y / (h - 1));
         }
     }
 

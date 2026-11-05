@@ -87,7 +87,10 @@ public final class LauncherActivity extends Activity {
         super.onCreate(savedInstanceState);
         settings = new AppSettings(this);
         Tr.init(this);
-        DeviceProfile.applyOnce(this, settings);
+        if (DeviceProfile.applyOnce(this, settings)) {
+            Toast.makeText(this, Tr.t("This phone now uses the Low-End preset: steadier, a bit blurrier. "
+                    + "Performance > Low-End Preset puts it back."), Toast.LENGTH_LONG).show();
+        }
         // Updates are checked on a fresh start, not when the game sent the player here or is
         // restarting itself into a LAN session.
         final Intent launch = getIntent();
@@ -390,6 +393,7 @@ public final class LauncherActivity extends Activity {
         rows.toggleRow(Tr.t("Auto Update"), BuildConfig.ONLINE_UPDATES ? Tr.t("Update on launch")
                         : Tr.t("Updates are sent by hand for now."),
                 settings.autoUpdate(), BuildConfig.ONLINE_UPDATES, on -> settings.setAutoUpdate(on));
+        rows.reportRows(gameRunning());
         final LinearLayout lan = rows.card(Tr.t("Tailscale & LAN Devices"), Tr.t("Coming soon"), null, false, false);
         lan.setClickable(false);
         rows.actionRow(Tr.t("Project page on GitHub"), PROJECT_URL.replace("https://", ""), Tr.t("Open"),
@@ -855,10 +859,12 @@ public final class LauncherActivity extends Activity {
         if (settings.gxThread()) stripChip(Tr.t("GX Thread"), SettingsMenu.PERFORMANCE, false);
         if (settings.dynamicResolution()) stripChip(Tr.t("Dynamic Resolution"), SettingsMenu.PERFORMANCE, false);
         if (settings.thermalControl()) stripChip(Tr.t("Thermal Control"), SettingsMenu.PERFORMANCE, false);
+        if (settings.lowEndApplied()) stripChip(Tr.t("Low-End Preset"), SettingsMenu.PERFORMANCE, false);
+        if (settings.displayLines() > 0) stripChip(settings.displayLines() + "p", SettingsMenu.DISPLAY, false);
         if (settings.textureKeyReport()) stripChip(Tr.t("Texture Keys"), SettingsMenu.TEXTURES, false);
         final int testing = DevTools.activeEnvCount();
         if (testing > 0) {
-            stripChip(String.format(java.util.Locale.ROOT, Tr.t("Testing options (%d)"), testing), SettingsMenu.DEVELOPER, true);
+            stripChip(String.format(java.util.Locale.ROOT, Tr.t("Testing options (%d)"), testing), SettingsMenu.SYSTEM, true);
         }
     }
 

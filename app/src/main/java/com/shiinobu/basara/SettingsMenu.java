@@ -148,6 +148,7 @@ final class SettingsMenu {
                 new String[] {Tr.t("Original 4:3"), "16:9", Tr.t("Fill Screen")}, settings.aspectMode(), true,
                 which -> settings.setAspectMode(which));
         resolutionRow();
+        displayResolutionRow();
         toggleRow(Tr.t("Performance Overlay"), Tr.t("A see-through bar at the top of the game with FPS and phone stats."),
                 settings.showFps(), on -> settings.setShowFps(on));
         final String[] items = {Tr.t("FPS"), Tr.t("CPU %"), Tr.t("GPU %"), Tr.t("Battery"), Tr.t("Temperature °C"), Tr.t("Details (ms, draws, RAM)"),
@@ -172,14 +173,47 @@ final class SettingsMenu {
         final String[] labels = new String[scales.length];
         final int selected = resolutionIndex(settings);
         for (int i = 0; i < scales.length; ++i) labels[i] = AppSettings.resolutionLabel(scales[i]);
-        final DisplayMetrics screen = activity.getResources().getDisplayMetrics();
         final boolean aboveScreen = settings.resolutionScale() > 0f
-                && 480 * settings.resolutionScale() > Math.min(screen.widthPixels, screen.heightPixels) * 1.05f;
+                && 480 * settings.resolutionScale() > outputLines(activity, settings) * 1.05f;
         choiceRow(Tr.t("Render Resolution"), Tr.t("Rendered at ") + renderSize(activity, settings)
                 + (aboveScreen
                         ? Tr.t(", more than this screen shows: several times the GPU work for little sharpness, so fps can drop. Match screen is sharp enough.")
                         : Tr.t(". Lower is lighter on a slow phone; FSR1 keeps it sharp.")), labels, selected, true,
                 which -> settings.setResolutionScale(scales[which]));
+    }
+
+    /** Display Resolution: the size of the picture the game sends to the screen (GameActivity). */
+    private void displayResolutionRow() {
+        final int[] lines = AppSettings.DISPLAY_LINES;
+        final String[] labels = new String[lines.length];
+        int selected = 0;
+        for (int i = 0; i < lines.length; ++i) {
+            labels[i] = lines[i] == 0 ? Tr.t("Screen") : lines[i] + "p";
+            if (lines[i] == settings.displayLines()) selected = i;
+        }
+        final DisplayMetrics m = screenMetrics(activity);
+        final int shortSide = Math.min(m.widthPixels, m.heightPixels);
+        restart(null);
+        choiceRow(Tr.t("Display Resolution"), Tr.t("The picture the game sends to the screen, which stretches it "
+                        + "for free. Lower takes GPU work off every frame, menus too: steadier fps on a slow "
+                        + "phone, blurrier picture. This screen: ") + Math.max(m.widthPixels, m.heightPixels)
+                        + "×" + shortSide + Tr.t(" (a size at or above it changes nothing)."),
+                labels, selected, true, which -> settings.setDisplayLines(lines[which]));
+    }
+
+    /** The real screen size (the app's own metrics leave out the system bars). */
+    static DisplayMetrics screenMetrics(Activity activity) {
+        final DisplayMetrics m = new DisplayMetrics();
+        activity.getWindowManager().getDefaultDisplay().getRealMetrics(m);
+        return m;
+    }
+
+    /** Lines of the picture sent to the screen: Display Resolution when it is below the screen's. */
+    static int outputLines(Activity activity, AppSettings settings) {
+        final DisplayMetrics m = screenMetrics(activity);
+        final int shortSide = Math.min(m.widthPixels, m.heightPixels);
+        final int lines = settings.displayLines();
+        return lines > 0 && lines < shortSide * 0.95f ? lines : shortSide;
     }
 
     static int resolutionIndex(AppSettings settings) {
@@ -219,8 +253,15 @@ final class SettingsMenu {
         showGpuDrivers();
     }
 
-    /** Tools for reports: share a run's log, the device info. */
+    /** Developer switches will live here; nothing yet. */
     private void showDeveloper() {
+        final LinearLayout empty = card(Tr.t("Nothing here yet"), Tr.t("Developer switches will show up here."),
+                null, false, false);
+        empty.setClickable(false);
+    }
+
+    /** System's report tools (launcher only): share a run's log, the device info, reset and clear. */
+    void reportRows(boolean gameRunning) {
         final boolean files = android.os.Environment.isExternalStorageManager();
         actionRow(Tr.t("Share Log"), files
                         ? Tr.t("Sends the log of the game runs you pick (the one that crashed first) with the device "
@@ -229,46 +270,9 @@ final class SettingsMenu {
                 files ? Tr.t("Share") : null, () -> LogShare.show(activity));
         actionRow(Tr.t("Device Info"), LogShare.deviceInfo(activity).trim(), Tr.t("Copy"),
                 () -> LogShare.copyDeviceInfo(activity));
-        if (!files) return;  // the testing options live in env.txt on shared storage
-
-        // Testing options: lines in env.txt, read when the game starts.
-        final String timing = DevTools.env("AURORA_VK_GPU_TIMING");
-        final String draws = DevTools.env("AURORA_VK_DRAW_TIMING");
-        restart(null);
-        choiceRow(Tr.t("GPU Timing"), Tr.t("Writes how long the GPU works on each frame to the log "
-                        + "(\"[vkgpu] gpu: X ms\"), Vulkan renderer only. Per Draw is slower and for finding "
-                        + "the heavy effect."),
-                new String[] {Tr.t("Off"), Tr.t("Per Frame"), Tr.t("Per Draw")},
-                "0".equals(timing) ? 0 : "1".equals(draws) ? 2 : 1, true, which -> {
-                    DevTools.setEnv(activity, "AURORA_VK_GPU_TIMING", which == 0 ? "0" : null);
-                    DevTools.setEnv(activity, "AURORA_VK_DRAW_TIMING", which == 2 ? "1" : null);
-                });
-        final String skip = DevTools.env("BASARA_FRAMESKIP");
-        restart(null);
-        choiceRow(Tr.t("Frameskip Override"), Tr.t("Fixes frameskip for a test, whatever Performance says. "
-                        + "Settings: use the Performance tab."),
-                new String[] {Tr.t("Settings"), Tr.t("Off"), Tr.t("Auto"), Tr.t("30 FPS")},
-                "0".equals(skip) ? 1 : "1".equals(skip) ? 2 : "2".equals(skip) ? 3 : 0, true,
-                which -> DevTools.setEnv(activity, "BASARA_FRAMESKIP", which == 0 ? null : String.valueOf(which - 1)));
-        restart(null);
-        toggleRow(Tr.t("Dynamic Resolution Test"), Tr.t("Walks the resolution down and back up one step every "
-                        + "two seconds, to check each size draws right. Needs Dynamic Resolution on."),
-                "2".equals(DevTools.env("BASARA_DYNRES")),
-                on -> DevTools.setEnv(activity, "BASARA_DYNRES", on ? "2" : null));
-        final int lines = DevTools.activeEnvCount();
-        final int left = DevTools.runsLeft(activity);
-        actionRow(Tr.t("Testing Options"), lines == 0
-                        ? Tr.t("None on. Paste the code the developer sends you on Discord.")
-                        : left >= 0 ? String.format(java.util.Locale.ROOT, Tr.t("%d on, they turn off by themselves "
-                                + "after %d more game starts."), lines, left)
-                        : String.format(java.util.Locale.ROOT, Tr.t("%d on, in %s."), lines, folderName("env.txt")),
-                Tr.t("Open"), () -> DevTools.showOptions(activity, () -> show(DEVELOPER)));
-        if (inGame) return;  // resetting and clearing belong to the launcher, with the game stopped
         actionRow(Tr.t("Reset and Clear"), Tr.t("Reset all settings, clear the HD texture and shader caches, "
                         + "the testing options or the logs, in one place."),
-                Tr.t("Choose"), () -> DevTools.showReset(activity,
-                        activity instanceof LauncherActivity && ((LauncherActivity) activity).gameRunning(),
-                        () -> show(DEVELOPER)));
+                Tr.t("Choose"), () -> DevTools.showReset(activity, gameRunning, () -> show(SYSTEM)));
     }
 
     /** Everything about the game's textures: packs, dump, the key report and HD Textures. */
@@ -430,6 +434,7 @@ final class SettingsMenu {
     }
 
     private void showPerformance() {
+        lowEndRow();
         choiceRow(Tr.t("Frameskip"), Tr.t("The game moves one step per drawn frame, so a slow phone plays in slow "
                         + "motion. Auto skips drawing a frame when it falls behind: closer to full speed, "
                         + "choppier picture."),
@@ -464,6 +469,36 @@ final class SettingsMenu {
         restart(null);
         toggleRow(Tr.t("Skip Boot"), Tr.t("Skips the logos at start, straight to the save check."), settings.skipBoot(),
                 on -> settings.setSkipBoot(on));
+    }
+
+    /** One tap to the lightest settings (DeviceProfile.lowEndValues), and back. */
+    private void lowEndRow() {
+        if (settings.lowEndApplied()) {
+            actionRow(Tr.t("Low-End Preset"), Tr.t("On: the lightest settings for a slow phone. Undo puts back "
+                            + "the settings from before it."), Tr.t("Undo"), () -> {
+                        settings.undoLowEnd();
+                        changed();
+                    });
+            return;
+        }
+        final java.util.Map<String, Object> values = DeviceProfile.lowEndValues(settings.gpuName());
+        final String render = AppSettings.resolutionLabel((Float) values.get("resolution_scale"));
+        actionRow(Tr.t("Low-End Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
+                        + "60 fps: steadier, blurrier."), Tr.t("Apply"), () ->
+                new Sheet(activity, Tr.t("Low-End Preset"), Tr.t("Steadier fps on a slow phone, blurrier picture. "
+                        + "It sets:") + "\n• " + Tr.t("Display Resolution") + " 480p\n• " + Tr.t("Render Resolution")
+                        + " " + render + "\n• " + Tr.t("Texture Detail") + " " + Tr.t("Original") + "\n• "
+                        + Tr.t("Upscaler") + " " + Tr.t("Off") + "\n• " + Tr.t("Frameskip") + " " + Tr.t("Auto")
+                        + "\n• " + Tr.t("Dynamic Resolution") + " " + Tr.t("On") + "\n• " + Tr.t("HD Textures") + " "
+                        + Tr.t("Off") + "\n• " + Tr.t("Performance Overlay") + " " + Tr.t("Off") + "\n• V-Sync "
+                        + Tr.t("Off") + "\n\n" + Tr.t("Undo puts back what you have now. Applies when the game "
+                        + "starts again."))
+                        .action(Tr.t("Apply"), null, true, false, () -> {
+                            settings.applyLowEnd(values);
+                            changed();
+                        })
+                        .action(Tr.t("Cancel"), null, false, false, null)
+                        .show());
     }
 
     private void showSaveData() {
@@ -681,8 +716,10 @@ final class SettingsMenu {
     /** "WxH" the game renders at for the chosen scale (0: the screen's own size). */
     static String renderSize(Activity activity, AppSettings settings) {
         final float scale = settings.resolutionScale();
-        final DisplayMetrics m = activity.getResources().getDisplayMetrics();
-        final int w = Math.max(m.widthPixels, m.heightPixels), h = Math.min(m.widthPixels, m.heightPixels);
+        final DisplayMetrics m = screenMetrics(activity);
+        final int screenLong = Math.max(m.widthPixels, m.heightPixels), screenShort = Math.min(m.widthPixels, m.heightPixels);
+        final int h = outputLines(activity, settings);
+        final int w = screenShort > 0 ? Math.round(screenLong * (float) h / screenShort) : screenLong;
         if (scale <= 0f) return w + "×" + h;
         final float aspect;
         switch (settings.aspectMode()) {

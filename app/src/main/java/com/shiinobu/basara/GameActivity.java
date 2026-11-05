@@ -84,6 +84,23 @@ public final class GameActivity extends SDLActivity
     private boolean motionShake;
     private float motionTilt;
 
+    /**
+     * Display Resolution: the game draws into a surface of that many lines and the compositor stretches
+     * it to the screen for free (ARMSX2's hardware scaler), so the swapchain and every full-screen pass
+     * (presentation, snapshot, overlay) cost less GPU time. Nothing when it is at or above the screen.
+     */
+    private void applyDisplayResolution() {
+        final int lines = settings.displayLines();
+        if (lines <= 0 || mSurface == null) return;
+        final android.util.DisplayMetrics m = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(m);
+        final int longSide = Math.max(m.widthPixels, m.heightPixels), shortSide = Math.min(m.widthPixels, m.heightPixels);
+        if (shortSide <= 0 || lines >= shortSide * 0.95f) return;
+        final int width = Math.round(longSide * (float) lines / shortSide) & ~1;
+        mSurface.getHolder().setFixedSize(width, lines);  // the game is landscape (sensorLandscape)
+        Log.i(TAG, "display resolution: " + width + "x" + lines + " on a " + longSide + "x" + shortSide + " screen");
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         CrashReport.installJavaHandler(this);
@@ -118,6 +135,7 @@ public final class GameActivity extends SDLActivity
             Toast.makeText(this, "Could not prepare the game's files: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
         super.onCreate(savedInstanceState);
+        applyDisplayResolution();
         nativeReady = !SDLActivity.mBrokenLibraries;
         if (nativeReady) {
             nativeSetDeviceName(deviceName());

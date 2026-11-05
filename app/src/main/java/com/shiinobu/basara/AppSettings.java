@@ -79,6 +79,72 @@ final class AppSettings {
         e.commit();
     }
 
+    /** The second device profile (Low-End preset on a weak phone) has not run yet on this install. */
+    boolean needsLowEndProfile() { return !prefs.getBoolean("device_profile_2", false); }
+    void markLowEndProfile() { prefs.edit().putBoolean("device_profile_2", true).commit(); }
+    boolean has(String key) { return prefs.contains(key); }
+
+    /** GL_RENDERER seen by the launcher's device profile, for the Low-End preset in either process. */
+    String gpuName() { return prefs.getString("gpu_name", ""); }
+    void setGpuName(String name) { prefs.edit().putString("gpu_name", name == null ? "" : name).commit(); }
+
+    // --- Low-End preset -----------------------------------------------------------------------------
+    /** Every setting the Low-End preset may change; what they were before is kept for Undo. */
+    static final String[] LOW_END_KEYS = {"display_lines", "resolution_scale", "texture_filter", "fsr_on",
+        "frameskip", "dynamic_resolution", "hd_textures", "show_fps", "vsync"};
+
+    boolean lowEndApplied() { return prefs.contains("low_end_backup"); }
+
+    /** Saves what the LOW_END_KEYS hold now (a missing key stays missing on Undo), then writes `values`. */
+    void applyLowEnd(java.util.Map<String, Object> values) {
+        final java.util.Map<String, ?> all = prefs.getAll();
+        final StringBuilder backup = new StringBuilder();
+        for (String key : LOW_END_KEYS) {
+            final Object v = all.get(key);
+            final String type = v instanceof Boolean ? "b" : v instanceof Integer ? "i" : v instanceof Float ? "f" : "-";
+            backup.append(key).append('=').append(type).append(':').append(v == null ? "" : v).append('\n');
+        }
+        final SharedPreferences.Editor e = prefs.edit().putString("low_end_backup", backup.toString());
+        for (java.util.Map.Entry<String, Object> entry : values.entrySet()) {
+            final Object v = entry.getValue();
+            if (v instanceof Boolean) e.putBoolean(entry.getKey(), (Boolean) v);
+            else if (v instanceof Integer) e.putInt(entry.getKey(), (Integer) v);
+            else if (v instanceof Float) e.putFloat(entry.getKey(), (Float) v);
+        }
+        e.commit();
+    }
+
+    /** Puts back the settings from before the Low-End preset. */
+    void undoLowEnd() {
+        final String backup = prefs.getString("low_end_backup", null);
+        if (backup == null) return;
+        final SharedPreferences.Editor e = prefs.edit().remove("low_end_backup");
+        for (String line : backup.split("\n")) {
+            final int eq = line.indexOf('='), colon = line.indexOf(':', eq + 1);
+            if (eq <= 0 || colon < 0) continue;
+            final String key = line.substring(0, eq), type = line.substring(eq + 1, colon), value = line.substring(colon + 1);
+            try {
+                switch (type) {
+                    case "b": e.putBoolean(key, Boolean.parseBoolean(value)); break;
+                    case "i": e.putInt(key, Integer.parseInt(value)); break;
+                    case "f": e.putFloat(key, Float.parseFloat(value)); break;
+                    default: e.remove(key); break;
+                }
+            } catch (NumberFormatException ignored) {
+                e.remove(key);
+            }
+        }
+        e.commit();
+    }
+
+    /**
+     * Display Resolution: the short side of the surface the game draws into (0: the screen's own). The
+     * compositor stretches it to the screen for free, so every full-screen pass gets cheaper.
+     */
+    static final int[] DISPLAY_LINES = {0, 960, 720, 480};
+    int displayLines() { return Math.max(0, prefs.getInt("display_lines", 0)); }
+    void setDisplayLines(int lines) { prefs.edit().putInt("display_lines", lines).commit(); }
+
     int aspectMode() { return prefs.getInt("aspect_mode", ASPECT_FILL); }
     void setAspectMode(int mode) { prefs.edit().putInt("aspect_mode", mode).commit(); }
 
@@ -140,7 +206,10 @@ final class AppSettings {
     boolean frameGraph() { return prefs.getBoolean("frame_graph", false); }
     void setFrameGraph(boolean on) { prefs.edit().putBoolean("frame_graph", on).commit(); }
 
-    /** V-Sync: frames go out in step with the display and the game's clock follows its vsync. */
+    /**
+     * V-Sync: frames go out in step with the display and the game's clock follows its vsync. Off, the
+     * game keeps its own 59.94 Hz clock (vi.cpp) and a late frame does not wait for the next refresh.
+     */
     boolean vsync() { return prefs.getBoolean("vsync", true); }
     void setVSync(boolean on) { prefs.edit().putBoolean("vsync", on).commit(); }
 

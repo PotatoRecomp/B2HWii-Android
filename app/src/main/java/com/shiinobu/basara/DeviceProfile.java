@@ -32,25 +32,81 @@ final class DeviceProfile {
 
     private DeviceProfile() {}
 
-    static void applyOnce(Context context, AppSettings settings) {
-        if (!settings.needsDeviceProfile()) {
+    /** Runs the profiles this install has not had yet; true when the Low-End preset was just applied. */
+    static boolean applyOnce(Context context, AppSettings settings) {
+        final boolean first = settings.needsDeviceProfile();
+        if (!first && !settings.needsLowEndProfile()) {
             settings.resetGxThreadOnce();
             settings.resetThermalOnce();
-            return;
+            return false;
         }
         final String gpu = gpuName();
+        settings.setGpuName(gpu);
         final int maxMhz = maxCpuMhz();
         final long ramMb = ramMb(context);
         float scale = scaleFor(gpu);
         if (ramMb > 0 && ramMb < 4608) scale = Math.min(scale, 0.75f);
         final boolean frameskip = maxMhz <= 0 || maxMhz < 3000;
-        // The same phones are CPU-bound: the GX thread takes the GX work off the game thread.
-        // GX Thread stays off: it flickers in battles, and syncing it enough to stop that is slower
-        // than running without it (G81, 2026-11-01).
-        final boolean gxThread = false;
-        settings.applyDeviceProfile(scale, frameskip, gxThread);
-        Log.i(TAG, "device profile: gpu '" + gpu + "', cpu max " + maxMhz + " MHz, ram " + ramMb
-                + " MB -> resolution " + scale + "x, frameskip " + frameskip + ", gx thread " + gxThread);
+        if (first) {
+            // The same phones are CPU-bound: the GX thread takes the GX work off the game thread.
+            // GX Thread stays off: it flickers in battles, and syncing it enough to stop that is slower
+            // than running without it (G81, 2026-11-01).
+            final boolean gxThread = false;
+            settings.applyDeviceProfile(scale, frameskip, gxThread);
+            Log.i(TAG, "device profile: gpu '" + gpu + "', cpu max " + maxMhz + " MHz, ram " + ramMb
+                    + " MB -> resolution " + scale + "x, frameskip " + frameskip + ", gx thread " + gxThread);
+        } else {
+            settings.resetGxThreadOnce();
+            settings.resetThermalOnce();
+        }
+        settings.markLowEndProfile();
+        if (!lowEnd(context, gpu, ramMb)) return false;
+        // Only what the player never changed: a key never written, or still holding the first
+        // profile's own pick (which wrote resolution_scale and frameskip without the player).
+        final java.util.Map<String, Object> values = lowEndValues(gpu);
+        final java.util.Iterator<java.util.Map.Entry<String, Object>> it = values.entrySet().iterator();
+        final AppSettings now = new AppSettings(context);
+        while (it.hasNext()) {
+            final String key = it.next().getKey();
+            if (!now.has(key)) continue;
+            if (key.equals("resolution_scale") && Math.abs(now.resolutionScale() - scale) < 0.01f) continue;
+            if (key.equals("frameskip") && now.frameskip() == frameskip) continue;
+            it.remove();
+        }
+        if (values.isEmpty()) return false;
+        now.applyLowEnd(values);
+        Log.i(TAG, "device profile 2: low-end phone, preset " + values.keySet());
+        return true;
+    }
+
+    /**
+     * A phone the Low-End preset is for: a budget GPU (the first profile's 0.75x or lower: Adreno 505..620,
+     * Mali G52 / G57 MP1, PowerVR), Android's low-RAM flag, fewer than 6 cores, or under 3.6 GB of RAM
+     * (ARMSX2's DeviceTier uses the last three).
+     */
+    static boolean lowEnd(Context context, String gpu, long ramMb) {
+        final ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+        return scaleFor(gpu) <= 0.75f || (am != null && am.isLowRamDevice())
+                || Runtime.getRuntime().availableProcessors() < 6 || (ramMb > 0 && ramMb < 3686);
+    }
+
+    /**
+     * What the Low-End preset sets: a 480-line surface the screen stretches, render at the same 480
+     * lines (0.5x on the weakest GPUs), no extra texture or upscaling work, frameskip and dynamic
+     * resolution to hold speed, and V-Sync off so a late frame does not wait for the next refresh.
+     */
+    static java.util.Map<String, Object> lowEndValues(String gpu) {
+        final java.util.Map<String, Object> v = new java.util.LinkedHashMap<>();
+        v.put("display_lines", 480);
+        v.put("resolution_scale", scaleFor(gpu) <= 0.5f ? 0.5f : 1f);
+        v.put("texture_filter", 0);
+        v.put("fsr_on", false);
+        v.put("frameskip", true);
+        v.put("dynamic_resolution", true);
+        v.put("hd_textures", 0);
+        v.put("show_fps", false);
+        v.put("vsync", false);
+        return v;
     }
 
     /** Render scale for a GL_RENDERER string; 1x when the GPU is unknown. */

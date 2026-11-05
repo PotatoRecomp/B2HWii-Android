@@ -84,6 +84,10 @@ final class DeviceProfile {
      * Mali G52 / G57 MP1, PowerVR), Android's low-RAM flag, fewer than 6 cores, or under 3.6 GB of RAM
      * (ARMSX2's DeviceTier uses the last three).
      */
+    static boolean lowEnd(Context context, AppSettings settings) {
+        return lowEnd(context, settings.gpuName(), ramMb(context));
+    }
+
     static boolean lowEnd(Context context, String gpu, long ramMb) {
         final ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         return scaleFor(gpu) <= 0.75f || (am != null && am.isLowRamDevice())

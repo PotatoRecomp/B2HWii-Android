@@ -149,7 +149,7 @@ final class SettingsMenu {
                 which -> settings.setAspectMode(which));
         resolutionRow();
         displayResolutionRow();
-        toggleRow(Tr.t("Performance Overlay"), Tr.t("A see-through bar at the top of the game with FPS and phone stats."),
+        heldToggle("show_fps", Tr.t("Performance Overlay"), Tr.t("A see-through bar at the top of the game with FPS and phone stats."),
                 settings.showFps(), on -> settings.setShowFps(on));
         final String[] items = {Tr.t("FPS"), Tr.t("CPU %"), Tr.t("GPU %"), Tr.t("Battery"), Tr.t("Temperature °C"), Tr.t("Details (ms, draws, RAM)"),
                 Tr.t("Frametime Graph")};
@@ -194,11 +194,27 @@ final class SettingsMenu {
         final DisplayMetrics m = screenMetrics(activity);
         final int shortSide = Math.min(m.widthPixels, m.heightPixels);
         restart(null);
-        choiceRow(Tr.t("Display Resolution"), Tr.t("The picture the game sends to the screen, which stretches it "
+        choiceRow(Tr.t("Display Resolution"), held("display_lines", Tr.t("The picture the game sends to the screen, which stretches it "
                         + "for free. Lower takes GPU work off every frame, menus too: steadier fps on a slow "
                         + "phone, blurrier picture. This screen: ") + Math.max(m.widthPixels, m.heightPixels)
-                        + "×" + shortSide + Tr.t(" (a size at or above it changes nothing)."),
-                labels, selected, true, which -> settings.setDisplayLines(lines[which]));
+                        + "×" + shortSide + Tr.t(" (a size at or above it changes nothing).")),
+                labels, selected, free("display_lines"), which -> settings.setDisplayLines(lines[which]));
+    }
+
+    /** Not held by the Low-End preset: the player may change it. */
+    private boolean free(String key) {
+        return !settings.lowEndHolds(key);
+    }
+
+    /** `about`, plus why it cannot be changed while the Low-End preset holds it. */
+    private String held(String key, String about) {
+        return free(key) ? about : about + "\n" + Tr.t("Set by the Low-End Preset: turn the preset off to change it.");
+    }
+
+    /** A toggle the Low-End preset may hold: then it shows its value, dimmed, and cannot be tapped. */
+    private void heldToggle(String key, String title, String about, boolean on, Toggle toggle) {
+        if (free(key)) toggleRow(title, about, on, toggle);
+        else card(title, held(key, about), Ui.toggle(activity, on), false, false);
     }
 
     /** The real screen size (the app's own metrics leave out the system bars). */
@@ -231,9 +247,10 @@ final class SettingsMenu {
 
     private void showGraphics() {
         upscalerRow();
-        choiceRow(Tr.t("Texture Detail"), Tr.t("Keeps the ground, walls and characters sharp at low Render "
-                        + "Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU."),
-                new String[] {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")}, settings.textureFilter(), true,
+        choiceRow(Tr.t("Texture Detail"), held("texture_filter", Tr.t("Keeps the ground, walls and characters sharp at low Render "
+                        + "Resolution and when seen at an angle. Sharpest costs a little more on a small phone GPU.")),
+                new String[] {Tr.t("Original"), Tr.t("Sharp"), Tr.t("Sharpest")}, settings.textureFilter(),
+                free("texture_filter"),
                 which -> settings.setTextureFilter(which));
         restart(null);
         choiceRow(Tr.t("Graphics Compatibility"), Tr.t("Fixes for phone GPUs whose drivers break the 3D models "
@@ -306,11 +323,11 @@ final class SettingsMenu {
     /** HD Textures: upscaled while playing, with their storage and cache. */
     private void showHdTextures() {
         restart(null);
-        choiceRow(Tr.t("HD Textures"), Tr.t("Makes the game's textures twice as sharp: each one is upscaled in the "
+        choiceRow(Tr.t("HD Textures"), held("hd_textures", Tr.t("Makes the game's textures twice as sharp: each one is upscaled in the "
                         + "background the first time it appears (blurry, then sharp) and kept for next time. Uses "
                         + "more RAM and storage.")
-                        + (weakPhone() ? Tr.t(" This phone has little RAM or renders below 1x: the gain is small.") : ""),
-                new String[] {Tr.t("Off"), Tr.t("Live")}, settings.hdTextures(), true, which -> {
+                        + (weakPhone() ? Tr.t(" This phone has little RAM or renders below 1x: the gain is small.") : "")),
+                new String[] {Tr.t("Off"), Tr.t("Live")}, settings.hdTextures(), free("hd_textures"), which -> {
                     final int before = settings.hdTextures();
                     settings.setHdTextures(which);
                     confirmRestart(Tr.t("HD Textures"), which == 1 ? Tr.t("Live") : "off", before == 1 ? Tr.t("Live") : "off",
@@ -367,11 +384,11 @@ final class SettingsMenu {
     void upscalerRow() {
         final String[] labels = new String[UPSCALERS.length];
         for (int i = 0; i < labels.length; ++i) labels[i] = Tr.t(UPSCALERS[i]);
-        choiceRow(Tr.t("Upscaler"), Tr.t("Keeps a picture rendered below the screen's resolution sharp when it is "
+        choiceRow(Tr.t("Upscaler"), held("fsr_on", Tr.t("Keeps a picture rendered below the screen's resolution sharp when it is "
                         + "stretched. FSR Light sharpens it and costs almost nothing. FSR Full adds FSR1's edge-aware "
                         + "upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware "
-                        + "upscale in one pass, lighter than FSR Full."),
-                labels, settings.fsr(), true, which -> settings.setFsr(which));
+                        + "upscale in one pass, lighter than FSR Full.")),
+                labels, settings.fsr(), free("fsr_on"), which -> settings.setFsr(which));
     }
 
     /** Player-installed Vulkan drivers (GpuDrivers): choose one, install a .zip, remove one. */
@@ -434,20 +451,21 @@ final class SettingsMenu {
     }
 
     private void showPerformance() {
-        lowEndRow();
-        choiceRow(Tr.t("Frameskip"), Tr.t("The game moves one step per drawn frame, so a slow phone plays in slow "
+        // A low-end phone has the preset's switch above the launcher's settings tabs instead.
+        if (inGame || !DeviceProfile.lowEnd(activity, settings)) lowEndRow();
+        choiceRow(Tr.t("Frameskip"), held("frameskip", Tr.t("The game moves one step per drawn frame, so a slow phone plays in slow "
                         + "motion. Auto skips drawing a frame when it falls behind: closer to full speed, "
-                        + "choppier picture."),
-                new String[] {Tr.t("Off"), Tr.t("Auto")}, settings.frameskip() ? 1 : 0, !settings.fpsLock30(),
-                which -> settings.setFrameskip(which == 1));
+                        + "choppier picture.")),
+                new String[] {Tr.t("Off"), Tr.t("Auto")}, settings.frameskip() ? 1 : 0,
+                !settings.fpsLock30() && free("frameskip"), which -> settings.setFrameskip(which == 1));
         toggleRow(Tr.t("30 FPS Lock"), Tr.t("Draws every other frame, evenly paced: a steady 30 FPS while the game "
                         + "and sound keep full speed. For phones that cannot hold 60. Replaces Frameskip "
                         + "while on."),
                 settings.fpsLock30(), on -> settings.setFpsLock30(on));
         restart(null);
-        toggleRow(Tr.t("V-Sync"), Tr.t("Frames go out in step with the display: smoother motion."), settings.vsync(),
+        heldToggle("vsync", Tr.t("V-Sync"), Tr.t("Frames go out in step with the display: smoother motion."), settings.vsync(),
                 on -> settings.setVSync(on));
-        toggleRow(Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
+        heldToggle("dynamic_resolution", Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
                         + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
                         + "highest it goes."),
                 settings.dynamicResolution(), on -> settings.setDynamicResolution(on));

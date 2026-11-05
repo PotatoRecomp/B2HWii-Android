@@ -95,6 +95,17 @@ final class AppSettings {
 
     boolean lowEndApplied() { return prefs.contains("low_end_backup"); }
 
+    /**
+     * A setting the Low-End preset holds while it is on: it still has the preset's value, so it cannot be
+     * changed by hand (a key the preset left alone, like V-Sync the player had set, stays free). Render
+     * Resolution is never held.
+     */
+    boolean lowEndHolds(String key) {
+        if (!lowEndApplied() || key.equals("resolution_scale")) return false;
+        final Object want = DeviceProfile.lowEndValues(gpuName()).get(key);
+        return want != null && want.equals(prefs.getAll().get(key));
+    }
+
     /** Saves what the LOW_END_KEYS hold now (a missing key stays missing on Undo), then writes `values`. */
     void applyLowEnd(java.util.Map<String, Object> values) {
         final java.util.Map<String, ?> all = prefs.getAll();

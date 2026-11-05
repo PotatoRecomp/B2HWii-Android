@@ -72,6 +72,8 @@ public final class LauncherActivity extends Activity {
     private View statusDot;
     private LinearLayout configStrip;
     private LinearLayout tabs;
+    private LinearLayout lowEndBox;
+    private boolean lowEndDevice;
     private LinearLayout panel;
     private ScrollView scroll;
     private SettingsMenu menu;
@@ -89,7 +91,7 @@ public final class LauncherActivity extends Activity {
         Tr.init(this);
         if (DeviceProfile.applyOnce(this, settings)) {
             Toast.makeText(this, Tr.t("This phone now uses the Low-End preset: steadier, a bit blurrier. "
-                    + "Performance > Low-End Preset puts it back."), Toast.LENGTH_LONG).show();
+                    + "Turn it off with the switch above All settings."), Toast.LENGTH_LONG).show();
         }
         // Updates are checked on a fresh start, not when the game sent the player here or is
         // restarting itself into a LAN session.
@@ -111,6 +113,10 @@ public final class LauncherActivity extends Activity {
         tabBox.setOrientation(LinearLayout.VERTICAL);
         tabBox.setPadding(dp(14), dp(12), dp(14), dp(10));
         sections = SettingsMenu.launcherSections();
+        lowEndDevice = DeviceProfile.lowEnd(this, settings);
+        lowEndBox = new LinearLayout(this);
+        lowEndBox.setOrientation(LinearLayout.VERTICAL);
+        tabBox.addView(lowEndBox, Ui.matchWidth(0));
         final LinearLayout divider = new LinearLayout(this);
         divider.setGravity(Gravity.CENTER_VERTICAL);
         divider.addView(Ui.caption(this, Tr.t("All settings")),
@@ -834,6 +840,69 @@ public final class LauncherActivity extends Activity {
     private void showSummary() {
         settings = new AppSettings(this);  // the settings panel and the game write the same file
         showConfigStrip();
+        showLowEndCard();
+    }
+
+    /**
+     * On a low-end phone: a warning above "All settings" with the Low-End preset's switch. While it is on,
+     * the settings it set are held (SettingsMenu dims them); Render Resolution stays free.
+     */
+    private void showLowEndCard() {
+        if (lowEndBox == null) return;
+        lowEndBox.removeAllViews();
+        if (!lowEndDevice) return;
+        final boolean on = settings.lowEndApplied();
+        final LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        card.setBackground(Ui.touchBox(this, Sheet.WARNING_FILL, Ui.DANGER_BORDER, 8));
+        final TextView title = Ui.text(this, "⚠ " + Tr.t("Low-End Device"), 13, Sheet.WARNING_TEXT);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(title, Ui.matchWidth(0));
+        card.addView(Ui.text(this, Tr.t("This phone's GPU or RAM is below what the game needs for a steady 60 fps. "
+                + "The Low-End Preset trades sharpness for speed."), 11.5f, Ui.SECONDARY), Ui.matchWidth(dp(3)));
+
+        final LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        final LinearLayout words = new LinearLayout(this);
+        words.setOrientation(LinearLayout.VERTICAL);
+        final TextView name = Ui.text(this, Tr.t("Low-End Preset"), 13, Ui.TEXT);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        words.addView(name);
+        words.addView(Ui.text(this, on
+                ? Tr.t("On: 480p, Texture Detail Original, no upscaler, Frameskip Auto, Dynamic Resolution, HD "
+                        + "Textures off. These stay as set until it is off; Render Resolution can still be changed.")
+                : Tr.t("Off: every setting is yours to change."), 11, Ui.MUTED), Ui.matchWidth(dp(2)));
+        row.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        final View toggle = Ui.toggle(this, on);
+        final android.view.ViewGroup.LayoutParams own = toggle.getLayoutParams();
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                own != null ? own.width : LinearLayout.LayoutParams.WRAP_CONTENT,
+                own != null ? own.height : LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.leftMargin = dp(12);
+        row.addView(toggle, params);
+        row.setClickable(true);
+        row.setOnClickListener(v -> setLowEnd(!on));
+        card.addView(row, Ui.matchWidth(dp(10)));
+        lowEndBox.addView(card, Ui.matchWidth(0));
+        final View gap = new View(this);
+        lowEndBox.addView(gap, new LinearLayout.LayoutParams(1, dp(12)));
+    }
+
+    private void setLowEnd(boolean on) {
+        final AppSettings now = new AppSettings(this);
+        if (on) now.applyLowEnd(DeviceProfile.lowEndValues(now.gpuName()));
+        else now.undoLowEnd();
+        try {
+            AppFiles.writeConfig(this, now);
+        } catch (Exception e) {
+            android.util.Log.e("Basara", "could not save the settings", e);
+        }
+        if (gameRunning()) {
+            Toast.makeText(this, Tr.t("Applies when the game starts again."), Toast.LENGTH_SHORT).show();
+        }
+        showSummary();
+        if (menu != null) menu.show(menu.section());
     }
 
     private void showConfigStrip() {

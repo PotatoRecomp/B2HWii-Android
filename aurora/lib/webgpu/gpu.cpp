@@ -52,12 +52,15 @@ static Module Log("aurora::gpu");
 #if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
 extern "C" bool aurora_wgpu_vk;  // lib/vulkan/wgpu_dispatch.cpp
 extern "C" void aurora_vk_save_pipeline_cache();
+extern "C" bool aurora_vk_has_bc();
+static bool vulkan_backend_has_bc() { return aurora_vk_has_bc(); }
 extern "C" int aurora_vk_surface_rotation();
 static bool vulkan_backend_active() { return aurora_wgpu_vk; }
 static void set_vulkan_backend(bool on) { aurora_wgpu_vk = on; }
 #else
 static bool vulkan_backend_active() { return false; }
 static void set_vulkan_backend(bool) {}
+static bool vulkan_backend_has_bc() { return true; }
 #endif
 
 wgpu::Device g_device;
@@ -979,6 +982,10 @@ static bool initialize_once(AuroraBackend auroraBackend) {
     if (!g_device) {
       return false;
     }
+    if (vulkan_backend_active() && g_bcTexturesSupported && !vulkan_backend_has_bc()) {
+      g_bcTexturesSupported = false;
+    }
+    Log.info("BC textures: {}", g_bcTexturesSupported ? "supported" : "not supported");
 #if defined(WEBGPU_DAWN) && !defined(__MINGW32__)
     {
       // Dawn picks its own workarounds from the adapter (vendor, driver, extensions); record them.

@@ -201,7 +201,7 @@ Writes to the log while you play.	Menulis ke log selama main.
 Report Texture Keys	Laporkan Kunci Tekstur
 Lists the name of every texture the game uses in the log (only the names, no pictures), so testers can check that texture packs match the game. Takes effect when the game starts again.	Mencatat nama tiap tekstur yang dipakai game di log (hanya nama, tanpa gambar), supaya tester bisa mengecek paket tekstur cocok dengan game. Berlaku saat game dimulai lagi.
 A wrong or very large pack can crash the game or use up RAM.	Paket yang salah atau sangat besar bisa membuat game crash atau menghabiskan RAM.
-Uses your own textures (tex1_*.png, Dolphin-style names) from 	Memakai tekstur buatanmu (tex1_*.png, nama gaya Dolphin) dari 
+Uses your own textures (tex1_*.png or .dds, Dolphin-style names) from 	Memakai tekstur buatanmu (tex1_*.png atau .dds, nama gaya Dolphin) dari 
  in place of the game's. Takes effect when the game starts again.	 sebagai pengganti tekstur game. Berlaku saat game dimulai lagi.
 Needs "All files access" for this app, to read 	Perlu "Akses semua file" untuk aplikasi ini, untuk membaca 
 Slows loading and fills storage quickly.	Memperlambat loading dan cepat memenuhi penyimpanan.
@@ -469,3 +469,135 @@ On: the scene follows the finger (drag right, the view turns left), and the righ
 Invert Camera now also reverses the right touch stick (both ways), not only camera drags.	Invert Camera kini juga membalik stik sentuh kanan (dua arah), bukan hanya geser kamera.
 Installing this Beta over an ended one still showed "The Beta has ended".	Memasang Beta ini di atas Beta yang sudah berakhir masih menampilkan "Beta sudah berakhir".
 Import Save refused a data.bin copied from a Wii or Dolphin ("not a save of this game"). It is now read as it is.	Impor Save menolak data.bin dari Wii atau Dolphin ("bukan save game ini"). Kini file itu bisa langsung dibaca.
+Every Experimental feature passed testing and is now a regular setting, without warnings: HD Textures, Custom Textures, Dump Textures, Report Texture Keys, the Vulkan renderer, GPU drivers and Thermal Control. The Experimental tab is gone.	Semua fitur Eksperimen lolos uji dan kini jadi pengaturan biasa, tanpa peringatan: HD Textures, Custom Textures, Dump Textures, Report Texture Keys, renderer Vulkan, driver GPU dan Kontrol Termal. Tab Eksperimen dihapus.
+New Textures tab: Custom Textures (.png or .dds), Dump Textures, Report Texture Keys and HD Textures in one place. Renderer and GPU Driver moved to Graphics, Thermal Control to Performance.	Tab Tekstur baru: Custom Textures (.png atau .dds), Dump Textures, Report Texture Keys dan HD Textures dalam satu tempat. Renderer dan GPU Driver pindah ke Grafis, Kontrol Termal ke Performa.
+Still to be tested once the phones and testers' reports come in: Mali phones (BC textures, malisx2), Adreno 616 (silver enemies) and Adreno 610 (horse riding).	Masih akan diuji setelah perangkat dan laporan tester tersedia: HP Mali (tekstur BC, malisx2), Adreno 616 (musuh perak) dan Adreno 610 (naik kuda).
+The settings tabs stay at the top while the settings below them scroll.	Tab pengaturan tetap di atas saat pengaturan di bawahnya digulir.
+Experimental features passed testing, new Textures tab	Fitur eksperimen lolos uji, tab Tekstur baru
+Developer	Developer
+Textures	Tekstur
+Custom Textures also reads .dds packs (BC1 to BC7). On a GPU without BC textures (most Mali) they are unpacked while loading, so the same pack works on every phone.	Custom Textures kini juga membaca pack .dds (BC1 sampai BC7). Di GPU tanpa tekstur BC (kebanyakan Mali) dibuka saat dimuat, jadi pack yang sama jalan di semua HP.
+Dynamic Resolution with the Vulkan renderer now follows the GPU's own time, so it also lowers the resolution when heavy effects slow the GPU down.	Dynamic Resolution dengan renderer Vulkan kini mengikuti waktu GPU sendiri, jadi resolusi juga turun saat efek berat memperlambat GPU.
+HD Textures Live no longer slows the game down while the sharper textures are being made.	HD Textures Live tidak lagi memperlambat game saat tekstur tajam sedang dibuat.
+Dump Textures no longer slows the game down, and skips movie frames.	Dump Textures tidak lagi memperlambat game, dan melewati frame video.
+GX Thread: busy battles drop fewer frames (the game kept waiting for the graphics thread).	GX Thread: frame lebih jarang turun di pertempuran ramai (game terus menunggu thread grafis).
+The launcher showed Continue and Stop after the game had closed normally.	Launcher menampilkan Lanjutkan dan Stop setelah game ditutup dengan normal.
+Thermal Control stayed at 30 fps on a phone that had only been warm for a moment.	Kontrol Termal tertahan di 30 fps pada HP yang hanya hangat sebentar.
+Vulkan renderer: .dds textures on GPUs without BC textures no longer fail to load.	Renderer Vulkan: tekstur .dds di GPU tanpa tekstur BC tidak lagi gagal dimuat.
+Adreno 618 (Redmi Note 10 Pro and similar): very heavy effects still drop to about 40 fps, the limit of the GPU.	Adreno 618 (Redmi Note 10 Pro dan sejenisnya): efek sangat berat masih turun ke sekitar 40 fps, batas GPU-nya.
+Counting...	Menghitung...
+Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, made for older phones.	Auto memakai Dawn, dan renderer Vulkan hanya untuk driver GPU yang tidak bisa dipakai Dawn (seperti malisx2 di Mali). Vulkan selalu mencoba renderer Vulkan dulu: lebih ringan, dibuat untuk HP lama.
+Makes the game's textures twice as sharp: each one is upscaled in the background the first time it appears (blurry, then sharp) and kept for next time. Uses more RAM and storage.	Membuat tekstur game dua kali lebih tajam: tiap tekstur di-upscale di latar saat pertama muncul (buram, lalu tajam) dan disimpan untuk berikutnya. Memakai lebih banyak RAM dan penyimpanan.
+ This phone has little RAM or renders below 1x: the gain is small.	 HP ini RAM-nya kecil atau render di bawah 1x: manfaatnya kecil.
+ in place of the game's. A very large pack uses more RAM.	 sebagai pengganti tekstur game. Paket yang sangat besar memakai lebih banyak RAM.
+. Slows loading and fills storage: turn it off when done.	. Memperlambat loading dan memenuhi penyimpanan: matikan bila sudah selesai.
+New Developer tab: Share Log sends the log of the times you played (the crashed one first) with the device info as one zip, to Discord, Telegram, WhatsApp or any app. Device Info with Copy. Testing options (GPU Timing, Frameskip Override, Dynamic Resolution Test, env.txt editor) without a PC. Reset and Clear: reset all settings and clear the caches or logs in one place.	Tab Developer baru: Bagikan Log mengirim log dari sesi main yang kamu pilih (yang crash lebih dulu) beserta info perangkat dalam satu zip, ke Discord, Telegram, WhatsApp atau aplikasi apa saja. Info Perangkat dengan tombol Salin. Opsi uji (Waktu GPU, Paksa Frameskip, Uji Resolusi Dinamis, editor env.txt) tanpa PC. Reset dan Bersihkan: reset semua pengaturan dan hapus cache atau log di satu tempat.
+Share Log	Bagikan Log
+Sends the log of the game runs you pick (the one that crashed first) with the device info, as one zip: to Discord, Telegram, WhatsApp or anywhere else.	Mengirim log dari run game yang kamu pilih (yang crash lebih dulu) beserta info perangkat dalam satu zip: ke Discord, Telegram, WhatsApp atau ke mana saja.
+Needs "All files access" for this app, to read the logs.	Butuh "Akses semua file" untuk aplikasi ini, untuk membaca log.
+Share	Bagikan
+Device Info	Info Perangkat
+Copy	Salin
+Copied.	Tersalin.
+under 1 min	kurang dari 1 mnt
+min	mnt
+Crash	Crash
+Ended normally	Berhenti normal
+No game runs in Logs yet. Play once, then come back.	Belum ada run game di Logs. Main sekali dulu, lalu kembali ke sini.
+Pick the runs to send. The one that crashed is picked; add a normal run to compare. The device info and settings are included. Send it anywhere: Discord, Telegram, WhatsApp, Drive.	Pilih run yang mau dikirim. Run yang crash sudah terpilih; tambahkan run normal sebagai pembanding. Info perangkat dan pengaturan ikut. Kirim ke mana saja: Discord, Telegram, WhatsApp, Drive.
+Pick at least one run.	Pilih minimal satu run.
+Preparing the log...	Menyiapkan log...
+The log is %.1f MB, over Discord's 10 MB: pick fewer runs for Discord.	Log %.1f MB, melebihi batas Discord 10 MB: pilih lebih sedikit run untuk Discord.
+Could not make the log: 	Gagal membuat log: 
+Closed: low memory	Ditutup: memori habis
+Closed by Android	Ditutup Android
+Today	Hari ini
+Yesterday	Kemarin
+Under 1 min played	Main kurang dari 1 mnt
+min played	mnt main
+Crashed	Crash
+Closed: phone ran out of memory	Ditutup: memori HP habis
+Closed normally	Ditutup normal
+Each one is a time you played. Pick the one with the problem (a crash is picked already), then send it to Discord or any app.	Tiap baris adalah satu kali kamu main. Pilih yang bermasalah (yang crash sudah terpilih), lalu kirim ke Discord atau aplikasi lain.
+GPU Timing	Waktu GPU
+Writes how long the GPU works on each frame to the log ("[vkgpu] gpu: X ms"), Vulkan renderer only. Per Draw is slower and for finding the heavy effect.	Mencatat lama kerja GPU tiap frame ke log ("[vkgpu] gpu: X ms"), hanya renderer Vulkan. Per Draw lebih lambat, untuk mencari efek yang berat.
+Per Frame	Per Frame
+Per Draw	Per Draw
+Frameskip Override	Paksa Frameskip
+Fixes frameskip for a test, whatever Performance says. Settings: use the Performance tab.	Mengunci frameskip untuk pengujian, apa pun isi tab Performa. Pengaturan: ikuti tab Performa.
+30 FPS	30 FPS
+Dynamic Resolution Test	Uji Resolusi Dinamis
+Walks the resolution down and back up one step every two seconds, to check each size draws right. Needs Dynamic Resolution on.	Menurunkan lalu menaikkan resolusi satu langkah tiap dua detik, untuk mengecek tiap ukuran tampil benar. Butuh Resolusi Dinamis menyala.
+Edit env.txt	Edit env.txt
+No testing options set.	Belum ada opsi uji.
+%d options set, in %s.	%d opsi aktif, di %s.
+Edit	Edit
+Reset and Clear	Reset dan Bersihkan
+Reset all settings, clear the HD texture and shader caches, the testing options or the logs, in one place.	Reset semua pengaturan, hapus cache tekstur HD dan shader, opsi uji atau log, di satu tempat.
+One NAME=value a line, # starts a comment. Read when the game starts. For testing only: a wrong value can make the game slow or close.	Satu NAMA=nilai per baris, # untuk komentar. Dibaca saat game dimulai. Hanya untuk pengujian: nilai yang salah bisa membuat game lambat atau tertutup.
+Could not save env.txt.	Gagal menyimpan env.txt.
+Reset all settings	Reset semua pengaturan
+Clear HD texture cache	Hapus cache tekstur HD
+Clear shader cache	Hapus cache shader
+Clear testing options (env.txt)	Hapus opsi uji (env.txt)
+Delete logs	Hapus log
+Every setting back to its default for this phone, touch layout too. The language, game file, saves and installed GPU drivers stay.	Semua pengaturan kembali ke bawaan untuk HP ini, termasuk tata letak sentuh. Bahasa, file game, save dan driver GPU yang terpasang tetap ada.
+The sharper HD textures are made again while you play.	Tekstur HD dibuat lagi selama main.
+The first battles stutter a little while it is built again. Try it when graphics look broken after an update.	Pertempuran pertama sedikit tersendat selama cache dibuat lagi. Coba bila grafis terlihat rusak setelah update.
+Removes every line from env.txt.	Menghapus semua baris di env.txt.
+Removes the Logs folder (game runs and crash reports).	Menghapus folder Logs (sesi main dan laporan crash).
+Stop the game first: these files are in use while it runs.	Hentikan game dulu: file ini dipakai selama game berjalan.
+Pick what to reset or clear. This cannot be undone.	Pilih yang mau di-reset atau dihapus. Tidak bisa dibatalkan.
+Pick at least one.	Pilih minimal satu.
+Working...	Memproses...
+Done.	Selesai.
+Testing options turned off by themselves after %d game starts.	Opsi uji mati sendiri setelah %d kali game dimulai.
+GPU timing off	Waktu GPU mati
+The log no longer says how long the GPU works on a frame.	Log tidak lagi mencatat lama kerja GPU per frame.
+GPU timing per draw	Waktu GPU per draw
+Times every draw in the log: slower, for finding a heavy effect.	Mencatat waktu tiap draw di log: lebih lambat, untuk mencari efek yang berat.
+Frameskip forced off	Frameskip dipaksa mati
+Every frame is drawn, whatever Performance says.	Semua frame digambar, apa pun isi tab Performa.
+Frameskip forced to Auto	Frameskip dipaksa Otomatis
+Frames are skipped when the phone falls behind.	Frame dilewati saat HP tertinggal.
+Locked to 30 FPS	Dikunci 30 FPS
+Every other frame is drawn.	Hanya satu dari dua frame yang digambar.
+Dynamic resolution test	Uji resolusi dinamis
+The resolution steps down and back up every two seconds.	Resolusi turun lalu naik tiap dua detik.
+Frame timing log	Log waktu frame
+Writes the frame times to the log.	Mencatat waktu tiap frame ke log.
+Texture statistics	Statistik tekstur
+Writes how many textures load and how long it takes to the log.	Mencatat jumlah tekstur yang dimuat dan lamanya ke log.
+Sound log	Log suara
+Writes the voices and sounds that play to the log.	Mencatat suara dan efek suara yang diputar ke log.
+GX Thread forced	GX Thread dipaksa
+Turns GX Thread on (1) or off (0), whatever Performance says.	GX Thread nyala (1) atau mati (0), apa pun isi tab Performa.
+Renderer forced	Renderer dipaksa
+Uses the named renderer, whatever Graphics says.	Memakai renderer yang disebut, apa pun isi tab Grafis.
+CPU profile	Profil CPU
+Records where the game spends its time, into the log folder.	Mencatat bagian game yang paling makan waktu, ke folder log.
+Thermal control forced	Kontrol termal dipaksa
+Thermal Control on (1) or off (0), whatever Performance says.	Kontrol Termal nyala (1) atau mati (0), apa pun isi tab Performa.
+Disc preload off	Muat awal disc mati
+Reads the game file only when needed.	File game dibaca hanya saat dibutuhkan.
+Turnip driver debug	Debug driver Turnip
+A debug switch for the Turnip GPU driver.	Saklar debug untuk driver GPU Turnip.
+Developer option	Opsi developer
+Not in the app's list: from the developer.	Tidak ada di daftar app: dari developer.
+None on. Copy the code the developer sends you on Discord, then tap Paste from Discord.	Belum ada yang aktif. Salin kode yang dikirim developer di Discord, lalu tap Tempel dari Discord.
+Testing options are on	Opsi uji aktif
+They turn off by themselves after %d more game starts.	Akan mati sendiri setelah %d kali game dimulai lagi.
+Testing Options	Opsi Uji
+Settings the developer asks you to try. They apply the next time the game starts.	Pengaturan yang diminta developer untuk dicoba. Berlaku saat game dimulai berikutnya.
+Paste from Discord	Tempel dari Discord
+Copy the code first, then tap here.	Salin kodenya dulu, lalu tap di sini.
+Edit manually	Edit manual
+Nothing to paste	Tidak ada yang bisa ditempel
+The copied text has no NAME=value lines. Copy the whole code from Discord (for example BASARA_FRAMESKIP=0), then try again.	Teks yang disalin tidak berisi baris NAMA=nilai. Salin seluruh kode dari Discord (misalnya BASARA_FRAMESKIP=0), lalu coba lagi.
+Add %d testing options?	Tambah %d opsi uji?
+They apply the next %d times the game starts, then turn off by themselves.	Berlaku untuk %d kali game dimulai berikutnya, lalu mati sendiri.
+Add	Tambah
+None on. Paste the code the developer sends you on Discord.	Belum ada yang aktif. Tempel kode yang dikirim developer di Discord.
+%d on, they turn off by themselves after %d more game starts.	%d aktif, mati sendiri setelah %d kali game dimulai lagi.
+%d on, in %s.	%d aktif, di %s.
+Testing options (%d)	Opsi uji (%d)

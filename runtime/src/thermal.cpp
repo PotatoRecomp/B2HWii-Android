@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "thermal.h"
 
 #include "runtime_log.h"
@@ -37,8 +38,19 @@ void Poll(void* manager, HeadroomFn headroom, StatusFn status) {
     pthread_setname_np(pthread_self(), "Thermal");
     setpriority(PRIO_PROCESS, 0, 10);
     int logged = -1;
+    // Testing: BASARA_THERMAL_FAKE=H:S reports headroom H for the first S seconds, then the real one.
+    float fake = -1.0f;
+    int fakeSeconds = 0;
+    if (const char* env = std::getenv("BASARA_THERMAL_FAKE")) {
+        std::sscanf(env, "%f:%d", &fake, &fakeSeconds);
+        RT_LOGF(RT_TAG_RUNTIME, "thermal: fake headroom %.2f for %d s\n", fake, fakeSeconds);
+    }
+    const auto start = std::chrono::steady_clock::now();
     for (;;) {
-        const float h = headroom(manager, 10);
+        float h = headroom(manager, 10);
+        if (fake >= 0.0f && std::chrono::steady_clock::now() - start < std::chrono::seconds(fakeSeconds)) {
+            h = fake;
+        }
         if (!std::isnan(h)) {
             g_headroom.store(h, std::memory_order_relaxed);
             const bool warm = g_warm.load(std::memory_order_relaxed);

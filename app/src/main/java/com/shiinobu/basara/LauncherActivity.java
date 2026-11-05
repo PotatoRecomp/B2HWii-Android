@@ -103,9 +103,10 @@ public final class LauncherActivity extends Activity {
         page.addView(configStripView(), Ui.matchWidth(0));
         page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
 
-        final LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(14), dp(12), dp(14), dp(20));
+        // The section tabs stay above the scrolling settings, so another section is one tap away anywhere.
+        final LinearLayout tabBox = new LinearLayout(this);
+        tabBox.setOrientation(LinearLayout.VERTICAL);
+        tabBox.setPadding(dp(14), dp(12), dp(14), dp(10));
         sections = SettingsMenu.launcherSections();
         final LinearLayout divider = new LinearLayout(this);
         divider.setGravity(Gravity.CENTER_VERTICAL);
@@ -114,10 +115,16 @@ public final class LauncherActivity extends Activity {
         final TextView count = Ui.text(this, sections.length + Tr.t(" sections"), 10.5f, Ui.MUTED);
         count.setTypeface(Ui.MONO);
         divider.addView(count);
-        body.addView(divider, Ui.matchWidth(0));
+        tabBox.addView(divider, Ui.matchWidth(0));
         tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.VERTICAL);
-        body.addView(tabs, Ui.matchWidth(dp(8)));
+        tabBox.addView(tabs, Ui.matchWidth(dp(8)));
+        page.addView(tabBox, Ui.matchWidth(0));
+        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(14), dp(2), dp(14), dp(20));
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         body.addView(panel, Ui.matchWidth(dp(10)));
@@ -314,12 +321,17 @@ public final class LauncherActivity extends Activity {
         }
     }
 
-    /** The section tabs, four to a row, with the open one lit. */
+    /**
+     * The section tabs with the open one lit: four to a row with the icon above the name, or, for nine,
+     * three to a row with the icon beside it (a 3x3 grid about as tall as two rows of four).
+     */
     private void showTabs() {
         tabs.removeAllViews();
+        final boolean wide = sections.length == 9;
+        final int perRow = wide ? 3 : 4;
         LinearLayout row = null;
         for (int i = 0; i < sections.length; ++i) {
-            if (i % 4 == 0) {
+            if (i % perRow == 0) {
                 row = new LinearLayout(this);
                 tabs.addView(row, Ui.matchWidth(i == 0 ? 0 : dp(6)));
             }
@@ -327,37 +339,44 @@ public final class LauncherActivity extends Activity {
             final boolean open = id == menu.section();
             final int color = open ? Ui.TEXT : SettingsMenu.risky(id) ? Sheet.WARNING_TEXT : Ui.SECONDARY;
             final LinearLayout tab = new LinearLayout(this);
-            tab.setOrientation(LinearLayout.VERTICAL);
+            tab.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
             tab.setGravity(Gravity.CENTER);
-            tab.setPadding(dp(4), dp(9), dp(4), dp(8));
+            tab.setPadding(dp(wide ? 6 : 4), dp(9), dp(wide ? 6 : 4), dp(wide ? 9 : 8));
             tab.setBackground(Ui.touchBox(this, open ? Ui.ACTIVE : Ui.SURFACE, open ? Ui.SECONDARY : Ui.BORDER, 8));
             tab.addView(Ui.icon(this, SettingsMenu.icon(id), color, 17));
-            final TextView name = Ui.text(this, SettingsMenu.name(id), 11, color);
+            final TextView name = Ui.text(this, SettingsMenu.name(id), wide ? 12 : 11, color);
             name.setTypeface(open ? Typeface.DEFAULT_BOLD : Ui.MEDIUM);
             name.setSingleLine(true);
             name.setEllipsize(android.text.TextUtils.TruncateAt.END);
             name.setGravity(Gravity.CENTER);
-            tab.addView(name, Ui.matchWidth(dp(4)));
+            if (wide) {
+                final LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                beside.leftMargin = dp(6);
+                tab.addView(name, beside);
+            } else {
+                tab.addView(name, Ui.matchWidth(dp(4)));
+            }
             tab.setClickable(true);
             tab.setOnClickListener(v -> selectSection(id, false));
             final LinearLayout.LayoutParams params =
                     new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            params.leftMargin = i % 4 == 0 ? 0 : dp(6);
+            params.leftMargin = i % perRow == 0 ? 0 : dp(6);
             row.addView(tab, params);
         }
         // An unfinished last row keeps the tabs the same width.
-        for (int i = sections.length % 4; i != 0 && i < 4; ++i) {
+        for (int i = sections.length % perRow; i != 0 && i < perRow; ++i) {
             final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, 1, 1f);
             params.leftMargin = dp(6);
             row.addView(new View(this), params);
         }
     }
 
-    /** Opens a section under the tabs; `reveal` scrolls the page to it (from a chip at the top). */
+    /** Opens a section under the tabs, from its top (`reveal`: from a chip at the top; the tabs never scroll away). */
     private void selectSection(int section, boolean reveal) {
         menu.show(section);
         showTabs();
-        if (reveal) scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, tabs.getTop() - dp(8))));
+        scroll.post(() -> scroll.scrollTo(0, 0));  // a new section starts at its top
     }
 
     /** The launcher's own System rows: the game file, updates, network play, the project. */
@@ -392,10 +411,36 @@ public final class LauncherActivity extends Activity {
             final String name = getPackageName() + ":game";
             for (ActivityManager.RunningAppProcessInfo info : all) {
                 // One just ended still lists for a moment: it is no longer a game to Continue.
-                if (name.equals(info.processName) && info.pid != endedGame) return info.pid;
+                if (!name.equals(info.processName) || info.pid == endedGame) continue;
+                if (gameTaskAlive(am)) return info.pid;
+                // Swiped from the recent apps: the task is gone, but some systems (MIUI) leave the
+                // process behind with no game in it. Its runtime has already started once, so it must
+                // not be reused; end it and offer a fresh Play.
+                android.os.Process.killProcess(info.pid);
+                endedGame = info.pid;
+                return 0;
             }
         }
         return 0;
+    }
+
+    /** A task of this app still holds the game (paused behind the launcher, or in a task of its own). */
+    private boolean gameTaskAlive(ActivityManager am) {
+        final String game = GameActivity.class.getName();
+        for (ActivityManager.AppTask task : am.getAppTasks()) {
+            try {
+                final ActivityManager.RecentTaskInfo info = task.getTaskInfo();
+                if (info == null) continue;
+                if (info.numActivities > 1
+                        || (info.baseActivity != null && game.equals(info.baseActivity.getClassName()))
+                        || (info.topActivity != null && game.equals(info.topActivity.getClassName()))) {
+                    return true;
+                }
+            } catch (IllegalArgumentException gone) {
+                // The task ended while we looked.
+            }
+        }
+        return false;
     }
 
     /** Ends a game still running in the background, so the next start is a fresh one. */
@@ -449,6 +494,7 @@ public final class LauncherActivity extends Activity {
         super.onResume();
         refresh();
         showBetaEnded();
+        DevTools.checkExpired(this);
         // The game died (maybe before its own log opened): say why and where the report is.
         final String crash = CrashReport.checkLastGameExit(this);
         if (crash != null) {
@@ -801,15 +847,19 @@ public final class LauncherActivity extends Activity {
         if (settings.showFps()) stripChip(Tr.t("Overlay"), SettingsMenu.DISPLAY, false);
         stripChip(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")), SettingsMenu.CONTROLS, false);
         if (settings.anyCheat()) stripChip(Tr.t("Cheats on"), SettingsMenu.CHEATS, true);
-        final java.util.List<String> experimental = new java.util.ArrayList<>();
-        if (settings.renderer() == 1) experimental.add(Tr.t("Vulkan"));
-        if (settings.thermalControl()) experimental.add(Tr.t("Thermal Control"));
-        if (settings.hdTextures() != 0) experimental.add(Tr.t("HD Textures"));
-        if (settings.gxThread()) experimental.add(Tr.t("GX Thread"));
-        if (settings.dynamicResolution()) experimental.add(Tr.t("Dynamic Resolution"));
-        if (settings.customTextures()) experimental.add(settings.dumpTextures() ? Tr.t("Custom + Dump Textures") : Tr.t("Custom Textures"));
-        if (settings.textureKeyReport()) experimental.add(Tr.t("Texture Keys"));
-        for (String name : experimental) stripChip(name, SettingsMenu.EXPERIMENTAL, true);
+        // Each chip opens the section its setting is in.
+        if (settings.renderer() == 1) stripChip(Tr.t("Vulkan"), SettingsMenu.GRAPHICS, false);
+        if (settings.hdTextures() != 0) stripChip(Tr.t("HD Textures"), SettingsMenu.TEXTURES, false);
+        if (settings.customTextures()) stripChip(settings.dumpTextures() ? Tr.t("Custom + Dump Textures")
+                : Tr.t("Custom Textures"), SettingsMenu.TEXTURES, false);
+        if (settings.gxThread()) stripChip(Tr.t("GX Thread"), SettingsMenu.PERFORMANCE, false);
+        if (settings.dynamicResolution()) stripChip(Tr.t("Dynamic Resolution"), SettingsMenu.PERFORMANCE, false);
+        if (settings.thermalControl()) stripChip(Tr.t("Thermal Control"), SettingsMenu.PERFORMANCE, false);
+        if (settings.textureKeyReport()) stripChip(Tr.t("Texture Keys"), SettingsMenu.TEXTURES, false);
+        final int testing = DevTools.activeEnvCount();
+        if (testing > 0) {
+            stripChip(String.format(java.util.Locale.ROOT, Tr.t("Testing options (%d)"), testing), SettingsMenu.DEVELOPER, true);
+        }
     }
 
     private void stripChip(String label, int section, boolean warning) {

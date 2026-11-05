@@ -31,6 +31,12 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/AppTheme">
 
+        <provider
+            android:name=".LogShareProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <activity
             android:name=".LauncherActivity"
             android:exported="true"

@@ -65,11 +65,15 @@ const char* ModeName(int value) { return value == 0 ? "off" : value == 1 ? "auto
 // unless BASARA_FRAMESKIP fixed it.
 std::atomic<int> g_mode{-1};
 std::atomic<bool> g_modeFromEnv{false};
+// The launcher's choice from before the first read: GameActivity.onCreate sends it before main()
+// has applied env.txt, so deciding then would miss BASARA_FRAMESKIP.
+std::atomic<int> g_requested{-1};
 
 int Mode() {
     int value = g_mode.load(std::memory_order_relaxed);
     if (value >= 0) return value;
-    value = RuntimeConfigFile::Frameskip();
+    const int requested = g_requested.load(std::memory_order_relaxed);
+    value = requested >= 0 ? requested : RuntimeConfigFile::Frameskip();
     if (const char* env = std::getenv("BASARA_FRAMESKIP")) {
         value = std::atoi(env);
         g_modeFromEnv.store(true, std::memory_order_relaxed);
@@ -103,9 +107,12 @@ void BasaraBootSkip_SaveAccess() {
 }
 
 void BasaraFrameskip_SetMode(int mode) {
-    Mode();  // the config (and the env) are read first
-    if (g_modeFromEnv.load(std::memory_order_relaxed)) return;
     mode = std::clamp(mode, 0, 2);
+    if (g_mode.load(std::memory_order_relaxed) < 0) {
+        g_requested.store(mode, std::memory_order_relaxed);  // decided at the game's first read
+        return;
+    }
+    if (g_modeFromEnv.load(std::memory_order_relaxed)) return;
     if (g_mode.exchange(mode, std::memory_order_relaxed) != mode) {
         RT_LOGF(RT_TAG_VI, "frameskip: %s (changed in game)\n", ModeName(mode));
     }

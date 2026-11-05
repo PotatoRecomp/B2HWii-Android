@@ -55,6 +55,10 @@ typedef struct {
   uint64_t busyNanos;
   uint64_t prepareNanos;
   uint64_t producerWaitNanos;
+  // GPU time of the presented frames and their count, from the Vulkan backend's timestamps (both 0
+  // on Dawn or with AURORA_VK_GPU_TIMING=0).
+  uint64_t gpuNanos;
+  uint64_t gpuFrames;
 } AuroraFrameWorkerTotals;
 void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals);
 // One line: live host textures and the size of each texture cache.

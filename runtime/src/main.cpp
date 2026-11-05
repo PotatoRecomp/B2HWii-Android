@@ -1598,6 +1598,32 @@ int RuntimeMain(int argc, char** argv) {
                 }
                 start = end + 1;
             }
+            // Phones whose SELinux keeps debug.* properties from apps: env.txt in BASARA_LOG_DIR (the
+            // run's folder) or a folder above it, e.g. /sdcard/Basara2Heroes-Beta/env.txt (adb push),
+            // one NAME=value a line, applied before the GPU driver loads.
+            std::FILE* envFile = nullptr;
+            if (const char* logDir = std::getenv("BASARA_LOG_DIR"); logDir != nullptr) {
+                for (std::filesystem::path dir(logDir); envFile == nullptr && !dir.empty() && dir != dir.parent_path();
+                     dir = dir.parent_path()) {
+                    envFile = std::fopen((dir / "env.txt").c_str(), "r");
+                }
+            }
+            {
+                if (std::FILE* file = envFile) {
+                    char line[512];
+                    while (std::fgets(line, sizeof(line), file) != nullptr) {
+                        std::string item(line);
+                        while (!item.empty() && (item.back() == '\n' || item.back() == '\r' || item.back() == ' ')) {
+                            item.pop_back();
+                        }
+                        if (const size_t eq = item.find('='); eq != std::string::npos && eq > 0 && item[0] != '#') {
+                            setenv(item.substr(0, eq).c_str(), item.substr(eq + 1).c_str(), 1);
+                            RT_LOG(RT_TAG_RUNTIME) << "env.txt: " << item << std::endl;
+                        }
+                    }
+                    std::fclose(file);
+                }
+            }
         }
 #endif
         if (const char* deterministic = std::getenv("BASARA_DETERMINISTIC");

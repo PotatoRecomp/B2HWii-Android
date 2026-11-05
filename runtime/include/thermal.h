@@ -17,9 +17,11 @@ constexpr float kCoolHeadroom = 0.78f;
 bool Hot();
 // Earlier level, for shedding drawing work before the phone gets hot in the hand: warm from
 // kWarmHeadroom, cool again below kWarmCoolHeadroom. Also gated on Thermal Control.
-// G81 already reads ~0.73 in the menu, so 0.75 fired at once.
+// G81 already reads ~0.73 in the menu, so 0.75 fired at once. The release sits close to the entry:
+// a phone that warmed up once hovers at 0.72-0.80 for long, which kept it at 30 fps, and the
+// one-minute hold in the frame loop (kThermalHoldSeconds) already keeps it from flapping.
 constexpr float kWarmHeadroom = 0.82f;
-constexpr float kWarmCoolHeadroom = 0.72f;
+constexpr float kWarmCoolHeadroom = 0.80f;
 bool Warm();
 void SetEnabled(bool enabled);
 

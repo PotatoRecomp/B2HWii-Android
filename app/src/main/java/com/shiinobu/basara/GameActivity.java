@@ -97,6 +97,7 @@ public final class GameActivity extends SDLActivity
             if (driverOff != null) Toast.makeText(this, driverOff, Toast.LENGTH_LONG).show();
             GpuDrivers.applyToGame(this, settings);
             AppFiles.writeConfig(this, settings);
+            DevTools.onGameStart(this);  // before the runtime reads env.txt
             // Read by runtime/src/platform/host_platform.cpp before anything else starts.
             Os.setenv("WIICOMPILED_RUNTIME_DIR", AppFiles.runtimeDir(this).getAbsolutePath(), true);
             Os.setenv("WIICOMPILED_DATA_DIR", AppFiles.dataDir(this).getAbsolutePath(), true);

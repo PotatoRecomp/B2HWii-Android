@@ -726,7 +726,8 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
   const StaticSourceCapture sourceCapture =
       sourceSize != 0 ? capture_static_source(sourceKey.data, sourceSize) : StaticSourceCapture{};
   gfx::TextureHandle handle;
-  if (const auto replacement = gfx::texture_replacement::find_replacement(obj); replacement.has_value()) {
+  if (const auto replacement = gfx::texture_replacement::find_replacement(obj, sourceCapture.digest, sourceSize);
+      replacement.has_value()) {
     handle = *replacement;
   } else {
 #if DEBUG
@@ -848,7 +849,9 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
   const StaticSourceCapture tlutCapture =
       canUseSourceCache ? capture_static_source(sourceKey.tlutData, sourceTlutSize) : StaticSourceCapture{};
   gfx::TextureHandle handle;
-  if (const auto replacement = gfx::texture_replacement::find_replacement(obj, tlut); replacement.has_value()) {
+  if (const auto replacement = gfx::texture_replacement::find_replacement(
+          obj, tlut, textureCapture.digest, sourceTextureSize, sourceTlutSize != 0 ? tlutCapture.digest : 0);
+      replacement.has_value()) {
     handle = *replacement;
   } else {
     const u32 dataSize = GXGetTexBufferSize(static_cast<u16>(obj.width()), static_cast<u16>(obj.height()),

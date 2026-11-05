@@ -117,7 +117,7 @@ final class AppFiles {
         return runs[runs.length - 1];
     }
 
-    private static boolean isRunDir(File f) {
+    static boolean isRunDir(File f) {
         return f.isDirectory() && f.getName().matches("\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}(_\\d+)?");
     }
 

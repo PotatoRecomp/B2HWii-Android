@@ -35,6 +35,28 @@ final class ReleaseNotes {
     }
 
     private static final Entry[] ENTRIES = {
+        new Entry("Beta 6", "Experimental features passed testing, new Textures tab", "2026-11-04",
+                new String[] {
+                    "Every Experimental feature passed testing and is now a regular setting, without warnings: HD Textures, Custom Textures, Dump Textures, Report Texture Keys, the Vulkan renderer, GPU drivers and Thermal Control. The Experimental tab is gone.",
+                    "New Textures tab: Custom Textures (.png or .dds), Dump Textures, Report Texture Keys and HD Textures in one place. Renderer and GPU Driver moved to Graphics, Thermal Control to Performance.",
+                    "New Developer tab: Share Log sends the log of the times you played (the crashed one first) with the device info as one zip, to Discord, Telegram, WhatsApp or any app. Device Info with Copy. Testing options (GPU Timing, Frameskip Override, Dynamic Resolution Test, env.txt editor) without a PC. Reset and Clear: reset all settings and clear the caches or logs in one place.",
+                    "The settings tabs stay at the top while the settings below them scroll.",
+                    "Custom Textures also reads .dds packs (BC1 to BC7). On a GPU without BC textures (most Mali) they are unpacked while loading, so the same pack works on every phone.",
+                    "Dynamic Resolution with the Vulkan renderer now follows the GPU's own time, so it also lowers the resolution when heavy effects slow the GPU down.",
+                },
+                new String[] {
+                    "HD Textures Live no longer slows the game down while the sharper textures are being made.",
+                    "Dump Textures no longer slows the game down, and skips movie frames.",
+                    "GX Thread: busy battles drop fewer frames (the game kept waiting for the graphics thread).",
+                    "The launcher showed Continue and Stop after the game had closed normally.",
+                    "Thermal Control stayed at 30 fps on a phone that had only been warm for a moment.",
+                    "Vulkan renderer: .dds textures on GPUs without BC textures no longer fail to load.",
+                },
+                new String[] {
+                    "Adreno 618 (Redmi Note 10 Pro and similar): very heavy effects still drop to about 40 fps, the limit of the GPU.",
+                    "malisx2 on Mali-G52 works, but is not faster than the phone's own driver.",
+                    "Still to be tested once the phones and testers' reports come in: Mali phones (BC textures, malisx2), Adreno 616 (silver enemies) and Adreno 610 (horse riding).",
+                }),
         new Entry("Beta 5", "New launcher, settings in game and GPU drivers", "2026-11-03",
                 new String[] {
                     "A new upright launcher: Play and the settings in use on the first page, every setting in the tabs below it.",

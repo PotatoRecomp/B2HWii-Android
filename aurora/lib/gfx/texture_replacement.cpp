@@ -15,9 +15,11 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <iterator>
 #include <filesystem>
 #include <list>
 #include <memory>
@@ -26,6 +28,9 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#define BCDEC_IMPLEMENTATION
+#include "../../extern/bcdec/bcdec.h"
 
 #if defined(__linux__)
 #include <sys/resource.h>
@@ -121,6 +126,32 @@ std::atomic<uint32_t> s_hdMade{0};
 bool s_hdStop = false;  // guarded by s_hdMutex
 std::thread s_hdThread;
 constexpr size_t kHdMaxQueued = 128;
+
+// The renderer looks textures up each time its own caches miss (hundreds a second in a battle), and
+// the key hashes the whole texture. The caller's content digest stands in for that hash until the
+// index changes, i.e. until an HD texture is finished.
+struct LookupMemoKey {
+  uint64_t digest = 0;
+  uint64_t tlutDigest = 0;
+  uint32_t size = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t format = 0;
+
+  bool operator==(const LookupMemoKey& rhs) const = default;
+  template <typename H>
+  friend H AbslHashValue(H h, const LookupMemoKey& key) {
+    return H::combine(std::move(h), key.digest, key.tlutDigest, key.size, key.width, key.height, key.format);
+  }
+};
+struct LookupMemo {
+  uint32_t generation = 0;
+  bool found = false;
+  RuntimeTextureKey key;
+};
+absl::flat_hash_map<LookupMemoKey, LookupMemo> s_lookupMemo;
+uint32_t s_indexGeneration = 0;
+constexpr size_t kLookupMemoMax = 16384;
 
 uint64_t hd_disk_budget() noexcept {
   return static_cast<uint64_t>(g_config.hdCacheMegabytes != 0 ? g_config.hdCacheMegabytes : 1024) << 20;
@@ -523,17 +554,102 @@ constexpr bool isUnsupportedTextureFormat(const ConvertedTexture& texture) {
   }
 }
 
-std::optional<ConvertedTexture> load_replacement(const ReplacementIndexEntry& entry) noexcept {
+// GPUs without BC (most Mali, Qualcomm's own driver): the blocks are decoded to RGBA8 here, on the
+// loader thread, so a DDS pack still shows there (at 8x BC1's memory, 4x BC3/BC7's). BC6H (float)
+// is left out.
+static std::optional<ConvertedTexture> decode_bc(const ConvertedTexture& in) noexcept {
+  using F = wgpu::TextureFormat;
+  uint32_t blockSize = 16;
+  switch (in.format) {
+  case F::BC1RGBAUnorm:
+  case F::BC4RUnorm:
+    blockSize = 8;
+    break;
+  case F::BC2RGBAUnorm:
+  case F::BC3RGBAUnorm:
+  case F::BC5RGUnorm:
+  case F::BC7RGBAUnorm:
+    break;
+  default:
+    return std::nullopt;
+  }
+  uint64_t inSize = 0;
+  uint64_t outSize = 0;
+  for (uint32_t m = 0; m < in.mips; ++m) {
+    const uint32_t w = std::max(in.width >> m, 1u);
+    const uint32_t h = std::max(in.height >> m, 1u);
+    inSize += static_cast<uint64_t>((w + 3) / 4) * ((h + 3) / 4) * blockSize;
+    outSize += static_cast<uint64_t>(w) * h * 4;
+  }
+  if (in.data.size() < inSize) {
+    return std::nullopt;
+  }
+  ByteBuffer out{static_cast<size_t>(outSize)};
+  const uint8_t* src = in.data.data();
+  uint8_t* dst = out.data();
+  uint8_t block[4 * 4 * 4];
+  uint8_t channels[4 * 4 * 2];
+  for (uint32_t m = 0; m < in.mips; ++m) {
+    const uint32_t w = std::max(in.width >> m, 1u);
+    const uint32_t h = std::max(in.height >> m, 1u);
+    for (uint32_t by = 0; by < h; by += 4) {
+      for (uint32_t bx = 0; bx < w; bx += 4) {
+        switch (in.format) {
+        case F::BC1RGBAUnorm:
+          bcdec_bc1(src, block, 16);
+          break;
+        case F::BC2RGBAUnorm:
+          bcdec_bc2(src, block, 16);
+          break;
+        case F::BC3RGBAUnorm:
+          bcdec_bc3(src, block, 16);
+          break;
+        case F::BC7RGBAUnorm:
+          bcdec_bc7(src, block, 16);
+          break;
+        case F::BC4RUnorm:  // sampled as (r, 0, 0, 1)
+          bcdec_bc4(src, channels, 4);
+          for (int i = 0; i < 16; ++i) {
+            block[i * 4] = channels[i];
+            block[i * 4 + 1] = 0;
+            block[i * 4 + 2] = 0;
+            block[i * 4 + 3] = 255;
+          }
+          break;
+        default:  // BC5: (r, g, 0, 1)
+          bcdec_bc5(src, channels, 8);
+          for (int i = 0; i < 16; ++i) {
+            block[i * 4] = channels[i * 2];
+            block[i * 4 + 1] = channels[i * 2 + 1];
+            block[i * 4 + 2] = 0;
+            block[i * 4 + 3] = 255;
+          }
+          break;
+        }
+        src += blockSize;
+        const uint32_t cw = std::min(4u, w - bx);
+        const uint32_t ch = std::min(4u, h - by);
+        for (uint32_t y = 0; y < ch; ++y) {
+          std::memcpy(dst + (static_cast<size_t>(by + y) * w + bx) * 4, block + y * 16, cw * 4);
+        }
+      }
+    }
+    dst += static_cast<size_t>(w) * h * 4;
+  }
+  return ConvertedTexture{
+      .format = F::RGBA8Unorm,
+      .width = in.width,
+      .height = in.height,
+      .mips = in.mips,
+      .data = std::move(out),
+      .hasArbitraryMips = in.hasArbitraryMips,
+  };
+}
+
+static std::optional<ConvertedTexture> load_replacement_levels(const ReplacementIndexEntry& entry) noexcept {
   auto base = load_texture_file(entry.path);
   if (!base.has_value()) {
     Log.warn("texture_replacement: failed to load texture {}", fs_path_to_string(entry.path));
-    return std::nullopt;
-  }
-  if (isUnsupportedTextureFormat(base.value())) {
-    Log.warn(
-      "texture_replacement: failed to load texture {} due to unsupported format: {}",
-      fs_path_to_string(entry.path),
-      static_cast<uint32_t>(base->format));
     return std::nullopt;
   }
 
@@ -602,6 +718,19 @@ std::optional<ConvertedTexture> load_replacement(const ReplacementIndexEntry& en
       .mips = mips,
       .data = std::move(blob),
   };
+}
+
+std::optional<ConvertedTexture> load_replacement(const ReplacementIndexEntry& entry) noexcept {
+  auto texture = load_replacement_levels(entry);
+  if (!texture.has_value() || !isUnsupportedTextureFormat(*texture)) {
+    return texture;
+  }
+  auto decoded = decode_bc(*texture);
+  if (!decoded.has_value()) {
+    Log.warn("texture_replacement: failed to load texture {} due to unsupported format: {}",
+             fs_path_to_string(entry.path), static_cast<uint32_t>(texture->format));
+  }
+  return decoded;
 }
 
 void touch_cached_replacement(decltype(s_replacementCache)::iterator it) noexcept {
@@ -735,8 +864,8 @@ const gfx::TextureHandle* find_cached_replacement(const RuntimeTextureKey& key) 
   return &cached->second.handle;
 }
 
-gfx::TextureHandle load_replacement_texture(const RuntimeTextureKey& key, const ReplacementIndexEntry& entry) noexcept {
-  const auto replacement = load_replacement(entry);
+gfx::TextureHandle make_replacement_texture(const RuntimeTextureKey& key,
+                                            const std::optional<ConvertedTexture>& replacement) noexcept {
   if (!replacement.has_value()) {
     s_failedKeys.insert(key);
     return {};
@@ -771,6 +900,96 @@ gfx::TextureHandle load_replacement_texture(const RuntimeTextureKey& key, const 
   handle->isReplacement = true;
   gfx::write_texture(*handle, replacement->data);
   return handle;
+}
+
+gfx::TextureHandle load_replacement_texture(const RuntimeTextureKey& key, const ReplacementIndexEntry& entry) noexcept {
+  return make_replacement_texture(key, load_replacement(entry));
+}
+
+void cache_replacement(const RuntimeTextureKey& key, const gfx::TextureHandle& handle) noexcept;
+
+// --- Loading replacement files off the renderer thread ---------------------------------------------
+// A PNG of an HD texture takes 30-45 ms to decode on a phone; decoded here instead, the game keeps
+// drawing the original texture until the file is ready and the next lookup uploads it.
+struct LoadJob {
+  RuntimeTextureKey key;
+  ReplacementIndexEntry entry;
+};
+std::mutex s_loadMutex;
+std::condition_variable s_loadWake;
+std::deque<LoadJob> s_loadQueue;                                                        // guarded by s_loadMutex
+std::vector<std::pair<RuntimeTextureKey, std::optional<ConvertedTexture>>> s_loadDone;  // guarded by s_loadMutex
+std::atomic<bool> s_loadHasDone{false};
+bool s_loadStop = false;  // guarded by s_loadMutex
+std::thread s_loadThread;
+absl::flat_hash_set<RuntimeTextureKey> s_loadPending;  // renderer thread only
+constexpr size_t kMaxUploadsPerLookup = 2;
+
+void load_worker() noexcept {
+  for (;;) {
+    LoadJob job;
+    {
+      std::unique_lock lock(s_loadMutex);
+      s_loadWake.wait(lock, [] { return s_loadStop || !s_loadQueue.empty(); });
+      if (s_loadStop) return;
+      job = std::move(s_loadQueue.front());
+      s_loadQueue.pop_front();
+    }
+    auto converted = load_replacement(job.entry);
+    {
+      std::lock_guard lock(s_loadMutex);
+      s_loadDone.emplace_back(job.key, std::move(converted));
+    }
+    s_loadHasDone = true;
+  }
+}
+
+void queue_load(const RuntimeTextureKey& key, const ReplacementIndexEntry& entry) noexcept {
+  if (!s_loadPending.insert(key).second) return;
+  {
+    std::lock_guard lock(s_loadMutex);
+    s_loadQueue.push_back(LoadJob{key, entry});
+  }
+  s_loadWake.notify_one();
+}
+
+/** Uploads files the loader finished, a few per call so a burst does not stall one frame. */
+void take_load_done() noexcept {
+  if (!s_loadHasDone.load()) return;
+  std::vector<std::pair<RuntimeTextureKey, std::optional<ConvertedTexture>>> done;
+  {
+    std::lock_guard lock(s_loadMutex);
+    const size_t n = std::min(s_loadDone.size(), kMaxUploadsPerLookup);
+    std::move(s_loadDone.begin(), s_loadDone.begin() + static_cast<std::ptrdiff_t>(n), std::back_inserter(done));
+    s_loadDone.erase(s_loadDone.begin(), s_loadDone.begin() + static_cast<std::ptrdiff_t>(n));
+    s_loadHasDone = !s_loadDone.empty();
+  }
+  for (auto& [key, converted] : done) {
+    s_loadPending.erase(key);
+    if (auto handle = make_replacement_texture(key, converted)) {
+      cache_replacement(key, handle);
+    }
+  }
+}
+
+void start_loader() noexcept {
+  if (!g_config.allowTextureReplacements || s_loadThread.joinable()) return;
+  s_loadStop = false;
+  s_loadThread = std::thread(load_worker);
+}
+
+void stop_loader() noexcept {
+  if (!s_loadThread.joinable()) return;
+  {
+    std::lock_guard lock(s_loadMutex);
+    s_loadStop = true;
+    s_loadQueue.clear();
+    s_loadDone.clear();
+  }
+  s_loadWake.notify_all();
+  s_loadThread.join();
+  s_loadHasDone = false;
+  s_loadPending.clear();
 }
 
 void cache_replacement(const RuntimeTextureKey& key, const gfx::TextureHandle& handle) noexcept {
@@ -809,15 +1028,93 @@ std::optional<ConvertedTexture> decode_rgba(const GXTexObj_& obj) noexcept {
   return pixels;
 }
 
+// --- Texture dumps, written off the renderer thread ------------------------------------------------
+// Encoding a PNG takes up to 200 ms on a phone, and movie frames are a new texture every frame, so
+// dumping on the renderer thread slowed the game to a fifth. The worker writes; the renderer only
+// decodes and copies. One size and format giving many textures is a movie: dumped kMaxDumpsPerShape
+// times, then skipped.
+struct DumpJob {
+  std::filesystem::path path;
+  std::vector<uint8_t> rgba;
+  uint32_t width;
+  uint32_t height;
+};
+std::mutex s_dumpMutex;
+std::condition_variable s_dumpWake;
+std::deque<DumpJob> s_dumpQueue;  // guarded by s_dumpMutex
+bool s_dumpStop = false;          // guarded by s_dumpMutex
+std::thread s_dumpThread;
+absl::flat_hash_map<uint64_t, uint32_t> s_dumpsPerShape;  // renderer thread only
+constexpr uint32_t kMaxDumpsPerShape = 48;
+constexpr size_t kMaxDumpQueue = 32;
+
+void dump_worker() noexcept {
+#if defined(__linux__)
+  setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
+#endif
+  for (;;) {
+    DumpJob job;
+    {
+      std::unique_lock lock(s_dumpMutex);
+      s_dumpWake.wait(lock, [] { return s_dumpStop || !s_dumpQueue.empty(); });
+      if (s_dumpStop) return;
+      job = std::move(s_dumpQueue.front());
+      s_dumpQueue.pop_front();
+    }
+    png::write_rgba8_png(job.path, job.width, job.height, job.rgba.data());
+  }
+}
+
+void start_dumper() noexcept {
+  if (!g_config.allowTextureDumps || s_dumpRoot.empty() || s_dumpThread.joinable()) return;
+  s_dumpStop = false;
+  s_dumpThread = std::thread(dump_worker);
+}
+
+void stop_dumper() noexcept {
+  if (!s_dumpThread.joinable()) return;
+  {
+    std::lock_guard lock(s_dumpMutex);
+    s_dumpStop = true;
+    s_dumpQueue.clear();
+  }
+  s_dumpWake.notify_all();
+  s_dumpThread.join();
+  s_dumpsPerShape.clear();
+}
+
 bool dump_editable_texture_dds(const RuntimeTextureKey& key, const GXTexObj_& obj) noexcept {
+  if (!s_dumpThread.joinable()) return false;
+  const uint64_t shape = (uint64_t{obj.width()} << 32) | (uint64_t{obj.height()} << 16) | key.format;
+  uint32_t& count = s_dumpsPerShape[shape];
+  // Palette textures share one size across many atlases and palettes, so only direct colors count.
+  if (!key.hasTlut && count >= kMaxDumpsPerShape) {
+    if (count == kMaxDumpsPerShape) {
+      Log.info("texture dump: {}x{} fmt {} changes every frame (a movie?), no more dumps of it", obj.width(),
+               obj.height(), key.format);
+      ++count;
+    }
+    return false;
+  }
+  {
+    std::lock_guard lock(s_dumpMutex);
+    if (s_dumpQueue.size() >= kMaxDumpQueue) return false;  // a burst: the next miss of it tries again
+  }
   const auto pixels = decode_rgba(obj);
   if (!pixels) {
     return false;
   }
+  ++count;
   // PNG: opens in any image editor, and the index takes .png and .dds under the same name.
   auto path = s_dumpRoot / format_replacement_filename(key);
   path.replace_extension(".png");
-  return png::write_rgba8_png(path, obj.width(), obj.height(), pixels->data.data());
+  {
+    std::lock_guard lock(s_dumpMutex);
+    s_dumpQueue.push_back(DumpJob{std::move(path), std::vector<uint8_t>(pixels->data.data(),
+                                  pixels->data.data() + pixels->data.size()), obj.width(), obj.height()});
+  }
+  s_dumpWake.notify_one();
+  return true;
 }
 
 bool is_power_of_two(uint32_t v) noexcept { return v != 0 && (v & (v - 1)) == 0; }
@@ -863,6 +1160,9 @@ void take_hd_done() noexcept {
   }
   for (auto& [key, path] : done) {
     s_replacementIndex.try_emplace(key, ReplacementIndexEntry{std::move(path)});
+  }
+  if (!done.empty()) {
+    ++s_indexGeneration;
   }
 }
 
@@ -913,14 +1213,19 @@ void stop_hd() noexcept {
 void initialize() noexcept {
   build_index();
   start_hd();
+  start_loader();
+  start_dumper();
 }
 
 void shutdown() noexcept {
+  stop_dumper();
+  stop_loader();
   stop_hd();
   s_replacementIndex.clear();
   s_replacementCache.clear();
   s_failedKeys.clear();
   s_reportedMisses.clear();
+  s_lookupMemo.clear();
   s_pendingTluts.clear();
   for (auto& tlut : s_loadedTluts) {
     tlut = {};
@@ -997,22 +1302,85 @@ void load_tlut(const GXTlutObj* obj, uint32_t idx) noexcept {
   s_loadedTluts[idx] = {};
 }
 
-std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
+// Time the renderer thread spends here, logged every 2 s while it is busy (HD Textures cost).
+struct ReplacementStats {
+  uint32_t calls = 0, memoHits = 0, misses = 0, ramHits = 0, diskLoads = 0;
+  double keyMs = 0, missMs = 0, diskMs = 0;
+  std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+} s_stats;
+
+double ms_since(std::chrono::steady_clock::time_point t) noexcept {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+}
+
+void log_stats() noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - s_stats.last < std::chrono::seconds(2)) return;
+  if (s_stats.calls != 0) {
+    size_t queued = 0;
+    {
+      std::lock_guard lock(s_hdMutex);
+      queued = s_hdQueue.size();
+    }
+    Log.info("texture replacement: {} lookups ({} memo, key {:.1f} ms), {} new ({:.1f} ms), {} ram, {} disk "
+             "({:.1f} ms), ram cache {} MB, hd queue {}",
+             s_stats.calls, s_stats.memoHits, s_stats.keyMs, s_stats.misses, s_stats.missMs, s_stats.ramHits, s_stats.diskLoads,
+             s_stats.diskMs, s_replacementCacheBytes >> 20, queued);
+  }
+  s_stats = ReplacementStats{};
+  s_stats.last = now;
+}
+
+std::optional<TextureHandle> find_replacement_impl(const GXTexObj_& obj, const LookupMemoKey* memoKey) noexcept {
   ZoneScoped;
 
   if (!g_config.allowTextureReplacements) {
     return std::nullopt;
   }
 
+  log_stats();
+  ++s_stats.calls;
   take_hd_done();
-  const RuntimeTextureKey key = build_runtime_key(obj);
+  take_load_done();
+  if (memoKey != nullptr && memoKey->size < texture_base_level_size(obj)) {
+    memoKey = nullptr;  // the digest must cover everything the key hashes
+  }
+  RuntimeTextureKey key;
+  bool memoized = false;
+  if (memoKey != nullptr) {
+    if (const auto it = s_lookupMemo.find(*memoKey);
+        it != s_lookupMemo.end() && it->second.generation == s_indexGeneration) {
+      ++s_stats.memoHits;
+      if (!it->second.found) {
+        return std::nullopt;
+      }
+      key = it->second.key;
+      memoized = true;
+    }
+  }
+  auto t0 = std::chrono::steady_clock::now();
+  if (!memoized) {
+    key = build_runtime_key(obj);
+  }
   const auto* path = find_replacement_path(key);
+  s_stats.keyMs += ms_since(t0);
+  if (memoKey != nullptr && !memoized) {
+    if (s_lookupMemo.size() >= kLookupMemoMax) {
+      s_lookupMemo.clear();
+    }
+    s_lookupMemo[*memoKey] = LookupMemo{.generation = s_indexGeneration, .found = path != nullptr, .key = key};
+  }
   if (path == nullptr) {
-    report_missing_key(key, obj);
+    t0 = std::chrono::steady_clock::now();
+    if (report_missing_key(key, obj)) {
+      ++s_stats.misses;
+    }
+    s_stats.missMs += ms_since(t0);
     return std::nullopt;
   }
 
   if (const auto* cached = find_cached_replacement(key); cached != nullptr) {
+    ++s_stats.ramHits;
     return *cached;
   }
 
@@ -1020,7 +1388,17 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
     return std::nullopt;
   }
 
+  if (s_loadThread.joinable()) {
+    if (!s_loadPending.contains(key)) {
+      ++s_stats.diskLoads;
+    }
+    queue_load(key, *path);
+    return std::nullopt;  // the original until the file is ready
+  }
+  t0 = std::chrono::steady_clock::now();
   auto handle = load_replacement_texture(key, *path);
+  ++s_stats.diskLoads;
+  s_stats.diskMs += ms_since(t0);
   if (!handle) {
     return std::nullopt;
   }
@@ -1029,9 +1407,29 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   return handle;
 }
 
+std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
+  return find_replacement_impl(obj, nullptr);
+}
+
 std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, const GXTlutObj_& tlut) noexcept {
   s_drawTlut = &tlut;
-  auto result = find_replacement(obj);
+  auto result = find_replacement_impl(obj, nullptr);
+  s_drawTlut = nullptr;
+  return result;
+}
+
+std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, uint64_t digest, uint32_t digestSize) noexcept {
+  const LookupMemoKey memoKey{.digest = digest, .size = digestSize, .width = obj.width(), .height = obj.height(),
+                              .format = static_cast<uint32_t>(obj.format())};
+  return find_replacement_impl(obj, digestSize != 0 ? &memoKey : nullptr);
+}
+
+std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, const GXTlutObj_& tlut, uint64_t digest,
+                                              uint32_t digestSize, uint64_t tlutDigest) noexcept {
+  const LookupMemoKey memoKey{.digest = digest, .tlutDigest = tlutDigest, .size = digestSize, .width = obj.width(),
+                              .height = obj.height(), .format = static_cast<uint32_t>(obj.format())};
+  s_drawTlut = &tlut;
+  auto result = find_replacement_impl(obj, digestSize != 0 && tlutDigest != 0 ? &memoKey : nullptr);
   s_drawTlut = nullptr;
   return result;
 }

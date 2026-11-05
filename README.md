@@ -44,11 +44,11 @@ The full change history is in the app (**What's New**) and on the [Releases](../
 
 | Area | What it has |
 |---|---|
-| **Performance** | Frameskip, 30 FPS Lock, Dynamic Resolution, GX Thread. A device profile picks resolution and frameskip on first start. |
-| **Graphics** | Render resolution 0.5×–4×, FSR1 and SGSR upscaling, Texture Detail (trilinear and anisotropic filtering), custom textures and texture dumping, Vulkan renderer choice, custom GPU drivers. |
+| **Performance** | Frameskip, 30 FPS Lock, Dynamic Resolution, GX Thread, Thermal Control. A device profile picks resolution and frameskip on first start. |
+| **Graphics** | Render resolution 0.5×–4×, FSR1 and SGSR upscaling, Texture Detail (trilinear and anisotropic filtering), Vulkan renderer choice, custom GPU drivers (Turnip, malisx2). |
 | **Controls** | Touch controls with a layout editor and touch camera (with Invert Camera), gamepads in the Classic Controller layout, and on Windows a keyboard with rebindable keys. |
 | **Launcher** | Imports ISO or RVZ on the phone, Continue and Stop, in-game pause menu, performance overlay, cheats, save backup and import, What's New, English and Indonesian. |
-| **Experimental** | HD Textures Live (2× upscale while playing), Thermal Control, texture key reports. Each comes with a warning in Settings > Experimental. |
+| **Textures** | Custom textures (.png or .dds, Dolphin names), texture dumping, texture key reports, HD Textures Live (2× upscale while playing). |
 
 ## Getting started
 

@@ -158,7 +158,7 @@ final class CrashReport {
         }
     }
 
-    private static String header(Context context) {
+    static String header(Context context) {
         String version = "?";
         try {
             final android.content.pm.PackageInfo info =

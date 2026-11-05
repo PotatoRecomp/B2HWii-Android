@@ -1217,7 +1217,9 @@ static bool ApplyAuroraArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX
     // Packed copies are read when the draw decodes. With the GX thread that is later than the next
     // display list, so each slot keeps a GX fence and is reused (or resized, which frees the old
     // bytes) only after the GX thread has passed it. Two slots were overwritten mid-flight: flicker.
-    constexpr uint32_t kPackedSlots = 8;
+    // Eight made the game thread wait for the GX thread 23-35 times a frame (4-8 ms on a Redmi Note
+    // 12 Pro in battle): a battle packs a few hundred arrays a frame, so the ring holds a frame's worth.
+    constexpr uint32_t kPackedSlots = 512;
     struct PackedSlot {
         std::vector<uint8_t> bytes;
         uint64_t fence = 0;

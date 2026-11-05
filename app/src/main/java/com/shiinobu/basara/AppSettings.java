@@ -179,10 +179,10 @@ final class AppSettings {
     void setGpuDriver(String id) { prefs.edit().putString("gpu_driver", id == null ? "" : id).commit(); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
 
-    /** GX Thread (experimental): GX work on its own thread; read when the game starts. */
+    /** GX Thread: GX work on its own thread; read when the game starts. */
     boolean gxThread() { return prefs.getBoolean("gx_thread", false); }
     void setGxThread(boolean on) { prefs.edit().putBoolean("gx_thread", on).commit(); }
-    /** Thermal Control (experimental, off by default: it still switches too eagerly). */
+    /** Thermal Control (off by default). */
     boolean thermalControl() { return prefs.getBoolean("thermal_control", false); }
     void setThermalControl(boolean on) { prefs.edit().putBoolean("thermal_control", on).commit(); }
 
@@ -211,7 +211,7 @@ final class AppSettings {
     boolean dumpTextures() { return prefs.getBoolean("dump_textures", false); }
     void setDumpTextures(boolean on) { prefs.edit().putBoolean("dump_textures", on).commit(); }
 
-    /** HD Textures (experimental): 0 off, 1 live (upscaled 2x while playing, kept in hd-cache). */
+    /** HD Textures: 0 off, 1 live (upscaled 2x while playing, kept in hd-cache). */
     int hdTextures() { return Math.max(0, Math.min(1, prefs.getInt("hd_textures", 0))); }
     void setHdTextures(int mode) { prefs.edit().putInt("hd_textures", mode).commit(); }
     /** Disk budget of the HD texture cache, in MB. */

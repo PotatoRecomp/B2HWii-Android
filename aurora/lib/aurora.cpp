@@ -70,6 +70,9 @@ std::atomic<uint64_t> g_presentScheduleIntervalNanos{0};
 std::atomic<bool> g_metalfxRequested{false};
 std::atomic<bool> g_metalfxSupported{false};
 std::atomic<AuroraMetalFXStatus> g_metalfxStatus{AURORA_METALFX_DISABLED};
+// GPU time of the presented frames, added by the Vulkan backend (lib/vulkan/vk_webgpu.cpp).
+std::atomic<uint64_t> g_gpuNanos{0};
+std::atomic<uint64_t> g_gpuFrames{0};
 
 namespace {
 Module Log("aurora");
@@ -1427,25 +1430,13 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
       pass.SetBindGroup(0, presentBindGroup, 0, nullptr);
       pass.Draw(3);
     }
-    pass.End();
-  }
-  if (includeImGui) {
-    const std::array attachments{
-        wgpu::RenderPassColorAttachment{
-            .view = image.texture.view,
-            .loadOp = wgpu::LoadOp::Load,
-            .storeOp = wgpu::StoreOp::Store,
-        },
-    };
-    const wgpu::RenderPassDescriptor renderPassDescriptor{
-        .label = "Snapshot ImGui pass",
-        .colorAttachmentCount = attachments.size(),
-        .colorAttachments = attachments.data(),
-    };
-    const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
-    pass.SetViewport(0.f, 0.f, static_cast<float>(image.texture.size.width),
-                     static_cast<float>(image.texture.size.height), 0.f, 1.f);
-    imgui::render(pass);
+    // ImGui goes into the same pass: a pass of its own loaded and stored the whole display-sized
+    // image once more (about 1-2 ms of GPU a frame on an Adreno 618).
+    if (includeImGui) {
+      pass.SetViewport(0.f, 0.f, static_cast<float>(image.texture.size.width),
+                       static_cast<float>(image.texture.size.height), 0.f, 1.f);
+      imgui::render(pass);
+    }
     pass.End();
   }
   return newMetalFXOutput;
@@ -2174,6 +2165,8 @@ void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals) {
   totals->busyNanos = aurora::g_workerBusyNanos.load(std::memory_order_relaxed);
   totals->prepareNanos = aurora::g_workerPrepareNanos.load(std::memory_order_relaxed);
   totals->producerWaitNanos = aurora::g_producerWaitNanos.load(std::memory_order_relaxed);
+  totals->gpuNanos = aurora::g_gpuNanos.load(std::memory_order_relaxed);
+  totals->gpuFrames = aurora::g_gpuFrames.load(std::memory_order_relaxed);
 }
 bool aurora_wait_for_frame_worker_for(uint32_t timeoutMicros) {
   return aurora::wait_for_frame_worker_for(std::chrono::microseconds(timeoutMicros));

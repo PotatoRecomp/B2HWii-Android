@@ -27,7 +27,8 @@ final class Sheet {
     private final LinearLayout body;
     private final LinearLayout actions;
     private boolean horizontal;
-    private final ScrollView scroll;
+    private ScrollView scroll;
+    private final LinearLayout card;
 
     Sheet(Activity activity, String title, String subtitle) {
         this.activity = activity;
@@ -46,7 +47,7 @@ final class Sheet {
         actions = new LinearLayout(activity);
         actions.setOrientation(LinearLayout.VERTICAL);
 
-        final LinearLayout card = new LinearLayout(activity);
+        card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(24), dp(22), dp(24), dp(20));
         card.setBackground(rounded(LauncherActivity.SURFACE, dp(24)));
@@ -121,13 +122,13 @@ final class Sheet {
         return this;
     }
 
-    /** A red-tinted box with a bold warning line: for experimental features and risky steps. */
+    /** A red-tinted box with a bold warning line: for risky steps. */
     Sheet warning(String title, String about) {
         body.addView(warningBox(activity, title, about), matchWidth(dp(12)));
         return this;
     }
 
-    /** The warning box, shared with the settings screen's experimental cards. */
+    /** The warning box, shared with the settings screen (Cheats). */
     static LinearLayout warningBox(Activity activity, String title, String about) {
         final float density = activity.getResources().getDisplayMetrics().density;
         final LinearLayout box = new LinearLayout(activity);
@@ -158,6 +159,26 @@ final class Sheet {
 
     static final int WARNING_FILL = Color.rgb(64, 22, 24);
     static final int WARNING_TEXT = Color.rgb(255, 120, 110);
+
+    /**
+     * Keeps the action buttons in view under the card's content: only the title, text and rows above
+     * them scroll (a long list).
+     */
+    Sheet pinActions() {
+        scroll.removeView(card);
+        card.removeView(body);
+        card.removeView(actions);
+        scroll = new ScrollView(activity);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setVerticalFadingEdgeEnabled(true);
+        scroll.setFadingEdgeLength(dp(16));
+        scroll.addView(body);
+        card.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(actions, matchWidth(dp(6)));
+        dialog.setContentView(card);
+        return this;
+    }
 
     /** Any view in the body (a progress bar, a list). */
     Sheet view(View view) {

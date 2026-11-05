@@ -57,10 +57,12 @@ extern "C" void* aurora_custom_vulkan_loader();
   X(vkCmdEndRendering) \
   X(vkCmdPipelineBarrier) \
   X(vkCmdPipelineBarrier2) \
+  X(vkCmdResetQueryPool) \
   X(vkCmdSetBlendConstants) \
   X(vkCmdSetScissor) \
   X(vkCmdSetStencilReference) \
   X(vkCmdSetViewport) \
+  X(vkCmdWriteTimestamp) \
   X(vkCreateCommandPool) \
   X(vkCreateComputePipelines) \
   X(vkCreateDescriptorPool) \
@@ -70,6 +72,7 @@ extern "C" void* aurora_custom_vulkan_loader();
   X(vkCreateImageView) \
   X(vkCreatePipelineCache) \
   X(vkCreatePipelineLayout) \
+  X(vkCreateQueryPool) \
   X(vkCreateSampler) \
   X(vkCreateSemaphore) \
   X(vkCreateShaderModule) \
@@ -82,6 +85,7 @@ extern "C" void* aurora_custom_vulkan_loader();
   X(vkDestroyPipeline) \
   X(vkDestroyPipelineCache) \
   X(vkDestroyPipelineLayout) \
+  X(vkDestroyQueryPool) \
   X(vkDestroySampler) \
   X(vkDestroySemaphore) \
   X(vkDestroyShaderModule) \
@@ -100,6 +104,7 @@ extern "C" void* aurora_custom_vulkan_loader();
   X(vkGetPhysicalDeviceSurfaceFormatsKHR) \
   X(vkGetPhysicalDeviceSurfacePresentModesKHR) \
   X(vkGetPipelineCacheData) \
+  X(vkGetQueryPoolResults) \
   X(vkGetSemaphoreCounterValue) \
   X(vkGetSwapchainImagesKHR) \
   X(vkQueuePresentKHR) \
@@ -348,6 +353,11 @@ void LoadDeviceFunctions(VkDevice device, bool api13, bool hasSync2) {
 #define vkResetCommandPool g_vkResetCommandPool
 #define vkUpdateDescriptorSets g_vkUpdateDescriptorSets
 #define vkWaitSemaphores g_vkWaitSemaphores
+#define vkCmdResetQueryPool g_vkCmdResetQueryPool
+#define vkCmdWriteTimestamp g_vkCmdWriteTimestamp
+#define vkCreateQueryPool g_vkCreateQueryPool
+#define vkDestroyQueryPool g_vkDestroyQueryPool
+#define vkGetQueryPoolResults g_vkGetQueryPoolResults
 #define AURORA_GET_INSTANCE_PROC_ADDR g_getInstanceProcAddr
 #define AURORA_GET_DEVICE_PROC_ADDR g_getDeviceProcAddr
 #else
@@ -756,9 +766,63 @@ VkShaderStageFlags ToVk(WGPUShaderStage stages) {
   return out;
 }
 
+// GPU timestamps of one command buffer: query 0 at its start, the last at its end, and a pair around
+// each render pass. Read back when the submission retires (AURORA_VK_GPU_TIMING=0 turns them off).
+struct SlotTiming {
+  static constexpr uint32_t kQueries = 256;
+  // AURORA_VK_DRAW_TIMING=1: a timestamp after every draw too (use with TU_DEBUG=sysmem, where a
+  // pass's draws run in order once instead of once a tile).
+  static constexpr uint32_t kDrawQueries = 4096;
+  struct Draw {
+    uint32_t before;
+    uint32_t after;
+    uint32_t elements;
+    uint32_t instances;
+    uint32_t pipeline;
+    bool blend;
+  };
+  struct Pass {
+    uint32_t query;
+    uint32_t draws;
+    uint32_t width;
+    uint32_t height;
+  };
+  VkQueryPool pool = VK_NULL_HANDLE;
+  uint32_t capacity = kQueries;
+  uint32_t used = 0;
+  bool present = false;
+  std::vector<Pass> passes;
+  std::vector<Draw> draws;
+};
+
 struct CmdSlot {
   VkCommandPool pool = VK_NULL_HANDLE;
   VkCommandBuffer cb = VK_NULL_HANDLE;
+  SlotTiming* timing = nullptr;
+};
+
+// What the timestamps add up to between two log lines.
+struct GpuTimingStats {
+  std::mutex mutex;
+  std::chrono::steady_clock::time_point windowStart{};
+  uint64_t frames = 0;
+  double busyMs = 0;
+  double passMs = 0;
+  uint64_t passes = 0;
+  uint64_t draws = 0;
+  double frameMs = 0;
+  double worstFrameMs = 0;
+  double heaviestPassMs = 0;
+  SlotTiming::Pass heaviestPass{};
+  struct PipelineCost {
+    double ms = 0;
+    uint64_t draws = 0;
+    uint64_t elements = 0;
+    bool blend = false;
+  };
+  std::unordered_map<uint32_t, PipelineCost> pipelines;
+  double heaviestDrawMs = 0;
+  SlotTiming::Draw heaviestDraw{};
 };
 
 struct StagingChunk {
@@ -817,6 +881,11 @@ struct WGPUDeviceImpl : Object {
   std::mutex backingMutex;
   std::vector<std::tuple<uint64_t, VkBuffer, VmaAllocation, uint8_t*>> freeBackings;
   bool hasSync2 = false;
+  bool gpuTiming = false;
+  bool drawTiming = false;
+  std::atomic<uint32_t> pipelineIds{0};
+  uint64_t timestampMask = 0;
+  GpuTimingStats gpuStats;
 
   std::recursive_mutex queueMutex;
   uint64_t submittedSerial = 0;
@@ -858,6 +927,12 @@ struct WGPUDeviceImpl : Object {
   ~WGPUDeviceImpl() override;
 };
 
+// aurora_get_frame_worker_totals: the GPU time of the presented frames (dynamic resolution).
+namespace aurora {
+extern std::atomic<uint64_t> g_gpuNanos;
+extern std::atomic<uint64_t> g_gpuFrames;
+} // namespace aurora
+
 namespace {
 
 WGPUDeviceImpl* g_device = nullptr;
@@ -871,6 +946,18 @@ void ReportError(WGPUDeviceImpl* dev, const std::string& message) {
     dev->errorCallback.callback(&handle, WGPUErrorType_Validation, WGPUStringView{message.data(), message.size()},
                                 dev->errorCallback.userdata1, dev->errorCallback.userdata2);
   }
+}
+
+// Writes the next timestamp of the slot and returns its query, or UINT32_MAX without timing or room.
+// `need` queries are kept free (a pass needs its end too), plus one for the closing timestamp unless
+// this is it.
+uint32_t WriteTimestamp(CmdSlot& slot, bool closing = false, uint32_t need = 1) {
+  SlotTiming* timing = slot.timing;
+  if (timing == nullptr || timing->used + need + (closing ? 0 : 1) > timing->capacity) {
+    return UINT32_MAX;
+  }
+  vkCmdWriteTimestamp(slot.cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing->pool, timing->used);
+  return timing->used++;
 }
 
 CmdSlot AcquireSlot(WGPUDeviceImpl* dev) {
@@ -904,7 +991,31 @@ CmdSlot AcquireSlot(WGPUDeviceImpl* dev) {
       .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
   };
   VK_CHECK(vkBeginCommandBuffer(slot.cb, &begin));
+  if (dev->gpuTiming) {
+    if (slot.timing == nullptr) {
+      slot.timing = new SlotTiming;
+      slot.timing->capacity = dev->drawTiming ? SlotTiming::kDrawQueries : SlotTiming::kQueries;
+      const VkQueryPoolCreateInfo info{
+          .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+          .queryType = VK_QUERY_TYPE_TIMESTAMP,
+          .queryCount = slot.timing->capacity,
+      };
+      VK_CHECK(vkCreateQueryPool(dev->device, &info, nullptr, &slot.timing->pool));
+    }
+    slot.timing->used = 0;
+    slot.timing->present = false;
+    slot.timing->passes.clear();
+    slot.timing->draws.clear();
+    vkCmdResetQueryPool(slot.cb, slot.timing->pool, 0, slot.timing->capacity);
+    WriteTimestamp(slot);
+  }
   return slot;
+}
+
+// Ends a command buffer, with its closing timestamp.
+void EndSlot(CmdSlot& slot) {
+  WriteTimestamp(slot, true);
+  VK_CHECK(vkEndCommandBuffer(slot.cb));
 }
 
 void RecycleSlot(WGPUDeviceImpl* dev, CmdSlot slot) {
@@ -1178,6 +1289,93 @@ uint64_t PollCompleted(WGPUDeviceImpl* dev) {
   return std::max(value, prev);
 }
 
+// Adds a finished command buffer's timestamps to the GPU time stats, and logs them every 2 s:
+// GPU busy time a presented frame, how much of it is inside render passes, and the heaviest pass.
+void AddGpuTiming(WGPUDeviceImpl* dev, SlotTiming& timing) {
+  if (timing.used < 2) {
+    return;
+  }
+  static thread_local std::vector<uint64_t> stamps;
+  stamps.resize(timing.used);
+  if (vkGetQueryPoolResults(dev->device, timing.pool, 0, timing.used, timing.used * sizeof(uint64_t), stamps.data(),
+                            sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
+    return;
+  }
+  const double msPerTick = dev->props.limits.timestampPeriod / 1e6;
+  const auto ms = [&](uint32_t a, uint32_t b) {
+    return static_cast<double>((stamps[b] - stamps[a]) & dev->timestampMask) * msPerTick;
+  };
+  GpuTimingStats& s = dev->gpuStats;
+  std::lock_guard lock(s.mutex);
+  const double busy = ms(0, timing.used - 1);
+  s.busyMs += busy;
+  s.frameMs += busy;
+  for (const SlotTiming::Pass& pass : timing.passes) {
+    const double passMs = ms(pass.query, pass.query + 1);
+    s.passMs += passMs;
+    ++s.passes;
+    s.draws += pass.draws;
+    if (passMs > s.heaviestPassMs) {
+      s.heaviestPassMs = passMs;
+      s.heaviestPass = pass;
+    }
+  }
+  for (const SlotTiming::Draw& draw : timing.draws) {
+    const double drawMs = ms(draw.before, draw.after);
+    auto& cost = s.pipelines[draw.pipeline];
+    cost.ms += drawMs;
+    ++cost.draws;
+    cost.elements += static_cast<uint64_t>(draw.elements) * draw.instances;
+    cost.blend = draw.blend;
+    if (drawMs > s.heaviestDrawMs) {
+      s.heaviestDrawMs = drawMs;
+      s.heaviestDraw = draw;
+    }
+  }
+  if (!timing.present) {
+    return;
+  }
+  ++s.frames;
+  aurora::g_gpuNanos.fetch_add(static_cast<uint64_t>(s.frameMs * 1e6), std::memory_order_relaxed);
+  aurora::g_gpuFrames.fetch_add(1, std::memory_order_relaxed);
+  s.worstFrameMs = std::max(s.worstFrameMs, s.frameMs);
+  s.frameMs = 0;
+  const auto now = std::chrono::steady_clock::now();
+  if (s.windowStart.time_since_epoch().count() == 0) {
+    s.windowStart = now;
+  }
+  if (now - s.windowStart < std::chrono::seconds(2)) {
+    return;
+  }
+  const double frames = static_cast<double>(s.frames);
+  Log("gpu: %.2f ms a frame (worst %.2f), passes %.2f ms in %.1f with %.0f draws, outside passes %.2f; "
+      "heaviest pass %.2f ms %ux%u %u draws",
+      s.busyMs / frames, s.worstFrameMs, s.passMs / frames, s.passes / frames, s.draws / frames,
+      (s.busyMs - s.passMs) / frames, s.heaviestPassMs, s.heaviestPass.width, s.heaviestPass.height,
+      s.heaviestPass.draws);
+  if (!s.pipelines.empty()) {
+    std::vector<std::pair<uint32_t, GpuTimingStats::PipelineCost>> costs(s.pipelines.begin(), s.pipelines.end());
+    std::sort(costs.begin(), costs.end(), [](const auto& a, const auto& b) { return a.second.ms > b.second.ms; });
+    std::string top;
+    char item[128];
+    for (size_t i = 0; i < std::min<size_t>(costs.size(), 8); ++i) {
+      const auto& [id, c] = costs[i];
+      std::snprintf(item, sizeof(item), "%s#%u%s %.2f ms/%.1f draws/%.0f el", i ? "; " : "", id, c.blend ? "b" : "",
+                    c.ms / frames, c.draws / frames, c.elements / frames);
+      top += item;
+    }
+    Log("gpu draws: %zu pipelines, heaviest draw %.2f ms (#%u%s, %u elements x%u); top: %s", costs.size(),
+        s.heaviestDrawMs, s.heaviestDraw.pipeline, s.heaviestDraw.blend ? "b" : "", s.heaviestDraw.elements,
+        s.heaviestDraw.instances, top.c_str());
+    s.pipelines.clear();
+    s.heaviestDrawMs = 0;
+  }
+  s.windowStart = now;
+  s.frames = 0;
+  s.busyMs = s.passMs = s.worstFrameMs = s.heaviestPassMs = 0;
+  s.passes = s.draws = 0;
+}
+
 // Releases the resources of every finished submission.
 void Retire(WGPUDeviceImpl* dev) {
   const uint64_t completed = PollCompleted(dev);
@@ -1191,6 +1389,9 @@ void Retire(WGPUDeviceImpl* dev) {
   }
   for (auto& entry : done) {
     for (CmdSlot slot : entry.slots) {
+      if (slot.timing != nullptr) {
+        AddGpuTiming(dev, *slot.timing);
+      }
       RecycleSlot(dev, slot);
     }
     {
@@ -1437,6 +1638,8 @@ struct WGPURenderPipelineImpl : Object {
   WGPUDeviceImpl* dev = nullptr;
   VkPipeline pipeline = VK_NULL_HANDLE;
   WGPUPipelineLayoutImpl* layout = nullptr;
+  uint32_t id = 0;
+  bool blend = false;
   ~WGPURenderPipelineImpl() override {
     vkDestroyPipeline(dev->device, pipeline, nullptr);
     layout->Release();
@@ -1614,8 +1817,26 @@ struct WGPURenderPassEncoderImpl : Object {
   VkCommandBuffer cb = VK_NULL_HANDLE;
   WGPURenderPipelineImpl* pipeline = nullptr;
   BindState binds;
+  SlotTiming::Pass timed{UINT32_MAX, 0, 0, 0};
+  uint32_t lastStamp = UINT32_MAX;
   ~WGPURenderPassEncoderImpl() override { encoder->Release(); }
 };
+
+// AURORA_VK_DRAW_TIMING: the GPU time from the pass's previous timestamp to this draw's end.
+void TimeDraw(WGPURenderPassEncoderImpl* pass, uint32_t elements, uint32_t instances) {
+  if (!pass->encoder->dev->drawTiming || pass->timed.query == UINT32_MAX) {
+    return;
+  }
+  // Two queries stay free: the pass's end and the command buffer's.
+  const uint32_t after = WriteTimestamp(pass->encoder->slot, false, 2);
+  if (after == UINT32_MAX) {
+    return;
+  }
+  const uint32_t before = pass->lastStamp != UINT32_MAX ? pass->lastStamp : pass->timed.query;
+  pass->encoder->slot.timing->draws.push_back(
+      {before, after, elements, instances, pass->pipeline->id, pass->pipeline->blend});
+  pass->lastStamp = after;
+}
 
 struct WGPUComputePassEncoderImpl : Object {
   WGPUCommandEncoderImpl* encoder = nullptr;
@@ -1716,6 +1937,10 @@ WGPUDeviceImpl::~WGPUDeviceImpl() {
     }
     for (CmdSlot slot : freeSlots) {
       vkDestroyCommandPool(device, slot.pool, nullptr);
+      if (slot.timing != nullptr) {
+        vkDestroyQueryPool(device, slot.timing->pool, nullptr);
+        delete slot.timing;
+      }
     }
     for (StagingChunk* chunk : freeChunks) {
       vmaDestroyBuffer(vma, chunk->buffer, chunk->alloc);
@@ -1973,6 +2198,12 @@ WGPUDeviceImpl* CreateDevice() {
     if ((families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) ==
         (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) {
       dev->queueFamily = i;
+      const uint32_t bits = families[i].timestampValidBits;
+      dev->timestampMask = bits >= 64 ? ~0ull : (1ull << bits) - 1;
+      const char* timing = std::getenv("AURORA_VK_GPU_TIMING");
+      dev->gpuTiming = bits > 0 && dev->props.limits.timestampPeriod > 0 && (timing == nullptr || timing[0] != '0');
+      const char* drawTiming = std::getenv("AURORA_VK_DRAW_TIMING");
+      dev->drawTiming = dev->gpuTiming && drawTiming != nullptr && drawTiming[0] == '1';
       break;
     }
   }
@@ -2172,6 +2403,11 @@ void CreateVkInstance();
 } // namespace
 
 extern "C" {
+
+// The adapter reports BC for every device (it has no physical device yet); this is the device's own
+// textureCompressionBC, so BC replacement textures are refused on GPUs without it (most Mali, Qualcomm's
+// driver) instead of failing at image creation.
+bool aurora_vk_has_bc() { return g_device != nullptr && g_device->hasBC; }
 
 void aurora_vk_save_pipeline_cache() {
   if (g_device != nullptr) {
@@ -3002,6 +3238,7 @@ void wgpuPipelineLayoutRelease(WGPUPipelineLayout layout) { layout->Release(); }
 WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice dev, const WGPURenderPipelineDescriptor* descriptor) {
   auto* pipeline = new WGPURenderPipelineImpl;
   pipeline->dev = dev;
+  pipeline->id = dev->pipelineIds.fetch_add(1, std::memory_order_relaxed) + 1;
   pipeline->layout = descriptor->layout;
   descriptor->layout->AddRef();
 
@@ -3128,6 +3365,7 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice dev, const WGPURend
       colorFormats.push_back(GetFormat(target.format).vk);
       VkPipelineColorBlendAttachmentState blend{.colorWriteMask = static_cast<VkColorComponentFlags>(target.writeMask & 0xF)};
       if (target.blend != nullptr) {
+        pipeline->blend = true;
         blend.blendEnable = VK_TRUE;
         blend.srcColorBlendFactor = ToVk(target.blend->color.srcFactor);
         blend.dstColorBlendFactor = ToVk(target.blend->color.dstFactor);
@@ -3240,7 +3478,7 @@ WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder encoder, const WGP
   if (!encoder->mapTracked.empty()) {
     HostReadBarrier(encoder->slot.cb);
   }
-  VK_CHECK(vkEndCommandBuffer(encoder->slot.cb));
+  EndSlot(encoder->slot);
   encoder->finished = true;
   auto* cmd = new WGPUCommandBufferImpl;
   cmd->dev = encoder->dev;
@@ -3495,6 +3733,7 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
       .pDepthAttachment = hasDepth ? &depth : nullptr,
       .pStencilAttachment = hasStencil ? &stencil : nullptr,
   };
+  const uint32_t startQuery = WriteTimestamp(encoder->slot, false, 2);
   vkCmdBeginRendering(cb, &info);
   // WebGPU's defaults: the whole target, y up.
   const VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width), -static_cast<float>(height),
@@ -3510,6 +3749,7 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
   pass->encoder = encoder;
   encoder->AddRef();
   pass->cb = cb;
+  pass->timed = {startQuery, 0, width, height};
   return pass;
 }
 
@@ -3517,6 +3757,10 @@ void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder pass) { pass->Release();
 
 void wgpuRenderPassEncoderEnd(WGPURenderPassEncoder pass) {
   vkCmdEndRendering(pass->cb);
+  if (pass->timed.query != UINT32_MAX) {
+    WriteTimestamp(pass->encoder->slot, true);
+    pass->encoder->slot.timing->passes.push_back(pass->timed);
+  }
   pass->encoder->needBarrier = true;
 }
 
@@ -3578,6 +3822,8 @@ void wgpuRenderPassEncoderDraw(WGPURenderPassEncoder pass, uint32_t vertexCount,
   }
   pass->binds.Flush(pass->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pass->pipeline->layout);
   vkCmdDraw(pass->cb, vertexCount, instanceCount, firstVertex, firstInstance);
+  ++pass->timed.draws;
+  TimeDraw(pass, vertexCount, instanceCount);
 }
 
 void wgpuRenderPassEncoderDrawIndexed(WGPURenderPassEncoder pass, uint32_t indexCount, uint32_t instanceCount,
@@ -3587,6 +3833,8 @@ void wgpuRenderPassEncoderDrawIndexed(WGPURenderPassEncoder pass, uint32_t index
   }
   pass->binds.Flush(pass->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pass->pipeline->layout);
   vkCmdDrawIndexed(pass->cb, indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
+  ++pass->timed.draws;
+  TimeDraw(pass, indexCount, instanceCount);
 }
 
 void wgpuRenderPassEncoderPushDebugGroup(WGPURenderPassEncoder, WGPUStringView) {}
@@ -3640,7 +3888,7 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
   {
     std::lock_guard lock(dev->queueMutex);
     if (dev->uploadOpen) {
-      VK_CHECK(vkEndCommandBuffer(dev->upload.cb));
+      EndSlot(dev->upload);
       cbs.push_back(VkCommandBufferSubmitInfo{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                                               .commandBuffer = dev->upload.cb});
       entry.slots.push_back(dev->upload);
@@ -4117,7 +4365,10 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
     }
   }
   ImageLayoutBarrier(slot.cb, tex->image, VK_IMAGE_ASPECT_COLOR_BIT, from, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-  VK_CHECK(vkEndCommandBuffer(slot.cb));
+  if (slot.timing != nullptr) {
+    slot.timing->present = true;
+  }
+  EndSlot(slot);
   tex->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   VkResult result;
   {
@@ -4125,7 +4376,7 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
     InFlight entry;
     std::vector<VkCommandBufferSubmitInfo> cbs;
     if (dev->uploadOpen) {
-      VK_CHECK(vkEndCommandBuffer(dev->upload.cb));
+      EndSlot(dev->upload);
       cbs.push_back(VkCommandBufferSubmitInfo{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                                               .commandBuffer = dev->upload.cb});
       entry.slots.push_back(dev->upload);

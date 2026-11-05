@@ -48,6 +48,10 @@ constexpr double kDynDownBusyMs = 15.0;       // worker this busy a cycle: it is
 constexpr double kDynDownWaitMs = 2.0;        // ...or the game waits this long a frame for it
 constexpr double kDynDownWaitBusyMs = 13.0;  //    while the worker is at least this busy
 constexpr double kDynUpBusyMs = 11.5;         // predicted worker time at the next step up
+// Vulkan: the GPU's own time a presented frame (timestamps). The worker there hands the GPU its
+// work and goes on, so a GPU that fills the frame barely shows in the worker's time.
+constexpr double kDynDownGpuMs = 15.5;        // GPU this busy a frame: it is the limit
+constexpr double kDynUpGpuMs = 14.0;          // predicted GPU time at the next step up
 constexpr int kDynUpWindows = 3;              // calm windows in a row before stepping up
 constexpr int kDynUpWindowsMax = 24;          // ...raised up to this while steps up keep bouncing back
 constexpr int kDynBounceWindows = 5;          // a step down this soon after a step up is a bounce
@@ -142,6 +146,8 @@ bool DynamicResolutionTick() {
     const uint64_t cycles = now.cycles - g_dynLast.cycles;
     const double busyMs = cycles ? (now.busyNanos - g_dynLast.busyNanos) / 1e6 / cycles : 0.0;
     const double waitMs = (now.producerWaitNanos - g_dynLast.producerWaitNanos) / 1e6 / g_dynFrames;
+    const uint64_t gpuFrames = now.gpuFrames - g_dynLast.gpuFrames;
+    const double gpuMs = gpuFrames ? (now.gpuNanos - g_dynLast.gpuNanos) / 1e6 / gpuFrames : 0.0;
     g_dynLast = now;
     g_dynFrames = 0;
     if (g_dynSinceUp < (1 << 20)) {
@@ -169,13 +175,14 @@ bool DynamicResolutionTick() {
         static int s_dir = 1;
         if (step + s_dir < 0 || step + s_dir >= kDynStepCount) s_dir = -s_dir;
         step += s_dir;
-    } else if (dynamic && (busyMs > kDynDownBusyMs || (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs))) {
+    } else if (dynamic && (busyMs > kDynDownBusyMs || gpuMs > kDynDownGpuMs ||
+                           (waitMs > kDynDownWaitMs && busyMs > kDynDownWaitBusyMs))) {
         g_dynCalm = 0;
         step = std::min(step + 1, kDynStepCount - 1);
         if (step != g_dynStep && g_dynSinceUp <= kDynBounceWindows) {
             g_dynUpNeed = std::min(g_dynUpNeed * 2, kDynUpWindowsMax);  // the last step up did not hold
         }
-    } else if (hot && step < kDynHotStep && busyMs >= kDynHotBusyMs) {
+    } else if (hot && step < kDynHotStep && std::max(busyMs, gpuMs) >= kDynHotBusyMs) {
         g_dynCalm = 0;
         step += 1;
         reason = ", running hot";
@@ -189,11 +196,15 @@ bool DynamicResolutionTick() {
         // (50% 8 ms, 100% 16.7 ms). The square kept it at 50% for good (8.2 ms -> 11.8 > 11.5).
         const float ratio = kDynSteps[step - 1] / kDynSteps[step];
         const double predicted = busyMs * ratio;
-        if (predicted < kDynUpBusyMs && ++g_dynCalm >= g_dynUpNeed) {
+        // Linear like the worker's: on the Redmi (Adreno 618) a calm battle took 12.8 ms at 100% and still
+        // 10.5 ms at 60%, most of it in passes at the display's size. The square kept it at 60% for good.
+        const double predictedGpu = gpuMs * ratio;
+        const bool fits = predicted < kDynUpBusyMs && predictedGpu < kDynUpGpuMs;
+        if (fits && ++g_dynCalm >= g_dynUpNeed) {
             g_dynCalm = 0;
             step -= 1;
             g_dynSinceUp = 0;
-        } else if (predicted >= kDynUpBusyMs) {
+        } else if (!fits) {
             g_dynCalm = 0;
         }
     }
@@ -204,8 +215,10 @@ bool DynamicResolutionTick() {
         return false;  // too soon after the last step: wait (the calm count is kept)
     }
     g_dynSinceChange = 0;
-    RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (worker %.2f ms a cycle, game waited %.2f ms a frame%s)\n",
-            kDynSteps[g_dynStep] * 100.0f, kDynSteps[step] * 100.0f, busyMs, waitMs, reason);
+    RT_LOGF(RT_TAG_VI,
+            "dynamic resolution: %.0f%% -> %.0f%% (worker %.2f ms a cycle, gpu %.2f ms a frame, game waited %.2f ms a "
+            "frame%s)\n",
+            kDynSteps[g_dynStep] * 100.0f, kDynSteps[step] * 100.0f, busyMs, gpuMs, waitMs, reason);
     g_dynStep = step;
     g_dynSkipWindow = true;
     return true;

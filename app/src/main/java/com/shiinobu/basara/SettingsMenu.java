@@ -24,30 +24,31 @@ final class SettingsMenu {
     private static final String TAG = "Basara";
 
     static final int DISPLAY = 0, GRAPHICS = 1, PERFORMANCE = 2, CONTROLS = 3, SAVE_DATA = 4, CHEATS = 5,
-            EXPERIMENTAL = 6, SYSTEM = 7;
+            TEXTURES = 6, SYSTEM = 7, DEVELOPER = 8;
     private static final String[] NAMES = {"Display", "Graphics", "Performance", "Controls", "Save Data",
-        "Cheats", "Experimental", "System"};
+        "Cheats", "Textures", "System", "Developer"};
     private static final int[] ICONS = {R.drawable.ic_display, R.drawable.ic_graphics, R.drawable.ic_performance,
-        R.drawable.ic_controls, R.drawable.ic_save, R.drawable.ic_cheats, R.drawable.ic_experimental,
-        R.drawable.ic_system};
+        R.drawable.ic_controls, R.drawable.ic_save, R.drawable.ic_cheats, R.drawable.ic_textures,
+        R.drawable.ic_system, R.drawable.ic_developer};
 
     static String name(int section) { return Tr.t(NAMES[section]); }
     static int icon(int section) { return ICONS[section]; }
     /** Sections a player should know are risky (warning colour on their tab). */
-    static boolean risky(int section) { return section == CHEATS || section == EXPERIMENTAL; }
+    static boolean risky(int section) { return section == CHEATS; }
 
     /** The launcher: everything, with Cheats only in a build that has them, and System last. */
     static int[] launcherSections() {
         return BuildConfig.CHEATS
-                ? new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, EXPERIMENTAL, SYSTEM}
-                : new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, EXPERIMENTAL, SYSTEM};
+                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, DEVELOPER,
+                        SYSTEM}
+                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, DEVELOPER, SYSTEM};
     }
 
     /** The game: no save import (it would close the game) and no launcher things. */
     static int[] gameSections() {
         return BuildConfig.CHEATS
-                ? new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, CHEATS, EXPERIMENTAL}
-                : new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, EXPERIMENTAL};
+                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, CHEATS, DEVELOPER}
+                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, DEVELOPER};
     }
 
     /** The launcher's own rows for System (game file, updates). */
@@ -88,6 +89,7 @@ final class SettingsMenu {
 
     /** Draws `index` again in place (the views swap before the next frame, so nothing jumps). */
     void show(int index) {
+        if (index == TEXTURES && section != TEXTURES && !hdBusy) hdCacheBytes = -1;  // count again on entry
         section = index;
         settings = new AppSettings(activity);  // the other process may have written it
         rows.removeAllViews();
@@ -98,7 +100,8 @@ final class SettingsMenu {
             case CONTROLS: showControls(); break;
             case SAVE_DATA: showSaveData(); break;
             case CHEATS: showCheats(); break;
-            case EXPERIMENTAL: showExperimental(); break;
+            case TEXTURES: showTextures(); break;
+            case DEVELOPER: showDeveloper(); break;
             default:
                 if (systemRows != null) systemRows.fill(this);
                 break;
@@ -206,7 +209,7 @@ final class SettingsMenu {
         restart(null);
         choiceRow(Tr.t("Renderer"), Tr.t("Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot "
                         + "use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, "
-                        + "made for older phones, still being tuned."),
+                        + "made for older phones."),
                 new String[] {Tr.t("Auto"), Tr.t("Vulkan")}, settings.renderer(), true, which -> {
                     final int before = settings.renderer();
                     settings.setRenderer(which);
@@ -214,6 +217,146 @@ final class SettingsMenu {
                             () -> settings.setRenderer(before));
                 }, false);
         showGpuDrivers();
+    }
+
+    /** Tools for reports: share a run's log, the device info. */
+    private void showDeveloper() {
+        final boolean files = android.os.Environment.isExternalStorageManager();
+        actionRow(Tr.t("Share Log"), files
+                        ? Tr.t("Sends the log of the game runs you pick (the one that crashed first) with the device "
+                                + "info, as one zip: to Discord, Telegram, WhatsApp or anywhere else.")
+                        : Tr.t("Needs \"All files access\" for this app, to read the logs."),
+                files ? Tr.t("Share") : null, () -> LogShare.show(activity));
+        actionRow(Tr.t("Device Info"), LogShare.deviceInfo(activity).trim(), Tr.t("Copy"),
+                () -> LogShare.copyDeviceInfo(activity));
+        if (!files) return;  // the testing options live in env.txt on shared storage
+
+        // Testing options: lines in env.txt, read when the game starts.
+        final String timing = DevTools.env("AURORA_VK_GPU_TIMING");
+        final String draws = DevTools.env("AURORA_VK_DRAW_TIMING");
+        restart(null);
+        choiceRow(Tr.t("GPU Timing"), Tr.t("Writes how long the GPU works on each frame to the log "
+                        + "(\"[vkgpu] gpu: X ms\"), Vulkan renderer only. Per Draw is slower and for finding "
+                        + "the heavy effect."),
+                new String[] {Tr.t("Off"), Tr.t("Per Frame"), Tr.t("Per Draw")},
+                "0".equals(timing) ? 0 : "1".equals(draws) ? 2 : 1, true, which -> {
+                    DevTools.setEnv(activity, "AURORA_VK_GPU_TIMING", which == 0 ? "0" : null);
+                    DevTools.setEnv(activity, "AURORA_VK_DRAW_TIMING", which == 2 ? "1" : null);
+                });
+        final String skip = DevTools.env("BASARA_FRAMESKIP");
+        restart(null);
+        choiceRow(Tr.t("Frameskip Override"), Tr.t("Fixes frameskip for a test, whatever Performance says. "
+                        + "Settings: use the Performance tab."),
+                new String[] {Tr.t("Settings"), Tr.t("Off"), Tr.t("Auto"), Tr.t("30 FPS")},
+                "0".equals(skip) ? 1 : "1".equals(skip) ? 2 : "2".equals(skip) ? 3 : 0, true,
+                which -> DevTools.setEnv(activity, "BASARA_FRAMESKIP", which == 0 ? null : String.valueOf(which - 1)));
+        restart(null);
+        toggleRow(Tr.t("Dynamic Resolution Test"), Tr.t("Walks the resolution down and back up one step every "
+                        + "two seconds, to check each size draws right. Needs Dynamic Resolution on."),
+                "2".equals(DevTools.env("BASARA_DYNRES")),
+                on -> DevTools.setEnv(activity, "BASARA_DYNRES", on ? "2" : null));
+        final int lines = DevTools.activeEnvCount();
+        final int left = DevTools.runsLeft(activity);
+        actionRow(Tr.t("Testing Options"), lines == 0
+                        ? Tr.t("None on. Paste the code the developer sends you on Discord.")
+                        : left >= 0 ? String.format(java.util.Locale.ROOT, Tr.t("%d on, they turn off by themselves "
+                                + "after %d more game starts."), lines, left)
+                        : String.format(java.util.Locale.ROOT, Tr.t("%d on, in %s."), lines, folderName("env.txt")),
+                Tr.t("Open"), () -> DevTools.showOptions(activity, () -> show(DEVELOPER)));
+        if (inGame) return;  // resetting and clearing belong to the launcher, with the game stopped
+        actionRow(Tr.t("Reset and Clear"), Tr.t("Reset all settings, clear the HD texture and shader caches, "
+                        + "the testing options or the logs, in one place."),
+                Tr.t("Choose"), () -> DevTools.showReset(activity,
+                        activity instanceof LauncherActivity && ((LauncherActivity) activity).gameRunning(),
+                        () -> show(DEVELOPER)));
+    }
+
+    /** Everything about the game's textures: packs, dump, the key report and HD Textures. */
+    private void showTextures() {
+        showCustomTextures();
+        showTextureTools();
+        showHdTextures();
+    }
+
+    /**
+     * The HD cache size, counted (or the cache deleted) off the UI thread: it holds thousands of files on
+     * shared storage, and walking them on every redraw made the section stutter. -1: not counted yet.
+     */
+    private static long hdCacheBytes = -1;
+    private static boolean hdBusy;
+
+    private void hdCacheWork(java.io.File dir, boolean clear) {
+        if (hdBusy) return;
+        hdBusy = true;
+        new Thread(() -> {
+            if (clear) AppFiles.deleteRecursively(dir);
+            final long bytes = clear ? 0 : AppFiles.folderSize(dir);
+            activity.runOnUiThread(() -> {
+                hdBusy = false;
+                hdCacheBytes = bytes;
+                if (section == TEXTURES && !activity.isFinishing()) show(TEXTURES);
+            });
+        }, "hd-cache-size").start();
+    }
+
+    /** HD Textures: upscaled while playing, with their storage and cache. */
+    private void showHdTextures() {
+        restart(null);
+        choiceRow(Tr.t("HD Textures"), Tr.t("Makes the game's textures twice as sharp: each one is upscaled in the "
+                        + "background the first time it appears (blurry, then sharp) and kept for next time. Uses "
+                        + "more RAM and storage.")
+                        + (weakPhone() ? Tr.t(" This phone has little RAM or renders below 1x: the gain is small.") : ""),
+                new String[] {Tr.t("Off"), Tr.t("Live")}, settings.hdTextures(), true, which -> {
+                    final int before = settings.hdTextures();
+                    settings.setHdTextures(which);
+                    confirmRestart(Tr.t("HD Textures"), which == 1 ? Tr.t("Live") : "off", before == 1 ? Tr.t("Live") : "off",
+                            () -> settings.setHdTextures(before));
+                }, false);
+        final int[] sizes = AppSettings.HD_CACHE_SIZES;
+        int size = 1;
+        for (int i = 0; i < sizes.length; ++i) if (sizes[i] == settings.hdCacheMb()) size = i;
+        restart(null);
+        choiceRow(Tr.t("HD Texture Storage"), settings.hdTextures() != 0
+                        ? Tr.t("The most storage the sharper textures may take; once full, no new ones are made.")
+                        : Tr.t("Turn HD Textures on to choose."),
+                new String[] {Tr.t("512 MB"), Tr.t("1 GB"), Tr.t("2 GB")}, size, settings.hdTextures() != 0,
+                which -> settings.setHdCacheMb(sizes[which]));
+        final java.io.File hdCache = AppFiles.hdCacheDir();
+        if (hdCache != null && hdCacheBytes < 0) hdCacheWork(hdCache, false);
+        final long used = Math.max(0, hdCacheBytes);
+        actionRow(Tr.t("HD Texture Cache"), hdCache == null ? Tr.t("Needs \"All files access\" for this app.")
+                        : hdBusy || hdCacheBytes < 0 ? Tr.t("Counting...")
+                        : String.format(java.util.Locale.ROOT, Tr.t("%.0f MB in %s."), used / 1048576.0,
+                                folderName("hd-cache")),
+                used > 0 && !hdBusy && !inGame ? Tr.t("Clear") : null, this::confirmClearHdCache);
+    }
+
+    /** Texture packs from the textures folder. */
+    private void showCustomTextures() {
+        final String folder = folderName("textures");
+        final boolean files = android.os.Environment.isExternalStorageManager();
+        restart(null);
+        toggleRow(Tr.t("Custom Textures"), files
+                        ? Tr.t("Uses your own textures (tex1_*.png or .dds, Dolphin-style names) from ") + folder
+                                + Tr.t(" in place of the game's. A very large pack uses more RAM.")
+                        : Tr.t("Needs \"All files access\" for this app, to read ") + folder + ".",
+                settings.customTextures(), files, on -> settings.setCustomTextures(on));
+    }
+
+    /** Tools for pack makers and testers: texture dump and the texture key report. */
+    private void showTextureTools() {
+        final String folder = folderName("textures");
+        restart(null);
+        toggleRow(Tr.t("Dump Textures"), settings.customTextures()
+                        ? Tr.t("Saves each texture the game uses to ") + folder + Tr.t("/dump, named the way its "
+                                + "replacement must be: edit one and put it in ") + folder + Tr.t(". Slows loading and fills "
+                                + "storage: turn it off when done.")
+                        : Tr.t("Turn Custom Textures on to choose."),
+                settings.dumpTextures(), settings.customTextures(), on -> settings.setDumpTextures(on));
+        restart(null);
+        toggleRow(Tr.t("Report Texture Keys"), Tr.t("Lists the name of every texture the game uses in the log (only "
+                        + "the names, no pictures), so testers can check that texture packs match the game."),
+                settings.textureKeyReport(), on -> settings.setTextureKeyReport(on));
     }
 
     /** Off / FSR Light / FSR Full / SGSR, shared with the launcher's quick settings. */
@@ -311,6 +454,13 @@ final class SettingsMenu {
                     confirmRestart(Tr.t("GX Thread"), on ? "on" : "off", on ? "off" : "on",
                             () -> settings.setGxThread(!on));
                 }, false);
+        final boolean thermal = AppSettings.thermalSupported(activity);
+        toggleRow(Tr.t("Thermal Control"), thermal
+                        ? Tr.t("When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
+                        + "for at least a minute, and lowers the resolution if the GPU is the one working "
+                        + "hard. Back to normal once it cools down.")
+                        : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
+                settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
         restart(null);
         toggleRow(Tr.t("Skip Boot"), Tr.t("Skips the logos at start, straight to the save check."), settings.skipBoot(),
                 on -> settings.setSkipBoot(on));
@@ -504,84 +654,6 @@ final class SettingsMenu {
                 on -> settings.setMotionShake(on));
     }
 
-    /**
-     * Everything unfinished, each with a warning: testers can find them, players know what they risk.
-     * Each is read when the game starts, unless it says otherwise.
-     */
-    private void showExperimental() {
-        rows.addView(Sheet.warningBox(activity, Tr.t("Experimental features"),
-                Tr.t("Unfinished and only partly tested. They can crash the game, glitch the picture, use much more "
-                        + "RAM, storage and battery, or make the phone hot. Leave them off to play normally. If "
-                        + "you test one, say which in your report and send the log (") + folderName("Logs")
-                        + ")."),
-                Ui.matchWidth(0));
-
-
-        warn(weakPhone()
-                ? Tr.t("This phone has little RAM or renders below 1x: likely to crash, and the gain is small.")
-                : Tr.t("Uses more RAM (up to 4x per texture) and storage, and works on the CPU while you play."));
-        restart(null);
-        choiceRow(Tr.t("HD Textures"), Tr.t("Makes the game's textures twice as sharp: each one is upscaled on a "
-                        + "background thread the first time it appears, and kept for next time. It looks blurry, "
-                        + "then sharp, while that happens. Prepare from disc (all at once, before playing) is "
-                        + "coming later."),
-                new String[] {Tr.t("Off"), Tr.t("Live")}, settings.hdTextures(), true, which -> {
-                    final int before = settings.hdTextures();
-                    settings.setHdTextures(which);
-                    confirmRestart(Tr.t("HD Textures"), which == 1 ? Tr.t("Live") : "off", before == 1 ? Tr.t("Live") : "off",
-                            () -> settings.setHdTextures(before));
-                }, false);
-        final int[] sizes = AppSettings.HD_CACHE_SIZES;
-        int size = 1;
-        for (int i = 0; i < sizes.length; ++i) if (sizes[i] == settings.hdCacheMb()) size = i;
-        restart(null);
-        choiceRow(Tr.t("HD Texture Storage"), settings.hdTextures() != 0
-                        ? Tr.t("The most storage the sharper textures may take; once full, no new ones are made.")
-                        : Tr.t("Turn HD Textures on to choose."),
-                new String[] {Tr.t("512 MB"), Tr.t("1 GB"), Tr.t("2 GB")}, size, settings.hdTextures() != 0,
-                which -> settings.setHdCacheMb(sizes[which]));
-        final java.io.File hdCache = AppFiles.hdCacheDir();
-        final long used = AppFiles.folderSize(hdCache);
-        actionRow(Tr.t("HD Texture Cache"), hdCache == null ? Tr.t("Needs \"All files access\" for this app.")
-                        : String.format(java.util.Locale.ROOT, Tr.t("%.0f MB in %s."), used / 1048576.0,
-                                folderName("hd-cache")),
-                used > 0 && !inGame ? Tr.t("Clear") : null, this::confirmClearHdCache);
-
-        warn(Tr.t("Writes to the log while you play."));
-        restart(null);
-        toggleRow(Tr.t("Report Texture Keys"), Tr.t("Lists the name of every texture the game uses in the log (only "
-                        + "the names, no pictures), so testers can check that texture packs match the game."),
-                settings.textureKeyReport(), on -> settings.setTextureKeyReport(on));
-
-        final String folder = folderName("textures");
-        final boolean files = android.os.Environment.isExternalStorageManager();
-        warn(Tr.t("A wrong or very large pack can crash the game or use up RAM."));
-        restart(null);
-        toggleRow(Tr.t("Custom Textures"), files
-                        ? Tr.t("Uses your own textures (tex1_*.png, Dolphin-style names) from ") + folder
-                                + Tr.t(" in place of the game's.")
-                        : Tr.t("Needs \"All files access\" for this app, to read ") + folder + ".",
-                settings.customTextures(), files, on -> settings.setCustomTextures(on));
-        warn(Tr.t("Slows loading and fills storage quickly."));
-        restart(null);
-        toggleRow(Tr.t("Dump Textures"), settings.customTextures()
-                        ? Tr.t("Saves each texture the game uses to ") + folder + Tr.t("/dump, named the way its "
-                                + "replacement must be: edit one and put it in ") + folder + Tr.t(". Turn it off when "
-                                + "done.")
-                        : Tr.t("Turn Custom Textures on to choose."),
-                settings.dumpTextures(), settings.customTextures(), on -> settings.setDumpTextures(on));
-
-        final boolean thermal = AppSettings.thermalSupported(activity);
-        warn(Tr.t("Still unreliable: can drop to 30 fps or lower the resolution when it is not needed."));
-        toggleRow(Tr.t("Thermal Control"), thermal
-                        ? Tr.t("When the phone warms up, draws at 30 fps (the game itself keeps full speed) "
-                        + "for at least a minute, and lowers the resolution if the GPU is the one working "
-                        + "hard. Back to normal once it cools down.")
-                        : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
-                settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
-
-    }
-
     /** RAM under 4.5 GB, or a render scale below 1x: HD Textures costs a lot and shows little. */
     private boolean weakPhone() {
         final android.app.ActivityManager am = activity.getSystemService(android.app.ActivityManager.class);
@@ -599,7 +671,7 @@ final class SettingsMenu {
         new Sheet(activity, Tr.t("Clear HD Texture Cache?"), Tr.t("The sharper textures are made again while you play."))
                 .action(Tr.t("Clear"), null, true, true, () -> {
                     final java.io.File dir = AppFiles.hdCacheDir();
-                    if (dir != null) AppFiles.deleteRecursively(dir);
+                    if (dir != null) hdCacheWork(dir, true);
                     changed();
                 })
                 .action(Tr.t("Cancel"), null, false, false, null)
@@ -627,15 +699,9 @@ final class SettingsMenu {
     interface Toggle { void set(boolean on); }
     interface Choice { void pick(int which); }
 
-    /** The next card gets a red warning box under its text (experimental features). */
-    private String pendingWarning;
     /** In the game: the next card is only read at start, and says so in red. */
     private boolean pendingRestart;
     private String pendingRestartText;
-
-    private void warn(String warning) {
-        pendingWarning = warning;
-    }
 
     /** Marks the next card as applying at the next start (`text`: a more exact note, or null). */
     private void restart(String text) {
@@ -680,10 +746,6 @@ final class SettingsMenu {
             final TextView exact = Ui.text(activity, pendingRestartText, 11, Ui.DANGER_TEXT);
             exact.setPadding(0, dp(3), 0, 0);
             words.addView(exact);
-        }
-        if (pendingWarning != null) {
-            words.addView(Sheet.warningBox(activity, Tr.t("Experimental"), pendingWarning), Ui.matchWidth(dp(8)));
-            pendingWarning = null;
         }
         pendingRestart = false;
         pendingRestartText = null;

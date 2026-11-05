@@ -50,7 +50,7 @@ public final class LauncherActivity extends Activity {
     /** Set by the game's "Start Menu": no automatic update check on the way back. */
     static final String EXTRA_SHOW_START_MENU = "showStartMenu";
 
-    static final String PROJECT_URL = "https://github.com/shiinobu/basara2heroes-android";
+    static final String PROJECT_URL = "https://github.com/PotatoRecomp/B2HWii-Android";
 
     private AppSettings settings;
     private boolean updating;

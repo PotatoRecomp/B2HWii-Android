@@ -10,11 +10,11 @@ import java.net.HttpURLConnection;
  * The testers' Beta (BuildConfig.BETA) stops once it is switched off or the release is out:
  * <ul>
  * <li>the latest GitHub release is RELEASE_VERSION or later, or</li>
- * <li>beta-channel.json in the public repo shiinobu/basara2heroes-beta-android says
+ * <li>beta-channel.json in the release repo PotatoRecomp/B2HWii-Android says
  * {"enabled": false, "message": "..."}, or {"min_beta": N} with this Beta's number below N.</li>
  * </ul>
- * The status lives in its own public repo because the main repo is private (GitHub answers 404
- * without a login), and it is checked even without ONLINE_UPDATES.
+ * The status file sits in the release repo; while that repo is private GitHub answers 404
+ * without a login (treated as no file). It is checked even without ONLINE_UPDATES.
  * No status file, or no network, leaves the Beta playable until a check sees it end; LauncherActivity
  * keeps that answer (AppSettings.betaEnded), so going offline afterwards doesn't reopen it.
  * Testing: debug.basara.update_url and debug.basara.beta_url point both checks at a local server.
@@ -22,7 +22,7 @@ import java.net.HttpURLConnection;
 final class BetaGate {
     static final String RELEASE_VERSION = "1.0";
     private static final String BETA_STATUS =
-            "https://raw.githubusercontent.com/shiinobu/basara2heroes-beta-android/main/beta-channel.json";
+            "https://raw.githubusercontent.com/PotatoRecomp/B2HWii-Android/main/beta-channel.json";
 
     private BetaGate() {}
 

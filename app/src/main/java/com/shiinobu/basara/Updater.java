@@ -30,11 +30,11 @@ import java.security.NoSuchAlgorithmException;
  */
 final class Updater {
     private static final String LATEST_RELEASE =
-            "https://api.github.com/repos/shiinobu/basara2heroes-android/releases/latest";
+            "https://api.github.com/repos/PotatoRecomp/B2HWii-Android/releases/latest";
     private static final String APK_SUFFIX = "-android-arm64.apk";
     /** Every release, newest first: the Beta looks for its pre-releases here. */
     private static final String ALL_RELEASES =
-            "https://api.github.com/repos/shiinobu/basara2heroes-android/releases?per_page=30";
+            "https://api.github.com/repos/PotatoRecomp/B2HWii-Android/releases?per_page=30";
     private static final int TIMEOUT_MS = 15000;
 
     /** The latest release's Android download. */

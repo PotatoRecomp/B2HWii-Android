@@ -128,7 +128,6 @@ public final class GameActivity extends SDLActivity
             // Sustained Performance: the system holds steady clocks, so the game thread is not pinned to
             // the fastest cores and no ADPF boost is asked for (runtime/src/cpu_boost.cpp). env.txt wins.
             if (sustainedMode()) Os.setenv("BASARA_CPU_BOOST", "0", false);
-            if (settings.autoTune()) Os.setenv("BASARA_AUTOTUNE", "1", false);
             try {
                 // For the log's device line: the screen's refresh rate.
                 Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round(getDisplay().getRefreshRate())), true);

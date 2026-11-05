@@ -401,6 +401,9 @@ final class DevTools {
             if (picked[4]) {
                 final File logs = AppFiles.logsRoot();
                 if (logs != null) AppFiles.deleteRecursively(logs);
+                // The runtime's own Logs folder in app data: crash reports from before a run folder
+                // existed, and developer dumps.
+                AppFiles.deleteRecursively(new File(AppFiles.dataDir(app), "Logs"));
             }
             AppFiles.deleteRecursively(LogShareProvider.dir(app));
             activity.runOnUiThread(() -> {
@@ -452,7 +455,9 @@ final class DevTools {
                 deleteCaches(f, skip, depth + 1);
             } else {
                 final String name = f.getName();
-                if (name.startsWith("vk_pipeline_cache") || name.startsWith("pipeline_cache.db")) {
+                // Vulkan renderer: pipeline_cache.db; Dawn renderer: dawn_cache.db (both SQLite, -wal/-shm too).
+                if (name.startsWith("vk_pipeline_cache") || name.startsWith("pipeline_cache.db")
+                        || name.startsWith("dawn_cache.db")) {
                     //noinspection ResultOfMethodCallIgnored
                     f.delete();
                 }

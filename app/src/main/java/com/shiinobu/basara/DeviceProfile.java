@@ -97,7 +97,8 @@ final class DeviceProfile {
     /**
      * What the Low-End preset sets: a 480-line surface the screen stretches, render at the same 480
      * lines (0.5x on the weakest GPUs), no extra texture or upscaling work, frameskip and dynamic
-     * resolution to hold speed, and V-Sync off so a late frame does not wait for the next refresh.
+     * resolution to hold speed. V-Sync stays as it is: off, frames reach the screen out of step with
+     * its refresh and motion stutters even at 60 fps (tested on a Redmi, Adreno 618).
      */
     static java.util.Map<String, Object> lowEndValues(String gpu) {
         final java.util.Map<String, Object> v = new java.util.LinkedHashMap<>();
@@ -109,7 +110,6 @@ final class DeviceProfile {
         v.put("dynamic_resolution", true);
         v.put("hd_textures", 0);
         v.put("show_fps", false);
-        v.put("vsync", false);
         return v;
     }
 

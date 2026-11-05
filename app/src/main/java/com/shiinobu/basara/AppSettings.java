@@ -91,7 +91,7 @@ final class AppSettings {
     // --- Low-End preset -----------------------------------------------------------------------------
     /** Every setting the Low-End preset may change; what they were before is kept for Undo. */
     static final String[] LOW_END_KEYS = {"display_lines", "resolution_scale", "texture_filter", "fsr_on",
-        "frameskip", "dynamic_resolution", "hd_textures", "show_fps", "vsync"};
+        "frameskip", "dynamic_resolution", "hd_textures", "show_fps"};
 
     boolean lowEndApplied() { return prefs.contains("low_end_backup"); }
 
@@ -265,9 +265,6 @@ final class AppSettings {
     /** Thermal Control (off by default). */
     boolean thermalControl() { return prefs.getBoolean("thermal_control", false); }
     void setThermalControl(boolean on) { prefs.edit().putBoolean("thermal_control", on).commit(); }
-    /** Automatic Tuning (off by default): runtime/src/auto_tune.cpp, read when the game starts. */
-    boolean autoTune() { return prefs.getBoolean("auto_tune", false); }
-    void setAutoTune(boolean on) { prefs.edit().putBoolean("auto_tune", on).commit(); }
     /** Sustained Performance (off by default): clocks the phone can hold for a long session. */
     boolean sustainedPerformance() { return prefs.getBoolean("sustained_performance", false); }
     void setSustainedPerformance(boolean on) { prefs.edit().putBoolean("sustained_performance", on).commit(); }

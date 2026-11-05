@@ -470,11 +470,6 @@ final class SettingsMenu {
                         + "highest it goes."),
                 settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
         restart(null);
-        toggleRow(Tr.t("Automatic Tuning"), Tr.t("When the game keeps running below full speed, tries one lighter "
-                        + "setting at a time (Upscaler, Texture Detail, Dynamic Resolution, Frameskip) and keeps "
-                        + "it only if the game gets faster. Only while playing: your settings here stay as they are."),
-                settings.autoTune(), on -> settings.setAutoTune(on));
-        restart(null);
         toggleRow(Tr.t("GX Thread"), Tr.t("Runs the graphics work on its own CPU core, so busy battles run faster on "
                         + "slower phones."),
                 settings.gxThread(), true, on -> {
@@ -521,8 +516,8 @@ final class SettingsMenu {
                         + " " + render + "\n• " + Tr.t("Texture Detail") + " " + Tr.t("Original") + "\n• "
                         + Tr.t("Upscaler") + " " + Tr.t("Off") + "\n• " + Tr.t("Frameskip") + " " + Tr.t("Auto")
                         + "\n• " + Tr.t("Dynamic Resolution") + " " + Tr.t("On") + "\n• " + Tr.t("HD Textures") + " "
-                        + Tr.t("Off") + "\n• " + Tr.t("Performance Overlay") + " " + Tr.t("Off") + "\n• V-Sync "
-                        + Tr.t("Off") + "\n\n" + Tr.t("Undo puts back what you have now. Applies when the game "
+                        + Tr.t("Off") + "\n• " + Tr.t("Performance Overlay") + " " + Tr.t("Off")
+                        + "\n\n" + Tr.t("Undo puts back what you have now. Applies when the game "
                         + "starts again."))
                         .action(Tr.t("Apply"), null, true, false, () -> {
                             settings.applyLowEnd(values);

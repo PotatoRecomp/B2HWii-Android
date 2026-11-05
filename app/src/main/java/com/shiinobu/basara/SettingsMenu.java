@@ -39,16 +39,16 @@ final class SettingsMenu {
     /** The launcher: everything, with Cheats only in a build that has them, and System last. */
     static int[] launcherSections() {
         return BuildConfig.CHEATS
-                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, DEVELOPER,
+                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS,
                         SYSTEM}
-                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, DEVELOPER, SYSTEM};
+                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, SYSTEM};
     }
 
     /** The game: no save import (it would close the game) and no launcher things. */
     static int[] gameSections() {
         return BuildConfig.CHEATS
-                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, CHEATS, DEVELOPER}
-                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, DEVELOPER};
+                ? new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, CHEATS}
+                : new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS};
     }
 
     /** The launcher's own rows for System (game file, updates). */
@@ -101,7 +101,6 @@ final class SettingsMenu {
             case SAVE_DATA: showSaveData(); break;
             case CHEATS: showCheats(); break;
             case TEXTURES: showTextures(); break;
-            case DEVELOPER: showDeveloper(); break;
             default:
                 if (systemRows != null) systemRows.fill(this);
                 break;
@@ -270,15 +269,12 @@ final class SettingsMenu {
         showGpuDrivers();
     }
 
-    /** Developer switches will live here; nothing yet. */
-    private void showDeveloper() {
-        final LinearLayout empty = card(Tr.t("Nothing here yet"), Tr.t("Developer switches will show up here."),
-                null, false, false);
-        empty.setClickable(false);
-    }
-
     /** System's report tools (launcher only): share a run's log, the device info, reset and clear. */
     void reportRows(boolean gameRunning) {
+        toggleRow(Tr.t("Recording-Friendly Audio"), Tr.t("For screen recordings: some phones play the game's sound "
+                        + "on a fast path that recordings miss, so the video comes out silent. On keeps the sound on "
+                        + "the regular path, with a little more delay. Applies when the game starts again."),
+                settings.recordingAudio(), on -> settings.setRecordingAudio(on));
         final boolean files = android.os.Environment.isExternalStorageManager();
         actionRow(Tr.t("Share Log"), files
                         ? Tr.t("Sends the log of the game runs you pick (the one that crashed first) with the device "
@@ -492,6 +488,12 @@ final class SettingsMenu {
                         + "the fastest cores.")
                         : Tr.t("Not available: this phone does not offer it."),
                 settings.sustainedPerformance(), sustained, on -> settings.setSustainedPerformance(on));
+        restart(null);
+        choiceRow(Tr.t("Upload Memory"), Tr.t("Vulkan renderer: the memory the game writes its graphics data into. "
+                        + "Auto measures at start which one is faster on this phone. Standard suits most phones, "
+                        + "Cached helps some slow ones."),
+                new String[] {Tr.t("Auto"), Tr.t("Standard"), Tr.t("Cached")}, settings.uploadMemory(), true,
+                which -> settings.setUploadMemory(which));
         restart(null);
         toggleRow(Tr.t("Skip Boot"), Tr.t("Skips the logos at start, straight to the save check."), settings.skipBoot(),
                 on -> settings.setSkipBoot(on));

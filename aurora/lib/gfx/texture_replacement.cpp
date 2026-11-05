@@ -12,6 +12,7 @@
 #include <tracy/Tracy.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <atomic>
 #include <charconv>
@@ -100,8 +101,16 @@ constexpr uint64_t kReplacementCacheBudgetBytes = 4294967296; // 4GB, reasonable
 // With HD Textures on, every texture gets a 4x-sized replacement: keep fewer of them on the GPU.
 constexpr uint64_t kHdReplacementCacheBudgetBytes = 384ull << 20;
 
+// AURORA_REPLACEMENT_CACHE_MB: a smaller budget on a phone with little RAM (set by the app).
 uint64_t replacement_budget() noexcept {
-  return g_config.hdTextureMode != 0 ? kHdReplacementCacheBudgetBytes : kReplacementCacheBudgetBytes;
+  static const uint64_t s_override = [] {
+    const char* v = std::getenv("AURORA_REPLACEMENT_CACHE_MB");
+    const long long mb = v != nullptr ? std::atoll(v) : 0;
+    return mb > 0 ? static_cast<uint64_t>(mb) << 20 : 0;
+  }();
+  const uint64_t budget =
+      g_config.hdTextureMode != 0 ? kHdReplacementCacheBudgetBytes : kReplacementCacheBudgetBytes;
+  return s_override != 0 ? std::min(budget, s_override) : budget;
 }
 
 // --- HD Textures (live): upscale on a background thread, save to hd-cache, index when done -------

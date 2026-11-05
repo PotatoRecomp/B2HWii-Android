@@ -196,7 +196,7 @@ final class AppSettings {
      * Texture Detail for the 3D world: 0 original (as the game asks), 1 sharp (default: the Wii's
      * mip level even below its resolution + 4x anisotropic), 2 sharpest (16x anisotropic).
      */
-    int textureFilter() { return Math.max(0, Math.min(2, prefs.getInt("texture_filter", 1))); }
+    int textureFilter() { return Math.max(0, Math.min(2, prefs.getInt("texture_filter", 0))); }
     void setTextureFilter(int mode) { prefs.edit().putInt("texture_filter", mode).commit(); }
 
     /** Auto Update: opening the app installs the latest GitHub release (off by default). */
@@ -268,6 +268,12 @@ final class AppSettings {
     /** Sustained Performance (off by default): clocks the phone can hold for a long session. */
     boolean sustainedPerformance() { return prefs.getBoolean("sustained_performance", false); }
     void setSustainedPerformance(boolean on) { prefs.edit().putBoolean("sustained_performance", on).commit(); }
+    /** Recording-friendly audio (off by default): the sound stays on the path a screen recording captures. */
+    boolean recordingAudio() { return prefs.getBoolean("recording_audio", false); }
+    void setRecordingAudio(boolean on) { prefs.edit().putBoolean("recording_audio", on).commit(); }
+    /** Upload Memory (Vulkan renderer): 0 Auto (measured at start), 1 Standard (write-combined), 2 Cached. */
+    int uploadMemory() { return prefs.getInt("upload_memory", 0); }
+    void setUploadMemory(int mode) { prefs.edit().putInt("upload_memory", mode).commit(); }
 
     /** Whether the phone has Android's sustained performance mode (Window.setSustainedPerformanceMode). */
     static boolean sustainedSupported(android.content.Context context) {

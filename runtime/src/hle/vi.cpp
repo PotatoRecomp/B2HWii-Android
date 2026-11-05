@@ -1346,9 +1346,9 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                     // Stretched: played vs pushed is the tempo at work; gaps are silences (input ran
                     // out), skips jumps over a backlog too long to catch up on.
                     RT_LOGF(RT_TAG_VI, "audio out: %.0f ms pushed, %.0f ms played in %.0f ms, tempo %.2f-%.2f, "
-                            "%u gaps, %u skips, lowest backlog %.1f ms, %u reopens\n", out.pushedMs, out.playedMs,
-                            window, out.minTempo, out.maxTempo, out.empty, out.dropped, out.minQueuedMs,
-                            out.reopens);
+                            "%u gaps, %u skips, lowest backlog %.1f ms, %u reopens, %u xruns\n", out.pushedMs,
+                            out.playedMs, window, out.minTempo, out.maxTempo, out.empty, out.dropped,
+                            out.minQueuedMs, out.reopens, out.xruns);
                 } else {
                     RT_LOGF(RT_TAG_VI, "audio out: %.0f ms pushed in %.0f ms, %u pushes, %u found it empty, %u "
                             "dropped full, lowest queue %.1f ms\n", out.pushedMs, window, out.pushes, out.empty,

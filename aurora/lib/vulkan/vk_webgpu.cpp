@@ -2147,9 +2147,15 @@ std::filesystem::path PipelineCachePath() {
 // taken in turn so a clock still rising favours neither; cached only when its median is 10% faster.
 // AURORA_VK_CACHED_STAGING=0/1 decides instead.
 bool ChooseCachedStaging(WGPUDeviceImpl* dev) {
+  // Forced cached (Upload Memory: Cached) still needs the memory type: without it every staging
+  // allocation would fail, so the test buffers below decide and the timing is skipped.
+  bool forced = false;
   if (const char* v = std::getenv("AURORA_VK_CACHED_STAGING"); v != nullptr && *v != 0) {
-    Log("staging memory: %s (AURORA_VK_CACHED_STAGING)", *v == '1' ? "cached" : "write-combined");
-    return *v == '1';
+    if (*v != '1') {
+      Log("staging memory: write-combined (AURORA_VK_CACHED_STAGING)");
+      return false;
+    }
+    forced = true;
   }
   constexpr size_t kSize = 1u << 20;
   const VkBufferCreateInfo info{
@@ -2178,7 +2184,10 @@ bool ChooseCachedStaging(WGPUDeviceImpl* dev) {
   VkMemoryPropertyFlags wcFlags = 0;
   vmaGetMemoryTypeProperties(dev->vma, results[0].memoryType, &wcFlags);
   bool cached = false;
-  if (results[0].memoryType == results[1].memoryType || (wcFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0) {
+  if (forced) {
+    Log("staging memory: cached (AURORA_VK_CACHED_STAGING)");
+    cached = true;
+  } else if (results[0].memoryType == results[1].memoryType || (wcFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0) {
     Log("staging memory: cached already (one memory type for both)");
   } else {
     int64_t wc[3], cc[3];
@@ -3817,6 +3826,12 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
                       : d->stencilStoreOp == WGPUStoreOp_Discard ? VK_ATTACHMENT_STORE_OP_DONT_CARE
                                                                   : VK_ATTACHMENT_STORE_OP_STORE;
     stencil.clearValue.depthStencil.stencil = d->stencilClearValue;
+    // Mali corrupts a packed depth/stencil attachment whose two aspects load differently (ARMSX2,
+    // from PPSSPP). Today's depth is Depth32Float with no stencil; keep a future packed one safe.
+    if (hasDepth && hasStencil && stencil.loadOp != depth.loadOp) {
+      stencil.loadOp = depth.loadOp;
+      stencil.storeOp = depth.storeOp;
+    }
   }
   const VkRenderingInfo info{
       .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,

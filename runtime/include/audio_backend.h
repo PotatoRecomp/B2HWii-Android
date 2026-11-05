@@ -9,6 +9,11 @@
 #include <vector>
 
 #include <SDL3/SDL_audio.h>
+#include <SDL3/SDL_events.h>
+
+#if defined(__ANDROID__)
+#include <aaudio/AAudio.h>
+#endif
 
 class AudioBackend {
 public:
@@ -41,6 +46,7 @@ public:
         float minTempo = 0.0f;
         float maxTempo = 0.0f;
         uint32_t reopens = 0;
+        uint32_t xruns = 0;  // device underruns (AAudio output only)
     };
     Stats TakeStats();
 
@@ -59,6 +65,29 @@ private:
     bool PushFramesLocked(const int16_t* frames, size_t frameCount);
     void ReopenIfStalledLocked();
     static void SDLCALL PullCallback(void* userdata, SDL_AudioStream* stream, int additionalAmount, int totalAmount);
+    void PullStretched(int16_t* out, size_t frames);
+    bool OpenOutputLocked();
+    void CloseOutputLocked();
+    static bool SDLCALL LifecycleWatch(void* userdata, SDL_Event* event);
+    void SetBackgroundLocked(bool background);
+#if defined(__ANDROID__)
+    // Android with time stretching: the stretcher feeds AAudio straight from its data callback, the
+    // way ARMSX2's Oboe output does (no SDL audio thread and triple buffer in between).
+    bool OpenAAudioLocked();
+    bool TryOpenAAudioLocked(aaudio_performance_mode_t mode);
+    void CloseAAudioLocked();
+    static aaudio_data_callback_result_t AAudioData(AAudioStream* stream, void* userdata, void* audioData,
+                                                    int32_t numFrames);
+    static void AAudioError(AAudioStream* stream, void* userdata, aaudio_result_t error);
+    AAudioStream* m_aaudio = nullptr;
+    aaudio_performance_mode_t m_aaudioMode = AAUDIO_PERFORMANCE_MODE_LOW_LATENCY;
+    std::atomic<bool> m_aaudioLost{false};
+    int32_t m_lastXruns = 0;
+#endif
+    bool m_useAAudio = false;
+    bool m_background = false;
+    bool m_watching = false;
+    std::atomic<float> m_gain{1.0f};
 
     mutable std::mutex m_mutex;
     // Stretching: the stretcher, its stats and the pull time, shared with SDL's audio thread. Lock

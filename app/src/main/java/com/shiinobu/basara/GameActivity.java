@@ -128,6 +128,14 @@ public final class GameActivity extends SDLActivity
             // Sustained Performance: the system holds steady clocks, so the game thread is not pinned to
             // the fastest cores and no ADPF boost is asked for (runtime/src/cpu_boost.cpp). env.txt wins.
             if (sustainedMode()) Os.setenv("BASARA_CPU_BOOST", "0", false);
+            if (settings.recordingAudio()) Os.setenv("BASARA_AUDIO_RECORDABLE", "1", false);
+            // Low RAM (ARMSX2 caps its texture pools on weak phones): a smaller cache for replaced textures.
+            final long ram = DeviceProfile.ramMb(this);
+            if (ram > 0 && ram < 4608) Os.setenv("AURORA_REPLACEMENT_CACHE_MB", settings.hdTextures() != 0 ? "192" : "512", false);
+            // Upload Memory: Auto leaves the choice to the start-up measurement (vk_webgpu.cpp).
+            if (settings.uploadMemory() != 0) {
+                Os.setenv("AURORA_VK_CACHED_STAGING", settings.uploadMemory() == 2 ? "1" : "0", false);
+            }
             try {
                 // For the log's device line: the screen's refresh rate.
                 Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round(getDisplay().getRefreshRate())), true);
@@ -395,6 +403,7 @@ public final class GameActivity extends SDLActivity
         super.onDestroy();
         if (isFinishing()) {
             GpuDrivers.endedOnPurpose(this);
+            CrashReport.endedOnPurpose(this, Process.myPid());
             // The runtime starts once per process; the next start must get a fresh one.
             Process.killProcess(Process.myPid());
         }

@@ -35,7 +35,7 @@ final class ReleaseNotes {
     }
 
     private static final Entry[] ENTRIES = {
-        new Entry("Beta 6", "Experimental features passed testing, new Textures tab", "2026-11-04",
+        new Entry("Final Beta", "Experimental features passed testing, new Textures tab", "2026-11-04",
                 new String[] {
                     "Every Experimental feature passed testing and is now a regular setting, without warnings: HD Textures, Custom Textures, Dump Textures, Report Texture Keys, the Vulkan renderer, GPU drivers and Thermal Control. The Experimental tab is gone.",
                     "New Textures tab: Custom Textures (.png or .dds), Dump Textures, Report Texture Keys and HD Textures in one place. Renderer and GPU Driver moved to Graphics, Thermal Control to Performance.",
@@ -44,13 +44,18 @@ final class ReleaseNotes {
                     "Share Log in System: sends the log of the times you played (the crashed one first) with the device info as one zip, to Discord, Telegram, WhatsApp or any app. Device Info with Copy, and Reset and Clear: reset all settings and clear the caches or logs in one place. The new Developer tab is empty for now.",
                     "Low-End Device: a slow phone shows a warning above All settings with the Low-End Preset switch. While it is on, the settings it set stay as they are; Render Resolution can still be changed.",
                     "New Sustained Performance (Performance, off by default): speeds the phone can hold for hours, for long sessions without a drop once it gets hot. Only on phones that offer it.",
-                    "V-Sync on: a frame that is a little late shows at once instead of waiting for the next refresh (where the phone offers it), so a heavy moment dips a few fps instead of dropping to 30.",
                     "The Vulkan renderer measures at start which memory the game writes its graphics data into fastest on this phone, and uses that one.",
-                    "The settings tabs stay at the top while the settings below them scroll.",
+                    "Texture Detail now starts at Original, like most phone emulators: less GPU work on every phone. Sharp is one tap away in Graphics.",
+                    "New Recording-Friendly Audio (System): on phones whose screen recordings come out silent, keeps the game's sound where the recording hears it.",
+                    "Phones with less than 4.5 GB of RAM keep a smaller cache of HD and custom textures, so the system is less likely to close the game.",
+                    "The settings tabs are one row you can swipe sideways, and only that row stays at the top while you scroll, so the settings get most of the screen. The Low-End Preset is a smaller card, and the empty Developer tab is gone.",
                     "Custom Textures also reads .dds packs (BC1 to BC7). On a GPU without BC textures (most Mali) they are unpacked while loading, so the same pack works on every phone.",
                     "Dynamic Resolution with the Vulkan renderer now follows the GPU's own time, so it also lowers the resolution when heavy effects slow the GPU down.",
+                    "New Upload Memory (Performance, Vulkan renderer): Auto measures at start which memory is faster on this phone; Standard or Cached sets it by hand.",
                 },
                 new String[] {
+                    "Sound goes straight to Android's low-latency audio output: less crackle and fewer dialog stutters on slow phones. It falls back to the regular output on phones that refuse it, comes back by itself after headphones or Bluetooth change, and pauses while the game is in the background.",
+                    "Leaving the game from its menu no longer shows \"The game closed unexpectedly\" in the launcher on some phones (Android 16).",
                     "HD Textures Live no longer slows the game down while the sharper textures are being made.",
                     "Dump Textures no longer slows the game down, and skips movie frames.",
                     "GX Thread: busy battles drop fewer frames (the game kept waiting for the graphics thread).",

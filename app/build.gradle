@@ -30,6 +30,10 @@ android {
             versionCode((project.findProperty('basaraBetaNumber') ?: '1') as int)
         }
         buildConfigField 'boolean', 'BETA', beta.toString()
+        // -PbasaraBetaLabel="Final Beta": the name the Beta shows instead of "Beta <N>" (the number stays
+        // the versionCode, so beta-channel.json's min_beta still works).
+        def betaLabel = project.findProperty('basaraBetaLabel') ?: ''
+        buildConfigField 'String', 'BETA_LABEL', '"' + betaLabel.toString().replace('"', '') + '"'
         // -PbasaraOnlineUpdates: check GitHub for updates (and the Beta's lock). Off while the repo is
         // private: GitHub answers 404 without a login, so APKs are handed out by hand.
         buildConfigField 'boolean', 'ONLINE_UPDATES', project.hasProperty('basaraOnlineUpdates').toString()

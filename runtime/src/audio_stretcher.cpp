@@ -30,7 +30,7 @@ void AudioStretcher::Reset(uint32_t sampleRate) {
     // A segment reads up to m_search past the analysis position, and the overlap after it stays in the
     // buffer so running dry can always fade out instead of cutting off.
     m_need = m_search + m_hop + m_overlap;
-    m_target = sampleRate * 60 / 1000;
+    m_target = sampleRate * 40 / 1000;
     m_maxBacklog = sampleRate / 2;
     m_in.clear();
     m_nominal = 0.0;
@@ -40,6 +40,7 @@ void AudioStretcher::Reset(uint32_t sampleRate) {
     m_inputRate = 1.0f;
     m_pushedFrames = 0;
     m_burstPeak = 0.0f;
+    m_draining = false;
     m_out.clear();
     m_outPos = 0;
     m_stats = {};
@@ -130,9 +131,12 @@ bool AudioStretcher::MakeSegment() {
     m_pushedFrames = 0;
     // Between two bursts the backlog drains by about one burst whatever the speed, and a slow game
     // pushes bigger ones (several frames of audio at once): hold a deeper cushion when it runs slow.
+    // 40 ms at full speed (less delay behind the picture), the old 60 once the game runs slow.
+    const float base = m_inputRate < 1.0f - kTempoDeadBand ? static_cast<float>(m_rate) * 0.06f
+                                                           : static_cast<float>(m_target);
     const int64_t cushion = std::min<int64_t>(
         m_maxBacklog / 2,
-        static_cast<int64_t>(std::max(static_cast<float>(m_target) *
+        static_cast<int64_t>(std::max(base *
                                           std::clamp(1.0f + (1.0f - m_inputRate) * 1.5f, 1.0f, 2.0f),
                                       m_burstPeak * 1.25f)));
 
@@ -162,7 +166,14 @@ bool AudioStretcher::MakeSegment() {
     const float fill = std::clamp(rawFill, 0.5f, 2.0f);
     // At full speed the bursts alone swing the fill by half a cushion or more (a movie on a G81 decodes
     // a picture every other frame): leave those at tempo 1, the stretching was audible as a warble.
-    const bool fullSpeed = std::fabs(m_inputRate - 1.0f) < kTempoDeadBand && rawFill > 0.3f && rawFill < 1.8f;
+    // A backlog past 1.4 cushions (left over from a load) is drained back to about one, instead of
+    // sitting there with the voice late behind the picture.
+    if (rawFill >= 1.4f) {
+        m_draining = true;
+    } else if (rawFill <= 1.05f) {
+        m_draining = false;
+    }
+    const bool fullSpeed = std::fabs(m_inputRate - 1.0f) < kTempoDeadBand && rawFill > 0.3f && !m_draining;
     const float raw = fullSpeed ? 1.0f : std::clamp(m_inputRate * fill, kMinTempo, kMaxTempo);
     m_tempo += (raw - m_tempo) * kTempoSmoothing;
     const float tempo = std::fabs(m_tempo - 1.0f) < kTempoDeadBand ? 1.0f : m_tempo;

@@ -72,6 +72,10 @@ public final class LauncherActivity extends Activity {
     private View statusDot;
     private LinearLayout configStrip;
     private LinearLayout tabs;
+    // The same strip again, pinned above the settings once the one in the page scrolls past the top.
+    private LinearLayout stickyTabs;
+    private HorizontalScrollView tabScroll, stickyScroll;
+    private View tabAnchor, stickyBar;
     private LinearLayout lowEndBox;
     private boolean lowEndDevice;
     private LinearLayout panel;
@@ -103,45 +107,57 @@ public final class LauncherActivity extends Activity {
         final LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setBackgroundColor(Ui.BG);
-        page.addView(header(), Ui.matchWidth(0));
-        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
-        page.addView(configStripView(), Ui.matchWidth(0));
-        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        // Everything above the settings scrolls away with them; only the one-line section strip stays,
+        // pinned at the top once it reaches it, so the settings get most of the screen.
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.addView(header(), Ui.matchWidth(0));
+        body.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        body.addView(configStripView(), Ui.matchWidth(0));
+        body.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
 
-        // The section tabs stay above the scrolling settings, so another section is one tap away anywhere.
-        final LinearLayout tabBox = new LinearLayout(this);
-        tabBox.setOrientation(LinearLayout.VERTICAL);
-        tabBox.setPadding(dp(14), dp(12), dp(14), dp(10));
         sections = SettingsMenu.launcherSections();
         lowEndDevice = DeviceProfile.lowEnd(this, settings);
         lowEndBox = new LinearLayout(this);
         lowEndBox.setOrientation(LinearLayout.VERTICAL);
-        tabBox.addView(lowEndBox, Ui.matchWidth(0));
-        final LinearLayout divider = new LinearLayout(this);
-        divider.setGravity(Gravity.CENTER_VERTICAL);
-        divider.addView(Ui.caption(this, Tr.t("All settings")),
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        final TextView count = Ui.text(this, sections.length + Tr.t(" sections"), 10.5f, Ui.MUTED);
-        count.setTypeface(Ui.MONO);
-        divider.addView(count);
-        tabBox.addView(divider, Ui.matchWidth(0));
-        tabs = new LinearLayout(this);
-        tabs.setOrientation(LinearLayout.VERTICAL);
-        tabBox.addView(tabs, Ui.matchWidth(dp(8)));
-        page.addView(tabBox, Ui.matchWidth(0));
-        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        lowEndBox.setPadding(dp(14), 0, dp(14), 0);
+        body.addView(lowEndBox, Ui.matchWidth(0));
 
-        final LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(14), dp(2), dp(14), dp(20));
+        tabs = new LinearLayout(this);
+        tabScroll = tabStrip(tabs);
+        tabAnchor = tabScroll;
+        body.addView(tabScroll, Ui.matchWidth(0));
+
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        body.addView(panel, Ui.matchWidth(dp(10)));
+        final LinearLayout.LayoutParams panelParams = Ui.matchWidth(dp(4));
+        panelParams.leftMargin = dp(14);
+        panelParams.rightMargin = dp(14);
+        panelParams.bottomMargin = dp(20);
+        body.addView(panel, panelParams);
 
         scroll = new ScrollView(this);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.addView(body);
-        page.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        stickyTabs = new LinearLayout(this);
+        stickyScroll = tabStrip(stickyTabs);
+        final LinearLayout sticky = new LinearLayout(this);
+        sticky.setOrientation(LinearLayout.VERTICAL);
+        sticky.setBackgroundColor(Ui.BG);
+        sticky.addView(stickyScroll, Ui.matchWidth(0));
+        sticky.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        sticky.setVisibility(View.GONE);
+        stickyBar = sticky;
+        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> updateSticky());
+
+        final android.widget.FrameLayout stage = new android.widget.FrameLayout(this);
+        stage.addView(scroll, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        stage.addView(sticky, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP));
+        page.addView(stage, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
         page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
         page.addView(actionBar(), Ui.matchWidth(0));
 
@@ -156,8 +172,10 @@ public final class LauncherActivity extends Activity {
 
         menu = new SettingsMenu(this, panel, false, this::showSummary);
         menu.systemRows = this::systemRows;
-        final int section = savedInstanceState != null
+        int section = savedInstanceState != null
                 ? savedInstanceState.getInt(STATE_SECTION, SettingsMenu.DISPLAY) : SettingsMenu.DISPLAY;
+        final int saved = section;
+        if (java.util.Arrays.stream(sections).noneMatch(id -> id == saved)) section = SettingsMenu.DISPLAY;
         selectSection(section, false);
 
         restartGameIfAsked(getIntent());
@@ -330,62 +348,78 @@ public final class LauncherActivity extends Activity {
         }
     }
 
-    /**
-     * The section tabs with the open one lit: four to a row with the icon above the name, or, for nine,
-     * three to a row with the icon beside it (a 3x3 grid about as tall as two rows of four).
-     */
+    /** A one-line strip of section tabs that scrolls sideways. */
+    private HorizontalScrollView tabStrip(LinearLayout row) {
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(14), dp(10), dp(14), dp(10));
+        final HorizontalScrollView strip = new HorizontalScrollView(this);
+        strip.setHorizontalScrollBarEnabled(false);
+        strip.addView(row);
+        return strip;
+    }
+
+    /** The section tabs with the open one lit, in the page's strip and in the pinned copy. */
     private void showTabs() {
-        tabs.removeAllViews();
-        final boolean wide = sections.length == 9;
-        final int perRow = wide ? 3 : 4;
-        LinearLayout row = null;
+        fillTabs(tabs, tabScroll);
+        fillTabs(stickyTabs, stickyScroll);
+    }
+
+    private void fillTabs(LinearLayout row, HorizontalScrollView strip) {
+        row.removeAllViews();
+        View openTab = null;
         for (int i = 0; i < sections.length; ++i) {
-            if (i % perRow == 0) {
-                row = new LinearLayout(this);
-                tabs.addView(row, Ui.matchWidth(i == 0 ? 0 : dp(6)));
-            }
             final int id = sections[i];
             final boolean open = id == menu.section();
             final int color = open ? Ui.TEXT : SettingsMenu.risky(id) ? Sheet.WARNING_TEXT : Ui.SECONDARY;
             final LinearLayout tab = new LinearLayout(this);
-            tab.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+            tab.setOrientation(LinearLayout.HORIZONTAL);
             tab.setGravity(Gravity.CENTER);
-            tab.setPadding(dp(wide ? 6 : 4), dp(9), dp(wide ? 6 : 4), dp(wide ? 9 : 8));
-            tab.setBackground(Ui.touchBox(this, open ? Ui.ACTIVE : Ui.SURFACE, open ? Ui.SECONDARY : Ui.BORDER, 8));
-            tab.addView(Ui.icon(this, SettingsMenu.icon(id), color, 17));
-            final TextView name = Ui.text(this, SettingsMenu.name(id), wide ? 12 : 11, color);
+            tab.setPadding(dp(16), dp(13), dp(18), dp(13));
+            tab.setMinimumHeight(dp(48));
+            tab.setBackground(Ui.touchBox(this, open ? Ui.ACTIVE : Ui.SURFACE, open ? Ui.DANGER_BORDER : Ui.BORDER, 8));
+            tab.addView(Ui.icon(this, SettingsMenu.icon(id), color, 19));
+            final TextView name = Ui.text(this, SettingsMenu.name(id), 14, color);
             name.setTypeface(open ? Typeface.DEFAULT_BOLD : Ui.MEDIUM);
             name.setSingleLine(true);
-            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            name.setGravity(Gravity.CENTER);
-            if (wide) {
-                final LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                beside.leftMargin = dp(6);
-                tab.addView(name, beside);
-            } else {
-                tab.addView(name, Ui.matchWidth(dp(4)));
-            }
+            final LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            beside.leftMargin = dp(8);
+            tab.addView(name, beside);
             tab.setClickable(true);
             tab.setOnClickListener(v -> selectSection(id, false));
-            final LinearLayout.LayoutParams params =
-                    new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            params.leftMargin = i % perRow == 0 ? 0 : dp(6);
+            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.leftMargin = i == 0 ? 0 : dp(8);
             row.addView(tab, params);
+            if (open) openTab = tab;
         }
-        // An unfinished last row keeps the tabs the same width.
-        for (int i = sections.length % perRow; i != 0 && i < perRow; ++i) {
-            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, 1, 1f);
-            params.leftMargin = dp(6);
-            row.addView(new View(this), params);
+        // The open tab is brought to the middle of the strip.
+        final View target = openTab;
+        if (target != null) {
+            strip.post(() -> strip.smoothScrollTo(
+                    Math.max(0, target.getLeft() + row.getPaddingLeft() - (strip.getWidth() - target.getWidth()) / 2), 0));
         }
     }
 
-    /** Opens a section under the tabs, from its top (`reveal`: from a chip at the top; the tabs never scroll away). */
+    /** The pinned strip shows once the page's own strip has scrolled under the top. */
+    private void updateSticky() {
+        if (stickyBar == null || tabAnchor == null) return;
+        final boolean pinned = scroll.getScrollY() > tabAnchor.getTop();
+        stickyBar.setVisibility(pinned ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * Opens a section from its top. Scrolled down, the page stops with the strip pinned at the top; from
+     * a chip at the top (`reveal`) it scrolls there too, so the section opened is in view.
+     */
     private void selectSection(int section, boolean reveal) {
         menu.show(section);
         showTabs();
-        scroll.post(() -> scroll.scrollTo(0, 0));  // a new section starts at its top
+        scroll.post(() -> {
+            final int top = tabAnchor.getTop();
+            if (reveal || scroll.getScrollY() > top) scroll.scrollTo(0, top);
+            updateSticky();
+        });
     }
 
     /** The launcher's own System rows: the game file, updates, network play, the project. */
@@ -426,6 +460,7 @@ public final class LauncherActivity extends Activity {
                 // Swiped from the recent apps: the task is gone, but some systems (MIUI) leave the
                 // process behind with no game in it. Its runtime has already started once, so it must
                 // not be reused; end it and offer a fresh Play.
+                CrashReport.endedOnPurpose(this, info.pid);
                 android.os.Process.killProcess(info.pid);
                 endedGame = info.pid;
                 return 0;
@@ -458,6 +493,7 @@ public final class LauncherActivity extends Activity {
         final int pid = gameProcess();
         if (pid != 0) {
             GpuDrivers.endedOnPurpose(this);
+            CrashReport.endedOnPurpose(this, pid);
             android.os.Process.killProcess(pid);
             endedGame = pid;
             refresh();
@@ -844,49 +880,41 @@ public final class LauncherActivity extends Activity {
     }
 
     /**
-     * On a low-end phone: a warning above "All settings" with the Low-End preset's switch. While it is on,
-     * the settings it set are held (SettingsMenu dims them); Render Resolution stays free.
+     * On a low-end phone: the Low-End preset's switch and why, above the section tabs. While it is on, the settings it set are held (SettingsMenu dims them); Render
+     * Resolution stays free.
      */
     private void showLowEndCard() {
         if (lowEndBox == null) return;
         lowEndBox.removeAllViews();
         if (!lowEndDevice) return;
         final boolean on = settings.lowEndApplied();
+        // The words on the left, the switch beside them in the middle of the card.
         final LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(12), dp(9), dp(10), dp(10));
         card.setBackground(Ui.touchBox(this, Sheet.WARNING_FILL, Ui.DANGER_BORDER, 8));
-        final TextView title = Ui.text(this, "⚠ " + Tr.t("Low-End Device"), 13, Sheet.WARNING_TEXT);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(title, Ui.matchWidth(0));
-        card.addView(Ui.text(this, Tr.t("This phone's GPU or RAM is below what the game needs for a steady 60 fps. "
-                + "The Low-End Preset trades sharpness for speed."), 11.5f, Ui.SECONDARY), Ui.matchWidth(dp(3)));
 
-        final LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER_VERTICAL);
         final LinearLayout words = new LinearLayout(this);
         words.setOrientation(LinearLayout.VERTICAL);
-        final TextView name = Ui.text(this, Tr.t("Low-End Preset"), 13, Ui.TEXT);
+        final TextView name = Ui.text(this, "⚠ " + Tr.t("Low-End Preset"), 13, Sheet.WARNING_TEXT);
         name.setTypeface(Typeface.DEFAULT_BOLD);
-        words.addView(name);
-        words.addView(Ui.text(this, on
-                ? Tr.t("On: 480p, Texture Detail Original, no upscaler, Frameskip Auto, Dynamic Resolution, HD "
-                        + "Textures off. These stay as set until it is off; Render Resolution can still be changed.")
-                : Tr.t("Off: every setting is yours to change."), 11, Ui.MUTED), Ui.matchWidth(dp(2)));
-        row.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        name.setSingleLine(true);
+        words.addView(name, Ui.matchWidth(0));
+        words.addView(Ui.text(this, Tr.t("This phone's GPU or RAM is below what the game needs for a steady "
+                + "60 fps. The Low-End Preset trades sharpness for speed."), 11.5f, Ui.SECONDARY), Ui.matchWidth(dp(2)));
+        card.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
         final View toggle = Ui.toggle(this, on);
         final android.view.ViewGroup.LayoutParams own = toggle.getLayoutParams();
         final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 own != null ? own.width : LinearLayout.LayoutParams.WRAP_CONTENT,
                 own != null ? own.height : LinearLayout.LayoutParams.WRAP_CONTENT);
         params.leftMargin = dp(12);
-        row.addView(toggle, params);
-        row.setClickable(true);
-        row.setOnClickListener(v -> setLowEnd(!on));
-        card.addView(row, Ui.matchWidth(dp(10)));
-        lowEndBox.addView(card, Ui.matchWidth(0));
-        final View gap = new View(this);
-        lowEndBox.addView(gap, new LinearLayout.LayoutParams(1, dp(12)));
+        params.gravity = Gravity.CENTER_VERTICAL;
+        card.addView(toggle, params);
+        card.setClickable(true);
+        card.setOnClickListener(v -> setLowEnd(!on));
+        lowEndBox.addView(card, Ui.matchWidth(dp(10)));
     }
 
     private void setLowEnd(boolean on) {
@@ -1007,6 +1035,7 @@ public final class LauncherActivity extends Activity {
     private String versionText() {
         try {
             final PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (BuildConfig.BETA && !BuildConfig.BETA_LABEL.isEmpty()) return info.versionName + " · " + BuildConfig.BETA_LABEL;
             return BuildConfig.BETA ? info.versionName + " · Beta " + info.getLongVersionCode() : info.versionName;
         } catch (PackageManager.NameNotFoundException e) {
             return "";

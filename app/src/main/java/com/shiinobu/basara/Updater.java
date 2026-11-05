@@ -174,9 +174,10 @@ final class Updater {
         }
     }
 
-    /** "0.0.1 Beta 5", or "0.0.1" for the release: how the app names itself. */
+    /** "0.0.1 Beta 5", "0.0.1 Final Beta" (BETA_LABEL), or "0.0.1" for the release: how the app names itself. */
     static String displayVersion(Context context) {
         final int beta = installedBeta(context);
+        if (beta > 0 && !BuildConfig.BETA_LABEL.isEmpty()) return installedVersion(context) + " " + BuildConfig.BETA_LABEL;
         return installedVersion(context) + (beta > 0 ? " Beta " + beta : "");
     }
 

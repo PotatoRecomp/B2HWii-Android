@@ -9,6 +9,7 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
@@ -78,6 +79,29 @@ final class CrashReport {
      * In the launcher: when :game ended abnormally since the last check, writes last_crash.txt and
      * returns a one-line reason for the player; null otherwise.
      */
+    /**
+     * The game process about to be ended on purpose (Quit, Stop, a restart): killProcess is a SIGKILL,
+     * which Android reports as "signaled" like any other kill, so its pid is noted to tell them apart.
+     */
+    static void endedOnPurpose(Context context, int pid) {
+        try (OutputStream out = new FileOutputStream(new File(context.getFilesDir(), "ended_on_purpose"))) {
+            out.write(String.valueOf(pid).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static boolean wasEndedOnPurpose(Context context, int pid) {
+        final File file = new File(context.getFilesDir(), "ended_on_purpose");
+        try (InputStream in = new java.io.FileInputStream(file)) {
+            final byte[] bytes = new byte[32];
+            final int n = in.read(bytes);
+            return n > 0 && new String(bytes, 0, n, java.nio.charset.StandardCharsets.UTF_8).trim()
+                    .equals(String.valueOf(pid));
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     static String checkLastGameExit(Context context) {
         try {
             final ActivityManager am = context.getSystemService(ActivityManager.class);
@@ -95,6 +119,8 @@ final class CrashReport {
             if (newest == null || newest.getTimestamp() <= seen) return null;
             prefs.edit().putLong(KEY_LAST, newest.getTimestamp()).apply();
             if (!abnormal(newest.getReason())) return null;
+            if (newest.getReason() == ApplicationExitInfo.REASON_SIGNALED
+                    && wasEndedOnPurpose(context, newest.getPid())) return null;
 
             final File dir = dir(context);
             final StringBuilder text = new StringBuilder(header(context));

@@ -57,6 +57,10 @@
 #endif
 #if defined(__ANDROID__)
 #include <sys/system_properties.h>
+#if defined(__aarch64__)
+#include <dlfcn.h>
+#include <ucontext.h>
+#endif
 #endif
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <SDL3/SDL_messagebox.h>
@@ -1336,6 +1340,36 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     }
 
     ReportUnhandledSignalFault(sig, faultAddress);
+#if defined(__ANDROID__) && defined(__aarch64__)
+    // Android has no host stack trace: log the faulting pc, lr and the frame-pointer chain, each as
+    // module+offset, so a tester's crash can be symbolized against the same build's libmain.so.
+    if (ucontextVoid != nullptr) {
+        const auto& mc = static_cast<ucontext_t*>(ucontextVoid)->uc_mcontext;
+        const auto where = [](uintptr_t address) {
+            std::ostringstream text;
+            text << "0x" << std::hex << address;
+            Dl_info dl{};
+            if (address != 0 && dladdr(reinterpret_cast<void*>(address), &dl) != 0 && dl.dli_fname != nullptr) {
+                const char* slash = std::strrchr(dl.dli_fname, '/');
+                text << " " << (slash != nullptr ? slash + 1 : dl.dli_fname) << "+0x"
+                     << (address - reinterpret_cast<uintptr_t>(dl.dli_fbase));
+            }
+            return text.str();
+        };
+        RT_LOG(RT_TAG_RUNTIME) << "host pc " << where(mc.pc) << ", lr " << where(mc.regs[30]) << std::endl;
+        uintptr_t fp = mc.regs[29];
+        const uintptr_t sp = mc.sp;
+        for (int depth = 0; depth < 32 && fp != 0 && (fp & 0xF) == 0 && fp >= sp && fp - sp < (8u << 20); ++depth) {
+            const auto* frame = reinterpret_cast<const uintptr_t*>(fp);
+            const uintptr_t next = frame[0];
+            const uintptr_t ret = frame[1];
+            if (ret == 0) break;
+            RT_LOG(RT_TAG_RUNTIME) << "host #" << depth << " " << where(ret) << std::endl;
+            if (next <= fp) break;
+            fp = next;
+        }
+    }
+#endif
     std::ostringstream popupDetails;
     popupDetails << "A native signal (" << sig << ") occurred";
     if (!g_lastEntryLabel.empty()) {

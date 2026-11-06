@@ -75,17 +75,28 @@ final class LogShare {
         return list;
     }
 
-    /** The "reason:" line of the run's crash report; "crash" for a report without one; null: no report. */
+    /**
+     * The "reason:" line of the run's crash report; "crash" for a report without one; null: no report.
+     * Only the .txt reports are read, and only their start: the memory dumps next to them (mem1.bin and
+     * 128 MB of mem2, mostly zeros, so one endless "line") ran the launcher out of memory.
+     */
     private static String exitReason(File crash) {
         final File[] files = crash.listFiles(File::isFile);
         if (files == null || files.length == 0) return null;
         for (File f : files) {
-            try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
-                    new FileInputStream(f), StandardCharsets.UTF_8))) {
-                for (String line; (line = in.readLine()) != null; ) {
-                    if (line.startsWith("reason: ")) return line.substring(8).replaceAll(" \\(\\d+\\)$", "");
-                }
+            if (!f.getName().endsWith(".txt")) continue;
+            final byte[] head = new byte[4096];
+            int n = 0;
+            try (InputStream in = new FileInputStream(f)) {
+                for (int got; n < head.length && (got = in.read(head, n, head.length - n)) > 0; ) n += got;
             } catch (IOException ignored) {
+                continue;
+            }
+            for (String line : new String(head, 0, n, StandardCharsets.UTF_8).split("\n")) {
+                line = line.trim();
+                // The runtime's own report (crash_sigsegv.txt...): its reason is a crash of some kind.
+                if (line.startsWith("[runtime] reason: ")) return "crash: " + line.substring(18);
+                if (line.startsWith("reason: ")) return line.substring(8).replaceAll(" \\(\\d+\\)$", "");
             }
         }
         return "crash";
@@ -144,7 +155,7 @@ final class LogShare {
         return CrashReport.header(context)
                 + "gpu: " + (gpu.isEmpty() ? "?" : gpu) + ", vulkan " + vulkan + "\n"
                 + "gpu driver: " + (settings.gpuDriver().isEmpty() ? "system" : settings.gpuDriver())
-                + ", renderer " + (settings.renderer() == 1 ? "vulkan" : "auto") + "\n";
+                + ", renderer " + AppSettings.rendererName(settings.renderer()).toLowerCase(java.util.Locale.ROOT) + "\n";
     }
 
     static void copyDeviceInfo(Context context) {

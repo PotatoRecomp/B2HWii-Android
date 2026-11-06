@@ -68,6 +68,31 @@ final class CrashReport {
         });
     }
 
+    /**
+     * In the launcher: Java exceptions go to Logs/launcher_crash.txt (or Android/data/.../files/Logs),
+     * newest first, so a launcher force close can be sent by hand when Share Log itself is what fails.
+     */
+    static void installLauncherHandler(Context context) {
+        final Context app = context.getApplicationContext();
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            try {
+                File dir = AppFiles.logsRoot();
+                if (dir == null) {
+                    dir = new File(AppFiles.dataDir(app), "Logs");
+                    //noinspection ResultOfMethodCallIgnored
+                    dir.mkdirs();
+                }
+                final StringWriter trace = new StringWriter();
+                error.printStackTrace(new PrintWriter(trace));
+                write(new File(dir, "launcher_crash.txt"), header(app) + "thread: " + thread.getName()
+                        + "\n\n" + trace);
+            } catch (Throwable ignored) {
+            }
+            if (previous != null) previous.uncaughtException(thread, error);
+        });
+    }
+
     /** Testing over adb: setprop debug.basara.test_crash java|native crashes the game at start. */
     static void testCrashIfAsked() {
         final String mode = Updater.debugProperty("debug.basara.test_crash", "");
@@ -103,6 +128,8 @@ final class CrashReport {
     }
 
     static String checkLastGameExit(Context context) {
+        // Exit reasons are API 30: Android 10 shows no crash notice for the last run.
+        if (Build.VERSION.SDK_INT < 30) return null;
         try {
             final ActivityManager am = context.getSystemService(ActivityManager.class);
             if (am == null) return null;

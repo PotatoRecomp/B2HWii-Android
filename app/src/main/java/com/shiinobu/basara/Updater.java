@@ -44,6 +44,13 @@ final class Updater {
         long size;
         String sha256;    // lowercase hex, or null when GitHub lists none
         int beta;         // a Beta's number, from the tag "v0.0.1-beta.5" (0: not a Beta)
+        /** Older versions must update: `<!-- basara-min-version: 1.1 -->` in the release text. */
+        String minVersion;
+
+        /** Must `installed` update before it can play? */
+        boolean required(String installed) {
+            return minVersion != null && installed != null && isNewer(minVersion, installed);
+        }
 
         Bundle toBundle() {
             final Bundle bundle = new Bundle();
@@ -52,6 +59,7 @@ final class Updater {
             bundle.putLong("size", size);
             bundle.putString("sha256", sha256);
             bundle.putInt("beta", beta);
+            bundle.putString("minVersion", minVersion);
             return bundle;
         }
 
@@ -65,6 +73,7 @@ final class Updater {
             release.size = bundle.getLong("size", -1);
             release.sha256 = bundle.getString("sha256");
             release.beta = bundle.getInt("beta", 0);
+            release.minVersion = bundle.getString("minVersion");
             return release;
         }
     }
@@ -96,6 +105,9 @@ final class Updater {
             final JSONObject json = new JSONObject(readAll(connection.getInputStream()));
             final Release release = new Release();
             release.version = json.getString("tag_name").replaceFirst("^[vV]", "");
+            final java.util.regex.Matcher min = java.util.regex.Pattern
+                    .compile("<!--\\s*basara-min-version:\\s*([0-9.]+)\\s*-->").matcher(json.optString("body", ""));
+            if (min.find()) release.minVersion = min.group(1);
             final JSONArray assets = json.getJSONArray("assets");
             for (int i = 0; i < assets.length(); ++i) {
                 final JSONObject asset = assets.getJSONObject(i);

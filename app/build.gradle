@@ -34,9 +34,9 @@ android {
         // the versionCode, so beta-channel.json's min_beta still works).
         def betaLabel = project.findProperty('basaraBetaLabel') ?: ''
         buildConfigField 'String', 'BETA_LABEL', '"' + betaLabel.toString().replace('"', '') + '"'
-        // -PbasaraOnlineUpdates: check GitHub for updates (and the Beta's lock). Off while the repo is
-        // private: GitHub answers 404 without a login, so APKs are handed out by hand.
-        buildConfigField 'boolean', 'ONLINE_UPDATES', project.hasProperty('basaraOnlineUpdates').toString()
+        // Check GitHub for updates (and the Beta's lock); the repo is public. -PbasaraOfflineUpdates: off,
+        // for a build handed out by hand.
+        buildConfigField 'boolean', 'ONLINE_UPDATES', (!project.hasProperty('basaraOfflineUpdates')).toString()
         // -PbasaraCheats=true|false: Settings > Cheats. On in the Beta, off in a release unless asked;
         // with it off the tab is hidden and the game always gets every cheat off.
         def cheats = project.findProperty('basaraCheats')

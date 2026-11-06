@@ -101,6 +101,15 @@ public final class GameActivity extends SDLActivity
         Log.i(TAG, "display resolution: " + width + "x" + lines + " on a " + longSide + "x" + shortSide + " screen");
     }
 
+    /**
+     * Always landscape, either way up by the sensor, whether or not auto-rotate is on. SDL would ask
+     * for USER_LANDSCAPE, which stays on one side while the player has rotation locked.
+     */
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         CrashReport.installJavaHandler(this);

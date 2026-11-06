@@ -185,7 +185,9 @@ public final class LauncherActivity extends Activity {
             waitingFileAccess = savedInstanceState.getBoolean(STATE_WAITING_FILE_ACCESS, false);
             waitingPlayAccess = savedInstanceState.getBoolean(STATE_WAITING_PLAY_ACCESS, false);
         }
-        if (opened && (settings.autoUpdate() || BuildConfig.BETA)) {
+        if (opened) {
+            // Quiet unless there is something to do: a required update, Auto Update, or one offer
+            // per new version.
             checkForUpdates(true);
         }
         // After an install or update: what this version brings, once.
@@ -338,6 +340,8 @@ public final class LauncherActivity extends Activity {
     private void onPlay() {
         if (settings.betaEnded() != null) {
             showBetaEnded();
+        } else if (requiredUpdate != null) {
+            requireUpdate(requiredUpdate);
         } else if (AppFiles.gameReady(this)) {
             if (!requirePlayAccess()) return;
             // A game left for the Start Menu is still running: Continue brings it back.
@@ -711,7 +715,18 @@ public final class LauncherActivity extends Activity {
                 showChecking();
                 final String installed = Updater.installedVersion(this);
                 if (release != null && release.apkUrl != null && Updater.isNewer(release.version, installed)) {
-                    startUpdate(release);
+                    if (release.required(installed)) {
+                        requireUpdate(release);
+                    } else if (!automatic || settings.autoUpdate()) {
+                        startUpdate(release);
+                    } else if (!release.version.equals(settings.offeredUpdate())) {
+                        settings.setOfferedUpdate(release.version);
+                        new Sheet(this, Tr.t("Basara ") + release.version + Tr.t(" is available"),
+                                Tr.t("Your saves and settings stay."))
+                                .action(Tr.t("Update"), null, true, false, () -> startUpdate(release))
+                                .action(Tr.t("Not Now"), null, false, false, null)
+                                .show();
+                    }
                 } else if (!automatic) {
                     if (error != null) {
                         message(Tr.t("Couldn't check for updates"), error);
@@ -728,9 +743,23 @@ public final class LauncherActivity extends Activity {
         }, "update-check").start();
     }
 
+    /** An update this version must take: Play waits for it, and its sheet can't be put away. */
+    private Updater.Release requiredUpdate;
+
+    private void requireUpdate(Updater.Release release) {
+        requiredUpdate = release;
+        new Sheet(this, Tr.t("Update required"),
+                Tr.t("This version can't be played any more. Install Basara ") + release.version
+                        + Tr.t(" to keep playing; your saves and settings stay."))
+                .action(Tr.t("Update"), null, true, false, () -> startUpdate(release))
+                .cancelable(false)
+                .show();
+    }
+
     private void startUpdate(Updater.Release release) {
+        final boolean required = release == requiredUpdate;
         if (!Updater.canInstall(this)) {
-            new Sheet(this, Tr.t("Basara ") + release.version + Tr.t(" is available"),
+            final Sheet allow = new Sheet(this, Tr.t("Basara ") + release.version + Tr.t(" is available"),
                     Tr.t("To install updates, let Basara install apps."))
                     .step("1", Tr.t("Open Settings"), Tr.t("Turn on Allow from this source."))
                     .step("2", Tr.t("Come back"), Tr.t("The update carries on by itself."))
@@ -738,9 +767,10 @@ public final class LauncherActivity extends Activity {
                         waitingUpdate = release;
                         startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                 Uri.parse("package:" + getPackageName())));
-                    })
-                    .action(Tr.t("Not Now"), null, false, false, null)
-                    .show();
+                    });
+            if (required) allow.cancelable(false);
+            else allow.action(Tr.t("Not Now"), null, false, false, null);
+            allow.show();
             return;
         }
         final ProgressBar bar = progressBar();
@@ -767,14 +797,48 @@ public final class LauncherActivity extends Activity {
             }
             final String error = failure;
             main.post(() -> {
-                sheet.dismiss();
                 if (error != null) {
+                    sheet.dismiss();
                     message(Tr.t("The update failed"), error);
-                } else {
-                    status.setText(Tr.t("Installing Basara ") + release.version + "…");
+                    if (requiredUpdate != null) requireUpdate(requiredUpdate);
+                    return;
                 }
+                // The sheet stays up while Android installs: on success it ends this app; if the
+                // install fails or the player cancels, UpdateReceiver closes it (installEnded).
+                bar.setIndeterminate(false);
+                bar.setProgress(1000);
+                label.setText(Tr.t("Installing… Basara closes when the update is in."));
+                status.setText(Tr.t("Installing Basara ") + release.version + "…");
+                installing = sheet;
+                afterInstall = requiredUpdate != null ? () -> requireUpdate(requiredUpdate) : null;
             });
         }, "update-download").start();
+    }
+
+    /** The update sheet while Android installs, so a failed or cancelled install can close it. */
+    private static Sheet installing;
+    /** What follows a failed or cancelled install: the required update's sheet again. */
+    private static Runnable afterInstall;
+
+    /** UpdateReceiver: the install failed or was cancelled. Main thread. */
+    static void installEnded() {
+        if (installing != null) {
+            try {
+                installing.dismiss();
+            } catch (RuntimeException ignored) {
+                // the launcher went away meanwhile
+            }
+            installing = null;
+        }
+        final Runnable after = afterInstall;
+        afterInstall = null;
+        if (after != null) {
+            try {
+                after.run();
+            } catch (RuntimeException ignored) {
+                // the launcher went away meanwhile
+            }
+        }
     }
 
         // --- Beta ----------------------------------------------------------------------------------

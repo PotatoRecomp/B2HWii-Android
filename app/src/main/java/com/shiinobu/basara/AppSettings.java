@@ -224,6 +224,9 @@ final class AppSettings {
 
     /** Auto Update: opening the app installs the latest GitHub release (off by default). */
     boolean autoUpdate() { return prefs.getBoolean("auto_update", false); }
+    /** The newest version offered at start without Auto Update: each one is offered once. */
+    String offeredUpdate() { return prefs.getString("offered_update", ""); }
+    void setOfferedUpdate(String version) { prefs.edit().putString("offered_update", version).apply(); }
     void setAutoUpdate(boolean on) { prefs.edit().putBoolean("auto_update", on).commit(); }
 
     boolean showFps() { return prefs.getBoolean("show_fps", false); }

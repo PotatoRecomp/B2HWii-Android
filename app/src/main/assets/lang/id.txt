@@ -684,3 +684,8 @@ Gold	Emas
 Red	Merah
 Blue	Biru
 White	Putih
+Installing… Basara closes when the update is in.	Memasang… Basara akan tertutup setelah update terpasang.
+Update required	Update wajib
+This version can't be played any more. Install Basara 	Versi ini tidak bisa dimainkan lagi. Pasang Basara 
+ to keep playing; your saves and settings stay.	 untuk terus bermain; save dan pengaturanmu tetap aman.
+Update	Update

@@ -108,6 +108,12 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyCheats(
                             static_cast<uint32_t>(onceSeq), infiniteHp == JNI_TRUE, infiniteBasara == JNI_TRUE);
 }
 
+// GameActivity.nativeSetCameraDistance: Settings > Display > Camera Distance (cheats.cpp).
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetCameraDistance(JNIEnv*, jclass, jfloat distance)
+{
+    Cheats::SetCameraDistance(static_cast<float>(distance));
+}
+
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetBattery(JNIEnv*, jclass, jint percent,
                                                                             jfloat tempC)
 {

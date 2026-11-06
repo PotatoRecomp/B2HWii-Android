@@ -37,10 +37,10 @@ android {
         // Check GitHub for updates (and the Beta's lock); the repo is public. -PbasaraOfflineUpdates: off,
         // for a build handed out by hand.
         buildConfigField 'boolean', 'ONLINE_UPDATES', (!project.hasProperty('basaraOfflineUpdates')).toString()
-        // -PbasaraCheats=true|false: Settings > Cheats. On in the Beta, off in a release unless asked;
+        // -PbasaraCheats=true|false: Settings > Cheats. On in the Beta and in a release unless asked off;
         // with it off the tab is hidden and the game always gets every cheat off.
         def cheats = project.findProperty('basaraCheats')
-        buildConfigField 'boolean', 'CHEATS', (cheats != null ? (cheats.toString() == 'true') : beta).toString()
+        buildConfigField 'boolean', 'CHEATS', (cheats != null ? (cheats.toString() == 'true') : true).toString()
         manifestPlaceholders = [appLabel: beta ? 'Basara Beta' : '@string/app_name']
         ndk {
             abiFilters 'arm64-v8a'

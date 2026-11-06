@@ -67,6 +67,7 @@ struct RuntimeUserConfig {
     std::optional<uint32_t> cheatMoneyOnceSeq;
     std::optional<bool> cheatInfiniteHp;
     std::optional<bool> cheatInfiniteBasara;
+    std::optional<float> cheatCameraDistance;  // [cheats] camera_distance: 1 = the game's camera, up to 2 farther
     std::optional<bool> showFps;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
@@ -633,6 +634,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.cheatMoneyOnceSeq = FindConfigUint(document, "cheats", "money_once_seq");
     config.cheatInfiniteHp = FindConfigValue<bool>(document, "cheats", "infinite_hp");
     config.cheatInfiniteBasara = FindConfigValue<bool>(document, "cheats", "infinite_basara");
+    if (auto value = FindConfigFloat(document, "cheats", "camera_distance"); value && *value >= 1.0f && *value <= 2.0f) {
+        config.cheatCameraDistance = *value;
+    }
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
         value && (*value & ~0x10u) == 0) {
         config.disabledPostProcessingPaths = *value & 0x10u;
@@ -1240,6 +1244,7 @@ inline uint32_t CheatMoneyAmount() { return Get().cheatMoneyAmount.value_or(9'99
 inline uint32_t CheatMoneyOnceSeq() { return Get().cheatMoneyOnceSeq.value_or(0u); }
 inline bool CheatInfiniteHp() { return Get().cheatInfiniteHp.value_or(false); }
 inline bool CheatInfiniteBasara() { return Get().cheatInfiniteBasara.value_or(false); }
+inline float CheatCameraDistance() { return Get().cheatCameraDistance.value_or(1.0f); }
 
 inline int HdTextures() {
     return Get().hdTextures.value_or(0);

@@ -39,6 +39,9 @@ public final class GameActivity extends SDLActivity
     static native void nativeApplyCheats(int money, int amount, int onceSeq, boolean infiniteHp,
             boolean infiniteBasara);
 
+    /** Settings > Display > Camera Distance (1 = the game's camera). */
+    static native void nativeSetCameraDistance(float distance);
+
     /** The in-game settings: upscaler (0 off, 1 FSR Light, 2 FSR Full, 3 SGSR), frameskip (0 off, 1 auto, 2 30 FPS lock). */
     static native void nativeApplyLiveSettings(int upscaler, int frameskip);
 
@@ -147,7 +150,8 @@ public final class GameActivity extends SDLActivity
             }
             try {
                 // For the log's device line: the screen's refresh rate.
-                Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round(getDisplay().getRefreshRate())), true);
+                Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round((android.os.Build.VERSION.SDK_INT >= 30 ? getDisplay()
+                        : getWindowManager().getDefaultDisplay()).getRefreshRate())), true);
             } catch (Exception ignored) {
             }
         } catch (Exception e) {
@@ -483,6 +487,11 @@ public final class GameActivity extends SDLActivity
         nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
                 settings.cheatInfiniteHp(), settings.cheatInfiniteBasara());
         try {
+            nativeSetCameraDistance(settings.cameraDistanceFactor());
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "camera distance bridge missing from libmain.so", e);
+        }
+        try {
             nativeApplyLiveSettings(settings.fsr(), settings.fpsLock30() ? 2 : settings.frameskip() ? 1 : 0);
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "live settings bridge missing from libmain.so", e);
@@ -501,12 +510,7 @@ public final class GameActivity extends SDLActivity
     }
 
     private void hideSystemBars() {
-        getWindow().setDecorFitsSystemWindows(false);
-        final WindowInsetsController controller = getWindow().getInsetsController();
-        if (controller != null) {
-            controller.hide(WindowInsets.Type.systemBars());
-            controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        }
+        SystemBars.hide(getWindow());
     }
 
     // --- menu ----------------------------------------------------------------------------------
@@ -662,13 +666,7 @@ public final class GameActivity extends SDLActivity
                         android.view.WindowManager.LayoutParams.MATCH_PARENT);
             }
             dialog.setOnShowListener(d -> {
-                if (window == null) return;
-                window.setDecorFitsSystemWindows(false);
-                final WindowInsetsController controller = window.getInsetsController();
-                if (controller != null) {
-                    controller.hide(WindowInsets.Type.systemBars());
-                    controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                }
+                SystemBars.hide(window);
             });
             dialog.setOnCancelListener(d -> resumeFromMenu());
             dialog.setOnDismissListener(d -> hideSystemBars());

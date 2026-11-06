@@ -2015,6 +2015,22 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             g_displayMode = static_cast<int>(aurora_get_display_mode());
             RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(g_displayMode)]));
         }
+        // F7 / F8: the battle camera closer / farther (cheats.cpp, steps of Android's Camera Distance).
+        if (!g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_F7) || IsToggleKey(ev->sdl, SDL_SCANCODE_F8))) {
+            static constexpr std::array<float, 3> kSteps{1.0f, 1.5f, 2.0f};
+            const float now = Cheats::CameraDistance();
+            size_t step = 0;
+            for (size_t i = 0; i < kSteps.size(); ++i) {
+                if (kSteps[i] <= now + 0.01f) step = i;
+            }
+            if (ev->sdl.key.scancode == SDL_SCANCODE_F8) {
+                step = std::min(step + 1, kSteps.size() - 1);
+            } else if (step > 0 && kSteps[step] >= now - 0.01f) {
+                --step;
+            }
+            Cheats::SetCameraDistance(kSteps[step]);
+            RT_LOGF(RT_TAG_OS, "cheats: camera distance x%.1f (F7 closer, F8 farther)\n", kSteps[step]);
+        }
         if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();

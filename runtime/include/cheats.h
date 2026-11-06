@@ -22,6 +22,11 @@ bool Available();
 // request is applied at the next frame when it differs from the last one seen.
 void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara);
 
+// Camera distance (1 = the game's own camera, up to 2 = twice as far from what it looks at).
+// Config.toml [cheats] camera_distance, env BASARA_CAMERA_DISTANCE, or the launcher.
+float CameraDistance();
+void SetCameraDistance(float distance);
+
 // Keeps the enabled cheats applied. Call once a frame on the guest thread.
 void Apply();
 
@@ -32,3 +37,5 @@ void BasaraCheats_BeforeShopRefresh(CpuContext* ctx);
 void BasaraCheats_BeforeHpSub(CpuContext* ctx);
 void BasaraCheats_BeforeDamage(CpuContext* ctx);
 void BasaraCheats_BeforeGaugeCalc(CpuContext* ctx);
+void BasaraCheats_BeforeLookAt(CpuContext* ctx);
+void BasaraCheats_BeforeCameraUpdate(CpuContext* ctx);

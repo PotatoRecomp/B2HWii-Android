@@ -8,6 +8,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 namespace Cheats {
 namespace {
@@ -44,6 +47,19 @@ bool Available() {
 bool InfiniteHp() { return g_infiniteHp.load(std::memory_order_relaxed) && Available(); }
 bool InfiniteBasara() { return g_infiniteBasara.load(std::memory_order_relaxed) && Available(); }
 bool InfiniteMoney() { return g_money.load(std::memory_order_relaxed) == kMoneyInfinite && Available(); }
+
+namespace {
+float ClampDistance(float distance) {
+    return distance >= 1.0f && distance <= 2.0f ? distance : 1.0f;
+}
+std::atomic<float> g_cameraDistance{[] {
+    const char* env = std::getenv("BASARA_CAMERA_DISTANCE");
+    return ClampDistance(env != nullptr ? std::strtof(env, nullptr) : RuntimeConfigFile::CheatCameraDistance());
+}()};
+} // namespace
+
+float CameraDistance() { return Available() ? g_cameraDistance.load(std::memory_order_relaxed) : 1.0f; }
+void SetCameraDistance(float distance) { g_cameraDistance = ClampDistance(distance); }
 
 void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara) {
     g_money = std::clamp<int32_t>(money, kMoneyOff, kMoneyOnce);
@@ -127,5 +143,124 @@ void BasaraCheats_BeforeGaugeCalc(CpuContext* ctx) {
 void BasaraCheats_BeforeShopRefresh(CpuContext* ctx) {
     if (ctx->lr == 0x80048BD0u && Cheats::InfiniteMoney()) {
         Memory::TryWrite32(Cheats::kMoneyAddr, Cheats::g_amount.load(std::memory_order_relaxed));
+    }
+}
+
+// Camera distance. The camera (heap object, pointer at SDA 806626A0; view matrix +0xA7C, eye +0xAEC,
+// target +0xACC, up +0xBF0) builds its view through 802BF3AC, which negates the up vector into its
+// 0x20-byte frame (+0x08..+0x13) and calls C_MTXLookAt(m r3, eye r4, up r5, target r6). The eye moved
+// away from the target, along the line between them, is written into the unused rest of that frame
+// (+0x14..+0x1F) and passed instead.
+namespace {
+float ReadF32(uint32_t addr, bool& ok) {
+    uint32_t bits = 0;
+    ok = ok && Memory::TryRead32(addr, bits);
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+void WriteF32(uint32_t addr, float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    Memory::TryWrite32(addr, bits);
+}
+} // namespace
+
+// The farther eye also stands in the camera's own eye (+0xAEC) for the rest of the frame, so whatever
+// culls or picks a level of detail from it sees what the view shows; the game's eye goes back before
+// the next camera update (8004FE9C), which builds on it. One slot per camera (two in split screen).
+namespace {
+struct SavedEye {
+    uint32_t cam = 0;
+    uint32_t bits[3] = {};
+};
+SavedEye g_savedEyes[2];
+} // namespace
+
+void BasaraCheats_BeforeCameraUpdate(CpuContext* ctx) {
+    for (SavedEye& saved : g_savedEyes) {
+        if (saved.cam != 0 && saved.cam == ctx->gpr[3]) {
+            for (int i = 0; i < 3; ++i) {
+                Memory::TryWrite32(saved.cam + 0xAECu + 4u * i, saved.bits[i]);
+            }
+            saved.cam = 0;
+        }
+    }
+}
+
+void BasaraCheats_BeforeLookAt(CpuContext* ctx) {
+    const uint32_t sp = ctx->gpr[1];
+    const uint32_t eye = ctx->gpr[4];
+    const uint32_t target = ctx->gpr[6];
+    uint32_t caller = 0;
+    if (ctx->gpr[5] != sp + 8u || !Memory::TryRead32(sp + 0x24u, caller)) {
+        return;  // not the wrapper's frame
+    }
+    const float k = Cheats::CameraDistance();
+    if (k == 1.0f) {
+        return;
+    }
+    // Only the battle view: the main camera's final LookAt (8004FE9C, return 8004FF1C) in battle mode
+    // (+0xC3C 0) with no scripted event (+0x24 0). The stage intro runs in mode 5 (about 570 frames on
+    // a Windows test) and cutscenes through the event cameras, which keep the game's framing.
+    {
+        const uint32_t cam = ctx->gpr[3] - 0xA7Cu;
+        uint32_t mode = ~0u, event = ~0u;
+        if (caller != 0x8004FF1Cu || !Memory::TryRead32(cam + 0xC3Cu, mode) ||
+            !Memory::TryRead32(cam + 0x24u, event) || mode != 0u || event != 0u) {
+            return;
+        }
+    }
+    bool ok = true;
+    float e[3], t[3];
+    for (int i = 0; i < 3; ++i) {
+        e[i] = ReadF32(eye + 4u * i, ok);
+        t[i] = ReadF32(target + 4u * i, ok);
+    }
+    if (!ok) {
+        return;
+    }
+    float moved[3];
+    for (int i = 0; i < 3; ++i) {
+        moved[i] = t[i] + (e[i] - t[i]) * k;
+    }
+    // Never lower than the game's eye: a camera that looks up at its target would back down into the
+    // ground. The up vector is the one handed to C_MTXLookAt (the wrapper's frame, +0x08).
+    float up[3];
+    for (int i = 0; i < 3; ++i) {
+        up[i] = ReadF32(sp + 8u + 4u * i, ok);
+    }
+    const float upLen = std::sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+    if (ok && upLen > 1e-6f) {
+        float drop = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            drop += (moved[i] - e[i]) * up[i] / upLen;
+        }
+        if (drop < 0.0f) {
+            for (int i = 0; i < 3; ++i) {
+                moved[i] -= drop * up[i] / upLen;
+            }
+        }
+    }
+    const uint32_t out = sp + 0x14u;
+    for (int i = 0; i < 3; ++i) {
+        WriteF32(out + 4u * i, moved[i]);
+    }
+    ctx->gpr[4] = out;
+    const uint32_t cam = ctx->gpr[3] - 0xA7Cu;
+    if (eye == cam + 0xAECu) {
+        SavedEye* slot = nullptr;
+        for (SavedEye& saved : g_savedEyes) {
+            if (saved.cam == cam || (slot == nullptr && saved.cam == 0)) slot = &saved;
+        }
+        if (slot != nullptr && slot->cam == 0) {
+            slot->cam = cam;
+            for (int i = 0; i < 3; ++i) {
+                Memory::TryRead32(eye + 4u * i, slot->bits[i]);
+            }
+            for (int i = 0; i < 3; ++i) {
+                WriteF32(eye + 4u * i, moved[i]);
+            }
+        }
     }
 }

@@ -199,9 +199,17 @@ final class GpuDrivers {
 
     /** In the game process, before SDL loads the runtime: the driver it should load, if any. */
     static void applyToGame(Context context, AppSettings settings) {
-        if (settings.renderer() == 1) {
+        if (settings.renderer() == 1 || settings.renderer() == 2) {
             try {
-                Os.setenv("BASARA_RENDERER", "vulkan", true);
+                Os.setenv("BASARA_RENDERER", settings.renderer() == 1 ? "vulkan" : "gles", true);
+            } catch (Exception e) {
+                Log.e(TAG, "could not choose the renderer", e);
+            }
+        } else if (settings.gpuDriver().isEmpty() && Os.getenv("BASARA_RENDERER") == null
+                && DeviceProfile.oldAdreno5(settings.gpuName())) {
+            // Android 10 Adreno 5xx only (DeviceProfile.oldAdreno5): OpenGL ES first, Vulkan after it.
+            try {
+                Os.setenv("BASARA_RENDERER", "gles", true);
             } catch (Exception e) {
                 Log.e(TAG, "could not choose the renderer", e);
             }

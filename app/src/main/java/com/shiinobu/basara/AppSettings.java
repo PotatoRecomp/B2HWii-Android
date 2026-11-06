@@ -179,6 +179,11 @@ final class AppSettings {
     int displayLines() { return Math.max(0, prefs.getInt("display_lines", 0)); }
     void setDisplayLines(int lines) { prefs.edit().putInt("display_lines", lines).commit(); }
 
+    /** Settings > Display > Camera Distance: how far the camera stays from what it looks at (cheats.cpp). */
+    static final float[] CAMERA_DISTANCES = {1f, 1.5f, 2f};
+    int cameraDistance() { return Math.max(0, Math.min(CAMERA_DISTANCES.length - 1, prefs.getInt("camera_distance", 0))); }
+    void setCameraDistance(int which) { prefs.edit().putInt("camera_distance", which).commit(); }
+    float cameraDistanceFactor() { return CAMERA_DISTANCES[cameraDistance()]; }
     int aspectMode() { return prefs.getInt("aspect_mode", ASPECT_FILL); }
     void setAspectMode(int mode) { prefs.edit().putInt("aspect_mode", mode).commit(); }
 
@@ -286,7 +291,9 @@ final class AppSettings {
     String gpuDriver() { return prefs.getString("gpu_driver", ""); }
 
     /** 0 = Auto (Dawn; the Vulkan backend only for a driver Dawn cannot use), 1 = Vulkan backend first. */
+    /** Renderer: 0 Auto, 1 Vulkan (aurora's own), 2 OpenGL ES (Dawn on OpenGL ES). */
     int renderer() { return prefs.getInt("renderer", 0); }
+    static String rendererName(int which) { return which == 1 ? "Vulkan" : which == 2 ? "OpenGL ES" : "Auto"; }
     void setRenderer(int which) { prefs.edit().putInt("renderer", which).commit(); }
     void setGpuDriver(String id) { prefs.edit().putString("gpu_driver", id == null ? "" : id).commit(); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }

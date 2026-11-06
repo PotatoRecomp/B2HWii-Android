@@ -145,6 +145,10 @@ final class SettingsMenu {
                 which -> settings.setAspectMode(which));
         resolutionRow();
         displayResolutionRow();
+        choiceRow(Tr.t("Camera Distance"), Tr.t("How far the camera stays from your character in battle. Farther shows "
+                        + "more of the field. Off in LAN play."),
+                new String[] {Tr.t("Default"), "1.5x", "2x"}, settings.cameraDistance(), true,
+                which -> settings.setCameraDistance(which));
         heldToggle("show_fps", Tr.t("Performance Overlay"), Tr.t("A see-through bar at the top of the game with FPS and phone stats."),
                 settings.showFps(), on -> settings.setShowFps(on));
         final String[] items = {Tr.t("FPS"), Tr.t("CPU %"), Tr.t("GPU %"), Tr.t("Battery"), Tr.t("Temperature °C"), Tr.t("Details (ms, draws, RAM)"),
@@ -256,11 +260,12 @@ final class SettingsMenu {
         restart(null);
         choiceRow(Tr.t("Renderer"), Tr.t("Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot "
                         + "use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, "
-                        + "made for older phones."),
-                new String[] {Tr.t("Auto"), Tr.t("Vulkan")}, settings.renderer(), true, which -> {
+                        + "made for older phones. OpenGL ES runs Dawn on OpenGL ES, for phones whose Vulkan driver "
+                        + "shows a black screen or closes the game."),
+                new String[] {Tr.t("Auto"), Tr.t("Vulkan"), Tr.t("OpenGL ES")}, settings.renderer(), true, which -> {
                     final int before = settings.renderer();
                     settings.setRenderer(which);
-                    confirmRestart(Tr.t("Renderer"), which == 1 ? "Vulkan" : "Auto", before == 1 ? "Vulkan" : "Auto",
+                    confirmRestart(Tr.t("Renderer"), AppSettings.rendererName(which), AppSettings.rendererName(before),
                             () -> settings.setRenderer(before));
                 }, false);
         showGpuDrivers();
@@ -272,7 +277,7 @@ final class SettingsMenu {
                         + "on a fast path that recordings miss, so the video comes out silent. On keeps the sound on "
                         + "the regular path, with a little more delay. Applies when the game starts again."),
                 settings.recordingAudio(), on -> settings.setRecordingAudio(on));
-        final boolean files = android.os.Environment.isExternalStorageManager();
+        final boolean files = AppFiles.hasFileAccess(activity);
         actionRow(Tr.t("Share Log"), files
                         ? Tr.t("Sends the log of the game runs you pick (the one that crashed first) with the device "
                                 + "info, as one zip: to Discord, Telegram, WhatsApp or anywhere else.")
@@ -348,7 +353,7 @@ final class SettingsMenu {
     /** Texture packs from the textures folder. */
     private void showCustomTextures() {
         final String folder = folderName("textures");
-        final boolean files = android.os.Environment.isExternalStorageManager();
+        final boolean files = AppFiles.hasFileAccess(activity);
         restart(null);
         toggleRow(Tr.t("Custom Textures"), files
                         ? Tr.t("Uses your own textures (tex1_*.png or .dds, Dolphin-style names) from ") + folder
@@ -422,7 +427,7 @@ final class SettingsMenu {
     }
 
     private void installGpuDriver() {
-        if (!android.os.Environment.isExternalStorageManager()) {
+        if (!AppFiles.hasFileAccess(activity)) {
             askFileAccess(() -> android.widget.Toast.makeText(activity, Tr.t("Allow file access to choose a "
                     + "driver .zip."), android.widget.Toast.LENGTH_LONG).show());
             return;
@@ -534,8 +539,8 @@ final class SettingsMenu {
                         + saves + Tr.t(" (or Download) on this phone. 2. Tap Import and tap that .zip. 3. Start the "
                         + "game: it plays from the imported save.")
                         + "\n\n" + Tr.t("Before every import the save on this phone is kept in ") + saves
-                        + Tr.t("/Auto: Undo Last Import puts it back. Only .zip files from Back Up (or a basara2w.dat) "
-                        + "work; Dolphin's data.bin does not."),
+                        + Tr.t("/Auto: Undo Last Import puts it back. A .zip from Back Up, a basara2w.dat, or a data.bin "
+                        + "exported from a Wii or Dolphin all work."),
                 null, false, true);
 
         final boolean has = SaveData.hasSave(activity);
@@ -567,7 +572,7 @@ final class SettingsMenu {
     }
 
     private void backUp() {
-        if (!android.os.Environment.isExternalStorageManager()) {
+        if (!AppFiles.hasFileAccess(activity)) {
             askFileAccess(() -> SaveData.startExport(activity));
             return;
         }
@@ -579,7 +584,7 @@ final class SettingsMenu {
     }
 
     private void importSave() {
-        if (!android.os.Environment.isExternalStorageManager()) {
+        if (!AppFiles.hasFileAccess(activity)) {
             askFileAccess(() -> SaveData.startImport(activity));
             return;
         }
@@ -603,9 +608,13 @@ final class SettingsMenu {
     /** Without "All files access" the folders cannot be listed: allow it, or use the phone's own picker. */
     private void askFileAccess(Runnable systemPicker) {
         new Sheet(activity, Tr.t("Allow file access"), Tr.t("To list the folders on this phone."))
-                .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
+                .step("1", Tr.t("Open Settings"), AppFiles.fileAccessStep())
                 .step("2", Tr.t("Come back"), Tr.t("Then tap the button again."))
                 .action(Tr.t("Open Settings"), null, true, false, () -> {
+                    if (android.os.Build.VERSION.SDK_INT < 30) {
+                        AppFiles.requestLegacyFileAccess(activity);
+                        return;
+                    }
                     try {
                         activity.startActivity(new android.content.Intent(
                                 android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,

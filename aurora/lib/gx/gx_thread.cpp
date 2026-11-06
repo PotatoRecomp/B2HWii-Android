@@ -2,6 +2,7 @@
 
 #include "fifo.hpp"
 #include "../internal.hpp"
+#include "../webgpu/gpu.hpp"
 
 #include <aurora/aurora.h>
 
@@ -223,6 +224,12 @@ void enqueue_pending_bytes_locked() {
   g_state.queue.push_back(Item{full, nullptr});
 }
 
+// Dawn's GL backend has one EGL context; GX work on a second thread fails with EGL_BAD_ACCESS.
+bool gl_backend() noexcept {
+  return webgpu::g_backendType == wgpu::BackendType::OpenGLES ||
+         webgpu::g_backendType == wgpu::BackendType::OpenGL;
+}
+
 } // namespace
 
 bool enabled() noexcept {
@@ -230,6 +237,14 @@ bool enabled() noexcept {
     const char* value = std::getenv("BASARA_GX_THREAD");
     return value != nullptr && (value[0] == '1' || value[0] == '2' || value[0] == '3' || value[0] == '4');
   }();
+  if (on && gl_backend()) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      Log.warn("GX thread off: Dawn's OpenGL ES context can only be current on one thread (EGL_BAD_ACCESS)");
+    }
+    return false;
+  }
   return on;
 }
 

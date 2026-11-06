@@ -1,3 +1,6 @@
+#if defined(__ANDROID__)
+#include <android/api-level.h>
+#endif
 #include "gpu.hpp"
 #include "fsr.hpp"
 #include "sgsr.hpp"
@@ -89,6 +92,10 @@ static wgpu::AdapterInfo g_adapterInfo;
 static wgpu::SurfaceCapabilities g_surfaceCapabilities;
 bool g_bcTexturesSupported;
 bool g_safeVertexFetch = false;
+uint64_t g_bufferTailSlack = 0;
+bool g_indexPulling = false;
+// PowerVR: swapchain width rounded down to a multiple of 32 (see choose_gpu_compat).
+static bool g_alignSwapchainWidth32 = false;
 uint32_t g_shaderDebug = 0;
 static std::string g_adapterName;
 // Written by Dawn's device-loss callback and consumed at ordered frame boundaries. Keep the
@@ -108,13 +115,18 @@ static std::atomic_bool g_initialized{false};
 //   robust     keep Dawn's bounds checks on buffer and texture access
 //   nobc       do not enable BC texture compression
 //   nomono     do not use one Vulkan pipeline cache for all pipelines
+//   nocompat   do not retry Vulkan at the compatibility feature level when core is refused
+//   forcecompat  skip core and ask Vulkan for the compatibility feature level (testing)
 //   safefetch / nosafefetch   force the GPU compatibility vertex fetch on or off
+//   nobufslack / bufslack   leave out or add the spare tail on the shared GPU buffers (auto: Adreno)
 //   notex      every texture samples as grey (is it geometry or texturing?)
 //   uvvis      texture samples show their coordinates instead
 //   dumpwgsl   write every generated shader to <cache>/wgsl
 //   +name      enable the Dawn toggle `name`; -name disables it
 static std::vector<std::string> g_gfxFlags;
 static std::atomic_bool g_logValidationErrors{false};
+// True when Dawn only offered the adapter at the compatibility feature level.
+static bool g_compatFeatureLevel = false;
 
 static bool gfx_flag(std::string_view flag) {
   return std::find(g_gfxFlags.begin(), g_gfxFlags.end(), flag) != g_gfxFlags.end();
@@ -198,6 +210,46 @@ static void choose_gpu_compat() {
     reason = qualcomm ? "on (auto: Qualcomm Adreno)" :
              mali ? "off (auto: ARM Mali; enable compatibility if broken)" :
              mobile ? "on (auto: unknown mobile GPU)" : "off (auto)";
+  }
+  // Old Adreno drivers (Adreno 512, Android 10) read past the bound range of a buffer on the CPU while
+  // recording a render pass, and fault when a draw's data sits at the very end of a shared buffer.
+  // A spare tail behind each shared buffer keeps those reads inside mapped memory.
+  // Android 10 Adreno and every Adreno 5xx only: other phones keep the buffers exactly as before.
+#if defined(__ANDROID__)
+  const bool oldAndroid = android_get_device_api_level() < 30;
+#else
+  constexpr bool oldAndroid = false;
+#endif
+  // Adreno 5xx gets it on every Android version: a Redmi Note 7 on Android 14 (2023 driver) faults the
+  // same way.
+  const bool adreno5 = contains_ignore_case(text(g_adapterInfo.device), "adreno (tm) 5");
+  g_bufferTailSlack = gfx_flag("nobufslack")                                          ? 0
+                      : ((qualcomm && oldAndroid) || adreno5 || gfx_flag("bufslack")) ? (256u << 10)
+                                                                                       : 0;
+  if (g_bufferTailSlack != 0) {
+    Log.info("Shared GPU buffers get a {} KiB spare tail (driver over-read guard)", g_bufferTailSlack >> 10);
+  }
+  // Adreno 5xx Vulkan drivers read the index buffer on the CPU in vkCmdDrawIndexed, before the copy
+  // that fills it has run, and fault or lose the device; GX draws pull their indices instead there.
+  g_indexPulling = !gfx_flag("noindexpull") &&
+                   ((adreno5 && g_backendType == wgpu::BackendType::Vulkan) || gfx_flag("indexpull"));
+  if (g_indexPulling) {
+    Log.info("GX draws pull their indices in the vertex shader (no indexed draws)");
+  }
+  // Older PowerVR Rogue drivers corrupt the output, or show nothing, unless the swapchain width is a
+  // multiple of 32 (PPSSPP #11743/#15773, ARMSX2 vk-powervr-old-swapchain-width); seen as a black
+  // screen with sound on a GE8320 (driver 1.11@5425693) with a 1092-wide surface. Losing up to 31
+  // columns at the edge costs nothing elsewhere, so every PowerVR gets it.
+  const bool powervr = contains_ignore_case(text(g_adapterInfo.device), "powervr") ||
+                       contains_ignore_case(text(g_adapterInfo.vendor), "imagination") ||
+                       g_adapterInfo.vendorID == 0x1010;
+  g_alignSwapchainWidth32 = !gfx_flag("nopvralign") && (powervr || gfx_flag("pvralign"));
+  if (g_alignSwapchainWidth32) {
+    Log.info("Swapchain width rounded down to a multiple of 32 (PowerVR)");
+  }
+  if (oldAndroid && adreno5) {
+    Log.warn("Unsupported GPU: Adreno 5xx on Android 10 ({}); its Vulkan driver loses the device on the "
+             "first screens, OpenGL ES is the fallback", magic_enum::enum_name(g_adapterInfo.backendType));
   }
   g_shaderDebug = (gfx_flag("notex") ? ShaderDebugNoTextures : 0u) |
                   (gfx_flag("uvvis") ? ShaderDebugTexCoords : 0u) |
@@ -756,8 +808,25 @@ static bool initialize_once(AuroraBackend auroraBackend) {
       return false;
     }
   }
-  {
+  load_gfx_flags();
+  g_compatFeatureLevel = false;
+  // Dawn marks some Vulkan drivers (for example Imagination PowerVR proprietary ones) as unable to
+  // run core WebGPU and only exposes them at the compatibility feature level, so retry with it.
+  for (const auto featureLevel : {wgpu::FeatureLevel::Core, wgpu::FeatureLevel::Compatibility}) {
+    // OpenGL ES is a compatibility-level backend only.
+    if (featureLevel == wgpu::FeatureLevel::Core && backend == wgpu::BackendType::OpenGLES) {
+      continue;
+    }
+    if (featureLevel == wgpu::FeatureLevel::Compatibility && backend != wgpu::BackendType::OpenGLES &&
+        (backend != wgpu::BackendType::Vulkan || gfx_flag("nocompat"))) {
+      break;
+    }
+    if (featureLevel == wgpu::FeatureLevel::Core && backend == wgpu::BackendType::Vulkan &&
+        gfx_flag("forcecompat")) {
+      continue;
+    }
     const wgpu::RequestAdapterOptions options{
+        .featureLevel = featureLevel,
         .powerPreference = wgpu::PowerPreference::HighPerformance,
         .backendType = backend,
         .compatibleSurface = g_surface,
@@ -781,10 +850,18 @@ static bool initialize_once(AuroraBackend auroraBackend) {
       SDL_SetError("Graphics adapter request did not complete within its startup deadline");
       return false;
     }
-    if (!g_adapter) {
-      Log.error("No {} adapter is available on this system", magic_enum::enum_name(backend));
-      return false;
+    if (g_adapter) {
+      if (featureLevel == wgpu::FeatureLevel::Compatibility) {
+        g_compatFeatureLevel = true;
+        Log.warn("{} adapter is only available at the compatibility feature level",
+                 magic_enum::enum_name(backend));
+      }
+      break;
     }
+  }
+  if (!g_adapter) {
+    Log.error("No {} adapter is available on this system", magic_enum::enum_name(backend));
+    return false;
   }
   g_adapter.GetInfo(&g_adapterInfo);
   g_backendType = g_adapterInfo.backendType;
@@ -806,9 +883,14 @@ static bool initialize_once(AuroraBackend auroraBackend) {
   uint32_t maxTextureDimension2D = 0;
   {
     wgpu::Limits supportedLimits{};
+    wgpu::CompatibilityModeLimits supportedCompatLimits{};
+    if (g_compatFeatureLevel) {
+      supportedLimits.nextInChain = &supportedCompatLimits;
+    }
     g_adapter.GetLimits(&supportedLimits);
+    supportedLimits.nextInChain = nullptr;
     maxTextureDimension2D = supportedLimits.maxTextureDimension2D;
-    const wgpu::Limits requiredLimits{
+    wgpu::Limits requiredLimits{
         // Use "best" supported limits
         .maxTextureDimension1D = supportedLimits.maxTextureDimension1D == 0 ? WGPU_LIMIT_U32_UNDEFINED
                                                                             : supportedLimits.maxTextureDimension1D,
@@ -843,6 +925,22 @@ static bool initialize_once(AuroraBackend auroraBackend) {
         requiredLimits.maxTextureDimension3D, requiredLimits.maxTextureArrayLayers,
         requiredLimits.maxDynamicStorageBuffersPerPipelineLayout, requiredLimits.maxStorageBuffersPerShaderStage,
         requiredLimits.minUniformBufferOffsetAlignment, requiredLimits.minStorageBufferOffsetAlignment);
+    // Compatibility mode allows no storage buffers or textures outside compute unless asked for;
+    // the GX vertex fetch reads its vertex data from storage buffers in the vertex stage.
+    wgpu::CompatibilityModeLimits requiredCompatLimits{};
+    if (g_compatFeatureLevel) {
+      requiredCompatLimits.maxStorageBuffersInVertexStage = supportedCompatLimits.maxStorageBuffersInVertexStage;
+      requiredCompatLimits.maxStorageTexturesInVertexStage = supportedCompatLimits.maxStorageTexturesInVertexStage;
+      requiredCompatLimits.maxStorageBuffersInFragmentStage = supportedCompatLimits.maxStorageBuffersInFragmentStage;
+      requiredCompatLimits.maxStorageTexturesInFragmentStage =
+          supportedCompatLimits.maxStorageTexturesInFragmentStage;
+      requiredLimits.nextInChain = &requiredCompatLimits;
+      Log.info("Compatibility limits: storage buffers vertex {} fragment {}, storage textures vertex {} fragment {}",
+               requiredCompatLimits.maxStorageBuffersInVertexStage,
+               requiredCompatLimits.maxStorageBuffersInFragmentStage,
+               requiredCompatLimits.maxStorageTexturesInVertexStage,
+               requiredCompatLimits.maxStorageTexturesInFragmentStage);
+    }
     std::vector<wgpu::FeatureName> requiredFeatures;
     // Optional native sharing for MetalFX. Devices without either feature keep
     // the normal renderer; the upscaler checks the enabled pair at runtime.
@@ -906,6 +1004,12 @@ static bool initialize_once(AuroraBackend auroraBackend) {
 #endif
     if (g_backendType == wgpu::BackendType::Vulkan && !gfx_flag("nomono")) {
       enableToggles.push_back("vulkan_monolithic_pipeline_cache");
+    }
+    // aurora drives the device from several threads (frame worker, presenter, pipeline workers, buffer
+    // maps); a GL context left current on one makes eglMakeCurrent fail on the next (EGL_BAD_ACCESS).
+    if (g_backendType == wgpu::BackendType::OpenGLES || g_backendType == wgpu::BackendType::OpenGL) {
+      enableToggles.push_back("gl_allow_context_on_multi_threads");
+      enableToggles.push_back("shadow_copy_map_write");
     }
     std::vector<const char*> disableToggles;
     for (const auto& flag : g_gfxFlags) {
@@ -1107,6 +1211,24 @@ bool initialize(AuroraBackend auroraBackend) {
   else order = {false};
 #else
   const std::vector<bool> order{false};
+#endif
+#if defined(__ANDROID__)
+  // BASARA_RENDERER=gles (the launcher sets it for Adreno 5xx on Android 10 only, whose Vulkan driver
+  // loses the device): Dawn's OpenGL ES backend first, then the usual Vulkan order if it cannot start.
+  // Debug flag `gles` forces it on any phone, `nogles` turns it off.
+  load_gfx_flags();
+  const char* rendererEnv = std::getenv("BASARA_RENDERER");
+  const bool glesFirst = !custom && !gfx_flag("nogles") &&
+                         (gfx_flag("gles") || (rendererEnv != nullptr && std::strcmp(rendererEnv, "gles") == 0));
+  if (glesFirst && (auroraBackend == BACKEND_VULKAN || auroraBackend == BACKEND_AUTO)) {
+    set_vulkan_backend(false);
+    Log.info("Renderer: Dawn OpenGLES");
+    if (initialize_once(BACKEND_OPENGLES)) {
+      return true;
+    }
+    Log.warn("OpenGLES renderer could not start; trying Vulkan");
+    reset_instance();
+  }
 #endif
   for (const bool vk : order) {
     set_vulkan_backend(vk);
@@ -1327,6 +1449,10 @@ void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, ui
     g_graphicsConfig.surfaceConfiguration.height = native_height;
     auto surfaceConfiguration = g_graphicsConfig.surfaceConfiguration;
     surfaceConfiguration.device = g_device;
+    // Only the swapchain is narrower; the present pass keeps the native size and the right edge clips.
+    if (g_alignSwapchainWidth32 && surfaceConfiguration.width >= 64) {
+      surfaceConfiguration.width &= ~31u;
+    }
     g_surface.Configure(&surfaceConfiguration);
   }
   if (!sizeChanged) {

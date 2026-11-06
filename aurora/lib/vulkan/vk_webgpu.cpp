@@ -17,6 +17,7 @@ typedef unsigned long VisualID;
 #include <vulkan/vulkan_xlib.h>
 #if defined(__ANDROID__)
 #include <vulkan/vulkan_android.h>
+#include <android/api-level.h>
 #endif
 
 #include <vk_mem_alloc.h>
@@ -113,7 +114,17 @@ extern "C" void* aurora_custom_vulkan_loader();
   X(vkQueueWaitIdle) \
   X(vkResetCommandPool) \
   X(vkUpdateDescriptorSets) \
-  X(vkWaitSemaphores)
+  X(vkWaitSemaphores) \
+  X(vkCmdBeginRenderPass) \
+  X(vkCmdEndRenderPass) \
+  X(vkCreateRenderPass) \
+  X(vkDestroyRenderPass) \
+  X(vkCreateFramebuffer) \
+  X(vkDestroyFramebuffer) \
+  X(vkCreateFence) \
+  X(vkDestroyFence) \
+  X(vkGetFenceStatus) \
+  X(vkWaitForFences)
 
 namespace {
 #define AURORA_DECLARE(name) PFN_##name g_##name = nullptr;
@@ -211,6 +222,10 @@ void VKAPI_CALL CmdPipelineBarrier2Compat(VkCommandBuffer cb, const VkDependency
                          images.data());
 }
 
+// False on a tier 0 device (no VK_KHR_timeline_semaphore): its submissions carry binary semaphores only,
+// and the timeline values struct is left out of the chain.
+bool g_chainTimelineInfo = true;
+
 VkResult VKAPI_CALL QueueSubmit2Compat(VkQueue queue, uint32_t count, const VkSubmitInfo2* submits, VkFence fence) {
   struct Converted {
     std::vector<VkSemaphore> waits, signals;
@@ -245,7 +260,7 @@ VkResult VKAPI_CALL QueueSubmit2Compat(VkQueue queue, uint32_t count, const VkSu
                   .signalSemaphoreValueCount = static_cast<uint32_t>(c.signalValues.size()),
                   .pSignalSemaphoreValues = c.signalValues.data()};
     infos[i] = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .pNext = &c.timeline,
+                .pNext = g_chainTimelineInfo ? &c.timeline : nullptr,
                 .waitSemaphoreCount = static_cast<uint32_t>(c.waits.size()),
                 .pWaitSemaphores = c.waits.data(),
                 .pWaitDstStageMask = c.waitStages.data(),
@@ -358,6 +373,16 @@ void LoadDeviceFunctions(VkDevice device, bool api13, bool hasSync2) {
 #define vkCreateQueryPool g_vkCreateQueryPool
 #define vkDestroyQueryPool g_vkDestroyQueryPool
 #define vkGetQueryPoolResults g_vkGetQueryPoolResults
+#define vkCmdBeginRenderPass g_vkCmdBeginRenderPass
+#define vkCmdEndRenderPass g_vkCmdEndRenderPass
+#define vkCreateRenderPass g_vkCreateRenderPass
+#define vkDestroyRenderPass g_vkDestroyRenderPass
+#define vkCreateFramebuffer g_vkCreateFramebuffer
+#define vkDestroyFramebuffer g_vkDestroyFramebuffer
+#define vkCreateFence g_vkCreateFence
+#define vkDestroyFence g_vkDestroyFence
+#define vkGetFenceStatus g_vkGetFenceStatus
+#define vkWaitForFences g_vkWaitForFences
 #define AURORA_GET_INSTANCE_PROC_ADDR g_getInstanceProcAddr
 #define AURORA_GET_DEVICE_PROC_ADDR g_getDeviceProcAddr
 #else
@@ -372,6 +397,7 @@ void LoadDeviceFunctions(VkDevice device, bool api13, bool hasSync2) {
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <memory>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -871,6 +897,18 @@ struct FutureRec {
   std::function<void()> fire;
 };
 
+// Tier 0: the fence one submission signals, in place of the timeline value. Shared so a thread waiting
+// on it keeps it alive after PollCompleted has dropped it; never reset or reused.
+struct SerialFence {
+  VkDevice device = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  ~SerialFence() {
+    if (fence != VK_NULL_HANDLE) {
+      vkDestroyFence(device, fence, nullptr);
+    }
+  }
+};
+
 } // namespace
 
 struct WGPUInstanceImpl : Object {};
@@ -906,6 +944,18 @@ struct WGPUDeviceImpl : Object {
   std::mutex backingMutex;
   std::vector<std::tuple<uint64_t, VkBuffer, VmaAllocation, uint8_t*>> freeBackings;
   bool hasSync2 = false;
+  // Tier 0 (Android 10 and older drivers with Vulkan 1.1 but no dynamic rendering or timeline
+  // semaphores: Adreno 5xx, PowerVR GE8320): passes are VkRenderPass + VkFramebuffer and every
+  // submission signals a fence. False everywhere else, where nothing below is used.
+  bool legacy = false;
+  // VK_EXT_memory_budget is on: VMA tracks the driver's budget, logged when an allocation fails.
+  bool hasMemoryBudget = false;
+  std::mutex renderPassMutex;
+  std::unordered_map<std::string, VkRenderPass> renderPasses;
+  // Submitted fences in serial order, and the last serial seen finished. Guarded by fenceMutex.
+  std::mutex fenceMutex;
+  std::deque<std::pair<uint64_t, std::shared_ptr<SerialFence>>> serialFences;
+  uint64_t fenceCompletedSerial = 0;
   bool gpuTiming = false;
   bool drawTiming = false;
   std::atomic<uint32_t> pipelineIds{0};
@@ -1305,9 +1355,71 @@ VkSemaphore TakeAcquire(WGPUDeviceImpl* dev, bool touchesSwapchain, uint64_t ser
   return sem;
 }
 
+// Tier 0: the fence that submission `serial` signals, or VK_NULL_HANDLE on a timeline device. Caller
+// holds queueMutex and passes it to the submit of that serial.
+VkFence NewSerialFence(WGPUDeviceImpl* dev, uint64_t serial) {
+  if (!dev->legacy) {
+    return VK_NULL_HANDLE;
+  }
+  auto fence = std::make_shared<SerialFence>();
+  fence->device = dev->device;
+  const VkFenceCreateInfo info{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VK_CHECK(vkCreateFence(dev->device, &info, nullptr, &fence->fence));
+  const VkFence handle = fence->fence;
+  std::lock_guard lock(dev->fenceMutex);
+  dev->serialFences.emplace_back(serial, std::move(fence));
+  return handle;
+}
+
+// Waits up to timeoutNs for submission `serial` to finish.
+void WaitSerial(WGPUDeviceImpl* dev, uint64_t serial, uint64_t timeoutNs) {
+  if (!dev->legacy) {
+    const VkSemaphoreWaitInfo wait{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+        .semaphoreCount = 1,
+        .pSemaphores = &dev->timeline,
+        .pValues = &serial,
+    };
+    vkWaitSemaphores(dev->device, &wait, timeoutNs);
+    return;
+  }
+  // The first fence at or after `serial`; none left means it has already finished.
+  std::shared_ptr<SerialFence> fence;
+  {
+    std::lock_guard lock(dev->fenceMutex);
+    for (const auto& entry : dev->serialFences) {
+      if (entry.first >= serial) {
+        fence = entry.second;
+        break;
+      }
+    }
+  }
+  if (fence != nullptr) {
+    vkWaitForFences(dev->device, 1, &fence->fence, VK_TRUE, timeoutNs);
+  }
+}
+
 uint64_t PollCompleted(WGPUDeviceImpl* dev) {
   uint64_t value = 0;
-  VK_CHECK(vkGetSemaphoreCounterValue(dev->device, dev->timeline, &value));
+  if (dev->legacy) {
+    // Fences are checked in submission order and stop at the first unfinished one, so the serial
+    // reported never runs ahead of an earlier submission.
+    std::lock_guard lock(dev->fenceMutex);
+    while (!dev->serialFences.empty()) {
+      const VkResult status = vkGetFenceStatus(dev->device, dev->serialFences.front().second->fence);
+      if (status == VK_NOT_READY) {
+        break;
+      }
+      if (status != VK_SUCCESS) {
+        Fatal("vkGetFenceStatus", status);
+      }
+      dev->fenceCompletedSerial = dev->serialFences.front().first;
+      dev->serialFences.pop_front();
+    }
+    value = dev->fenceCompletedSerial;
+  } else {
+    VK_CHECK(vkGetSemaphoreCounterValue(dev->device, dev->timeline, &value));
+  }
   uint64_t prev = dev->completedSerial.load(std::memory_order_relaxed);
   while (value > prev && !dev->completedSerial.compare_exchange_weak(prev, value)) {
   }
@@ -1475,13 +1587,7 @@ void CompletionThread(WGPUDeviceImpl* dev) {
       std::unique_lock lock(dev->futureMutex);
       dev->futureCv.wait_for(lock, std::chrono::milliseconds(50));
     } else {
-      const VkSemaphoreWaitInfo wait{
-          .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-          .semaphoreCount = 1,
-          .pSemaphores = &dev->timeline,
-          .pValues = &target,
-      };
-      vkWaitSemaphores(dev->device, &wait, 50'000'000);
+      WaitSerial(dev, target, 50'000'000);
     }
     Retire(dev);
     FireReady(dev, [](const FutureRec& f) { return f.mode == WGPUCallbackMode_AllowSpontaneous; });
@@ -1582,6 +1688,7 @@ struct WGPUTextureImpl : Object {
 struct WGPUTextureViewImpl : Object {
   WGPUTextureImpl* texture = nullptr;
   VkImageView view = VK_NULL_HANDLE;
+  VkFormat format = VK_FORMAT_UNDEFINED; // the view's own format (tier 0 render passes)
   uint32_t baseMip = 0;
   uint32_t baseLayer = 0;
   uint32_t width = 0;
@@ -1889,6 +1996,9 @@ struct WGPUSurfaceImpl : Object {
   // The swapchain leaves rotation to the compositor (see wgpuSurfaceConfigure), which Android
   // answers with VK_SUBOPTIMAL_KHR on every acquire; that alone must not read as a stale swapchain.
   bool rotatedByCompositor = false;
+  // The last swapchain create failed with VK_ERROR_SURFACE_LOST_KHR: acquire reports Lost so aurora
+  // recreates the surface rather than reconfiguring the dead one.
+  bool surfaceLost = false;
   std::vector<WGPUTextureImpl*> images;
   std::vector<VkSemaphore> acquireSems;
   std::vector<uint64_t> acquireSemSerial;
@@ -1975,6 +2085,14 @@ WGPUDeviceImpl::~WGPUDeviceImpl() {
       vkDestroyDescriptorPool(device, pool, nullptr);
     }
     vkDestroySemaphore(device, timeline, nullptr);
+    {
+      std::lock_guard lock(fenceMutex);
+      serialFences.clear();
+    }
+    for (const auto& [key, renderPass] : renderPasses) {
+      vkDestroyRenderPass(device, renderPass, nullptr);
+    }
+    renderPasses.clear();
     for (const auto& [size, buffer, alloc, mapped] : freeBackings) {
       vmaDestroyBuffer(vma, buffer, alloc);
     }
@@ -2214,6 +2332,140 @@ bool ChooseCachedStaging(WGPUDeviceImpl* dev) {
   return cached;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Tier 0 render passes (WGPUDeviceImpl::legacy)
+
+// One attachment of a tier 0 render pass. A colour slot whose format is VK_FORMAT_UNDEFINED is unused.
+struct LegacyAttachment {
+  VkFormat format = VK_FORMAT_UNDEFINED;
+  VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+  VkAttachmentLoadOp load = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  VkAttachmentStoreOp store = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  VkAttachmentLoadOp stencilLoad = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  VkAttachmentStoreOp stencilStore = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL;
+};
+
+// The render pass for these attachments, made once and kept for the device's life. Each attachment
+// starts, renders and ends in its own layout: the encoder's barriers make the transitions, as they do
+// around dynamic rendering, so the pass changes no layout and needs only the implicit dependencies.
+// `resolves` is empty or parallel to `colors`.
+VkRenderPass LegacyRenderPass(WGPUDeviceImpl* dev, const std::vector<LegacyAttachment>& colors,
+                              const std::vector<LegacyAttachment>& resolves, const LegacyAttachment& depth) {
+  std::string key;
+  const auto put = [&key](uint32_t value) { key.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+  const auto putAttachment = [&put](const LegacyAttachment& a) {
+    put(static_cast<uint32_t>(a.format));
+    put(static_cast<uint32_t>(a.samples));
+    put(static_cast<uint32_t>(a.load));
+    put(static_cast<uint32_t>(a.store));
+    put(static_cast<uint32_t>(a.stencilLoad));
+    put(static_cast<uint32_t>(a.stencilStore));
+    put(static_cast<uint32_t>(a.layout));
+  };
+  put(static_cast<uint32_t>(colors.size()));
+  for (const LegacyAttachment& a : colors) {
+    putAttachment(a);
+  }
+  put(static_cast<uint32_t>(resolves.size()));
+  for (const LegacyAttachment& a : resolves) {
+    putAttachment(a);
+  }
+  putAttachment(depth);
+
+  std::lock_guard lock(dev->renderPassMutex);
+  if (const auto it = dev->renderPasses.find(key); it != dev->renderPasses.end()) {
+    return it->second;
+  }
+  std::vector<VkAttachmentDescription> descs;
+  descs.reserve(colors.size() * 2 + 1);
+  const auto add = [&descs](const LegacyAttachment& a) {
+    descs.push_back(VkAttachmentDescription{
+        .format = a.format,
+        .samples = a.samples,
+        .loadOp = a.load,
+        .storeOp = a.store,
+        .stencilLoadOp = a.stencilLoad,
+        .stencilStoreOp = a.stencilStore,
+        .initialLayout = a.layout,
+        .finalLayout = a.layout,
+    });
+    return VkAttachmentReference{static_cast<uint32_t>(descs.size() - 1), a.layout};
+  };
+  constexpr VkAttachmentReference kUnused{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
+  std::vector<VkAttachmentReference> colorRefs(colors.size(), kUnused);
+  std::vector<VkAttachmentReference> resolveRefs(colors.size(), kUnused);
+  bool anyResolve = false;
+  for (size_t i = 0; i < colors.size(); ++i) {
+    if (colors[i].format != VK_FORMAT_UNDEFINED) {
+      colorRefs[i] = add(colors[i]);
+    }
+  }
+  for (size_t i = 0; i < resolves.size() && i < colors.size(); ++i) {
+    if (resolves[i].format != VK_FORMAT_UNDEFINED) {
+      resolveRefs[i] = add(resolves[i]);
+      anyResolve = true;
+    }
+  }
+  VkAttachmentReference depthRef = kUnused;
+  const bool hasDepth = depth.format != VK_FORMAT_UNDEFINED;
+  if (hasDepth) {
+    depthRef = add(depth);
+  }
+  const VkSubpassDescription subpass{
+      .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+      .colorAttachmentCount = static_cast<uint32_t>(colorRefs.size()),
+      .pColorAttachments = colorRefs.empty() ? nullptr : colorRefs.data(),
+      .pResolveAttachments = anyResolve ? resolveRefs.data() : nullptr,
+      .pDepthStencilAttachment = hasDepth ? &depthRef : nullptr,
+  };
+  const VkRenderPassCreateInfo info{
+      .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      .attachmentCount = static_cast<uint32_t>(descs.size()),
+      .pAttachments = descs.empty() ? nullptr : descs.data(),
+      .subpassCount = 1,
+      .pSubpasses = &subpass,
+  };
+  VkRenderPass renderPass = VK_NULL_HANDLE;
+  VK_CHECK(vkCreateRenderPass(dev->device, &info, nullptr, &renderPass));
+  dev->renderPasses.emplace(std::move(key), renderPass);
+  return renderPass;
+}
+
+// The render pass a tier 0 pipeline is created against. Render pass compatibility looks only at the
+// attachments' formats and sample counts, so this one serves every pass that draws with the pipeline,
+// whatever its load and store operations and layouts.
+VkRenderPass LegacyCompatiblePass(WGPUDeviceImpl* dev, const std::vector<VkFormat>& colorFormats, VkFormat depthFormat,
+                                  VkSampleCountFlagBits samples) {
+  std::vector<LegacyAttachment> colors(colorFormats.size());
+  for (size_t i = 0; i < colorFormats.size(); ++i) {
+    colors[i].format = colorFormats[i];
+    colors[i].samples = samples;
+    colors[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  }
+  LegacyAttachment depth;
+  depth.format = depthFormat;
+  depth.samples = samples;
+  depth.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  return LegacyRenderPass(dev, colors, {}, depth);
+}
+
+// A tier 0 pass's framebuffer. The encoder references it like any other object, so it is destroyed
+// once the GPU is done with the command buffer; it holds its views, so none goes before it.
+struct LegacyFramebuffer : Object {
+  VkDevice device = VK_NULL_HANDLE;
+  VkFramebuffer framebuffer = VK_NULL_HANDLE;
+  std::vector<WGPUTextureViewImpl*> views;
+  ~LegacyFramebuffer() override {
+    if (framebuffer != VK_NULL_HANDLE) {
+      vkDestroyFramebuffer(device, framebuffer, nullptr);
+    }
+    for (WGPUTextureViewImpl* view : views) {
+      view->Release();
+    }
+  }
+};
+
 WGPUDeviceImpl* CreateDevice() {
   auto* dev = new WGPUDeviceImpl;
   dev->instance = g_vkInstance;
@@ -2251,6 +2503,18 @@ WGPUDeviceImpl* CreateDevice() {
 #endif
   // AURORA_VK_FORCE_1_1 runs a 1.3 device through the 1.1 path too, so drivers compare on the same path.
   const bool forceTier1 = kAllowTier1 && std::getenv("AURORA_VK_FORCE_1_1") != nullptr;
+  // Tier 0: a Vulkan 1.1 device without the extensions above, on Android 10 and older only (Adreno 5xx
+  // and PowerVR GE8320 drivers). It renders through VkRenderPass and tracks submissions with fences,
+  // as ARMSX2 and PPSSPP do on these GPUs. Android 11 and newer never take it: their devices are
+  // chosen and run exactly as before.
+#if defined(__ANDROID__)
+  const bool allowTier0 = android_get_device_api_level() < 30;
+#else
+  constexpr bool allowTier0 = false;
+#endif
+  // AURORA_VK_FORCE_TIER0=1 runs the chosen device through tier 0 too (Android), to compare.
+  const bool forceTier0 = kAllowTier1 && std::getenv("AURORA_VK_FORCE_TIER0") != nullptr;
+  bool chosenTier0 = false;
   for (VkPhysicalDevice candidate : devices) {
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(candidate, &props);
@@ -2258,6 +2522,7 @@ WGPUDeviceImpl* CreateDevice() {
     // Only Android loads the KHR entry points (LoadDeviceFunctions); elsewhere calls bind to the
     // loader's core names, so a device must have 1.3.
     const bool api13 = props.apiVersion >= VK_API_VERSION_1_3 && !forceTier1;
+    bool tier0 = false;
     if (!api13) {
       std::string missing;
       for (const char* name : kTier1Extensions) {
@@ -2266,19 +2531,26 @@ WGPUDeviceImpl* CreateDevice() {
         }
       }
       if (!kAllowTier1 || props.apiVersion < VK_API_VERSION_1_1 || !missing.empty()) {
-        Log("skipping %s (Vulkan %u.%u): missing %s", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
-            VK_API_VERSION_MINOR(props.apiVersion), missing.empty() ? "Vulkan 1.3" : missing.c_str());
-        continue;
+        tier0 = allowTier0 && props.apiVersion >= VK_API_VERSION_1_1;
+        if (!tier0) {
+          Log("skipping %s (Vulkan %u.%u): missing %s", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
+              VK_API_VERSION_MINOR(props.apiVersion), missing.empty() ? "Vulkan 1.3" : missing.c_str());
+          continue;
+        }
+        Log("%s (Vulkan %u.%u) has no %s: tier 0 (render passes, fences)", props.deviceName,
+            VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion), missing.c_str());
       }
     }
-    const int score = (api13 ? 4 : 0) + (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? 3
-                                         : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2
-                                                                                                       : 1);
+    // Vulkan 1.3 first, then tier 1, then tier 0; within each, discrete before integrated.
+    const int score = (api13 ? 8 : tier0 ? 0 : 4) + (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? 3
+                                                     : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2
+                                                                                                                   : 1);
     if (score > bestScore) {
       bestScore = score;
       dev->phys = candidate;
       dev->props = props;
       dev->api13 = api13;
+      chosenTier0 = tier0;
       available = std::move(list);
     }
   }
@@ -2287,6 +2559,8 @@ WGPUDeviceImpl* CreateDevice() {
     delete dev;
     return nullptr;
   }
+  // A forced tier 0 keeps the device's features and extensions; only its passes and submissions change.
+  dev->legacy = chosenTier0 || forceTier0;
 
   uint32_t familyCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(dev->phys, &familyCount, nullptr);
@@ -2334,8 +2608,22 @@ WGPUDeviceImpl* CreateDevice() {
                                                   .pNext = &haveDemote};
   VkPhysicalDeviceVulkanMemoryModelFeatures haveMemoryModel{
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES, .pNext = &haveMaint4};
-  VkPhysicalDeviceFeatures2 have{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-                                 .pNext = dev->api13 ? static_cast<void*>(&have12) : &haveMemoryModel};
+  void* haveChain = dev->api13 ? static_cast<void*>(&have12) : &haveMemoryModel;
+  if (chosenTier0) {
+    // An Android 10 driver is asked only about the extensions it has.
+    haveChain = nullptr;
+    const auto link = [&](auto& features, const char* extension) {
+      if (has(available, extension)) {
+        features.pNext = haveChain;
+        haveChain = &features;
+      }
+    };
+    link(haveSync2, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+    link(haveDemote, VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME);
+    link(haveMaint4, VK_KHR_MAINTENANCE_4_EXTENSION_NAME);
+    link(haveMemoryModel, VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME);
+  }
+  VkPhysicalDeviceFeatures2 have{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = haveChain};
   vkGetPhysicalDeviceFeatures2(dev->phys, &have);
 
   VkPhysicalDeviceDynamicRenderingFeatures wantRendering{
@@ -2363,10 +2651,15 @@ WGPUDeviceImpl* CreateDevice() {
     dev->hasSync2 = true;
     dev->hasStoreOpNone = true;
     dev->hasDemote = have13.shaderDemoteToHelperInvocation;
+  } else if (chosenTier0) {
+    // None of the tier 1 extensions: no dynamic rendering or timeline semaphore features to ask for.
+    wantChain = nullptr;
   } else {
     for (const char* name : kTier1Extensions) {
       extensions.push_back(name);
     }
+  }
+  if (!dev->api13) {
     // AURORA_VK_NO_SYNC2 emulates synchronization2 on a driver that has it, to compare with malisx2.
     if (haveSync2.synchronization2 && std::getenv("AURORA_VK_NO_SYNC2") == nullptr &&
         enableIfPresent(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
@@ -2394,6 +2687,7 @@ WGPUDeviceImpl* CreateDevice() {
       wantChain = &wantMemoryModel;
     }
   }
+  dev->hasMemoryBudget = enableIfPresent(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
   VkPhysicalDeviceFeatures2 want{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = wantChain};
   want.features.textureCompressionBC = have.features.textureCompressionBC;
   want.features.samplerAnisotropy = have.features.samplerAnisotropy;
@@ -2433,22 +2727,40 @@ WGPUDeviceImpl* CreateDevice() {
       .vkGetInstanceProcAddr = AURORA_GET_INSTANCE_PROC_ADDR,
       .vkGetDeviceProcAddr = AURORA_GET_DEVICE_PROC_ADDR,
   };
+  // VMA reserves 256 MiB blocks on a large heap, and on a phone every heap is the shared RAM. Tier 0
+  // devices (Android 10, 2-4 GB) get 32 MiB blocks so a texture burst does not claim a whole new
+  // 256 MiB block; AURORA_VK_BLOCK_MB overrides it on any device (0 = VMA default).
+  uint64_t blockBytes = dev->legacy ? 32ull << 20 : 0;
+  if (const char* v = std::getenv("AURORA_VK_BLOCK_MB"); v != nullptr && *v != '\0') {
+    blockBytes = std::strtoull(v, nullptr, 10) << 20;
+  }
   const VmaAllocatorCreateInfo vmaInfo{
+      .flags = dev->hasMemoryBudget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0u,
       .physicalDevice = dev->phys,
       .device = dev->device,
+      .preferredLargeHeapBlockSize = blockBytes,
       .pVulkanFunctions = &vmaFunctions,
       .instance = g_vkInstance,
       .vulkanApiVersion = dev->api13 ? VK_API_VERSION_1_3 : VK_API_VERSION_1_1,
   };
+  if (blockBytes != 0 || dev->hasMemoryBudget) {
+    Log("memory: VMA block %llu MiB%s", static_cast<unsigned long long>(blockBytes >> 20),
+        dev->hasMemoryBudget ? ", VK_EXT_memory_budget" : "");
+  }
   VK_CHECK(vmaCreateAllocator(&vmaInfo, &dev->vma));
 
-  const VkSemaphoreTypeCreateInfo timelineType{
-      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-      .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-      .initialValue = 0,
-  };
-  const VkSemaphoreCreateInfo semInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &timelineType};
-  VK_CHECK(vkCreateSemaphore(dev->device, &semInfo, nullptr, &dev->timeline));
+  if (!dev->legacy) {
+    const VkSemaphoreTypeCreateInfo timelineType{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+        .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+        .initialValue = 0,
+    };
+    const VkSemaphoreCreateInfo semInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &timelineType};
+    VK_CHECK(vkCreateSemaphore(dev->device, &semInfo, nullptr, &dev->timeline));
+  }
+#if defined(__ANDROID__)
+  g_chainTimelineInfo = !dev->legacy;
+#endif
 
   dev->pipelineCachePath = PipelineCachePath();
   std::vector<char> cacheData;
@@ -2472,12 +2784,15 @@ WGPUDeviceImpl* CreateDevice() {
     const std::string name = dev->props.deviceName;
     bool rename = UsingCustomDriver() && (name.find("Mali-G52") != std::string::npos ||
                                           name.find("Mali-G76") != std::string::npos);
+    // Adreno 5xx's Vulkan driver reads an indexed draw's indices on the CPU as well (a Redmi Note 7
+    // faulted in vkCmdDrawIndexed under Dawn), so a tier 0 Adreno gets the same CPU-written indices.
+    rename = rename || (dev->legacy && name.find("Adreno") != std::string::npos);
     if (const char* v = std::getenv("AURORA_VK_INDEX_RENAME"); v != nullptr && *v != 0) {
       rename = *v == '1';
     }
     dev->renameIndexCopies = rename;
     if (rename) {
-      Log("index buffers are written by the CPU (job-manager Mali driver)");
+      Log("index buffers are written by the CPU (%s)", dev->legacy && name.find("Adreno") != std::string::npos ? "tier 0 Adreno" : "job-manager Mali driver");
     }
   }
 
@@ -2489,6 +2804,9 @@ WGPUDeviceImpl* CreateDevice() {
       VK_API_VERSION_MAJOR(dev->props.apiVersion), VK_API_VERSION_MINOR(dev->props.apiVersion),
       VK_API_VERSION_PATCH(dev->props.apiVersion), dev->api13 ? "" : dev->hasSync2 ? ", 1.3 features from extensions" : ", 1.3 features from extensions, synchronization2 emulated",
       cacheData.size());
+  if (dev->legacy) {
+    Log("tier 0: render passes and fences%s", chosenTier0 ? "" : " (forced, AURORA_VK_FORCE_TIER0)");
+  }
   g_device = dev;
   return dev;
 }
@@ -2702,13 +3020,7 @@ WGPUWaitStatus wgpuInstanceWaitAny(WGPUInstance, size_t futureCount, WGPUFutureW
     }
     const uint64_t remaining =
         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count());
-    const VkSemaphoreWaitInfo wait{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-        .semaphoreCount = 1,
-        .pSemaphores = &dev->timeline,
-        .pValues = &minSerial,
-    };
-    vkWaitSemaphores(dev->device, &wait, std::min<uint64_t>(remaining, 5'000'000));
+    WaitSerial(dev, minSerial, std::min<uint64_t>(remaining, 5'000'000));
   }
 }
 
@@ -2981,6 +3293,20 @@ void wgpuBufferUnmap(WGPUBuffer buffer) {
 
 // --- textures ---
 
+// Per-heap usage and budget (the driver's figure with VK_EXT_memory_budget, VMA's estimate without).
+static void LogHeapBudgets(WGPUDeviceImpl* dev, const char* why) {
+  const VkPhysicalDeviceMemoryProperties* props = nullptr;
+  vmaGetMemoryProperties(dev->vma, &props);
+  VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+  vmaGetHeapBudgets(dev->vma, budgets);
+  for (uint32_t i = 0; props != nullptr && i < props->memoryHeapCount; ++i) {
+    Log("memory: %s: heap %u usage %llu MiB / budget %llu MiB (aurora blocks %llu MiB)", why, i,
+        static_cast<unsigned long long>(budgets[i].usage >> 20),
+        static_cast<unsigned long long>(budgets[i].budget >> 20),
+        static_cast<unsigned long long>(budgets[i].statistics.blockBytes >> 20));
+  }
+}
+
 WGPUTexture wgpuDeviceCreateTexture(WGPUDevice dev, const WGPUTextureDescriptor* descriptor) {
   auto* tex = new WGPUTextureImpl;
   tex->dev = dev;
@@ -3026,7 +3352,18 @@ WGPUTexture wgpuDeviceCreateTexture(WGPUDevice dev, const WGPUTextureDescriptor*
       .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
   };
   const VmaAllocationCreateInfo allocInfo{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
-  VK_CHECK(vmaCreateImage(dev->vma, &info, &allocInfo, &tex->image, &tex->alloc, nullptr));
+  VkResult imageResult = vmaCreateImage(dev->vma, &info, &allocInfo, &tex->image, &tex->alloc, nullptr);
+  if (imageResult == VK_ERROR_OUT_OF_DEVICE_MEMORY || imageResult == VK_ERROR_OUT_OF_HOST_MEMORY) {
+    // ARMSX2 retries a failed texture instead of dying: a new dedicated allocation or block can fail
+    // while the blocks already held still have room, so try those before giving up.
+    LogHeapBudgets(dev, "texture allocation failed");
+    Log("memory: %ux%u format %d (%u mips) out of memory, retrying in existing blocks", tex->width, tex->height,
+        static_cast<int>(tex->info.vk), tex->mips);
+    const VmaAllocationCreateInfo existingOnly{.flags = VMA_ALLOCATION_CREATE_NEVER_ALLOCATE_BIT,
+                                               .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    imageResult = vmaCreateImage(dev->vma, &info, &existingOnly, &tex->image, &tex->alloc, nullptr);
+  }
+  VK_CHECK(imageResult);
   tex->aspects = AspectFor(tex->info, WGPUTextureAspect_All);
   if (!LayoutsEnabled() || (usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0) {
     tex->home = VK_IMAGE_LAYOUT_GENERAL;
@@ -3053,6 +3390,9 @@ WGPUTexture wgpuDeviceCreateTexture(WGPUDevice dev, const WGPUTextureDescriptor*
 
 void wgpuTextureAddRef(WGPUTexture texture) { texture->AddRef(); }
 void wgpuTextureRelease(WGPUTexture texture) { texture->Release(); }
+// The present pass sizes its viewport from the swapchain image (aurora.cpp present_presentation_job).
+uint32_t wgpuTextureGetWidth(WGPUTexture texture) { return texture->width; }
+uint32_t wgpuTextureGetHeight(WGPUTexture texture) { return texture->height; }
 
 WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureViewDescriptor* descriptor) {
   auto* view = new WGPUTextureViewImpl;
@@ -3060,6 +3400,7 @@ WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureView
   texture->AddRef();
   if (descriptor == nullptr && texture->defaultView != VK_NULL_HANDLE) {
     view->view = texture->defaultView;
+    view->format = texture->info.vk;
     view->baseMip = 0;
     view->width = texture->width;
     view->height = texture->height;
@@ -3110,6 +3451,7 @@ WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureView
   if (descriptor == nullptr && texture->swapchain && texture->defaultView == VK_NULL_HANDLE) {
     texture->defaultView = view->view;
   }
+  view->format = info.vk;
   view->baseMip = desc.baseMipLevel;
   view->baseLayer = desc.baseArrayLayer;
   view->width = std::max(1u, texture->width >> desc.baseMipLevel);
@@ -3499,9 +3841,15 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice dev, const WGPURend
       .depthAttachmentFormat = depthFormat,
       .stencilAttachmentFormat = stencilFormat,
   };
+  // Tier 0: no dynamic rendering; the pipeline is made against a compatible render pass instead.
+  const VkRenderPass legacyPass =
+      dev->legacy ? LegacyCompatiblePass(dev, colorFormats,
+                                         depthFormat != VK_FORMAT_UNDEFINED ? depthFormat : stencilFormat,
+                                         multisample.rasterizationSamples)
+                  : VK_NULL_HANDLE;
   const VkGraphicsPipelineCreateInfo info{
       .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-      .pNext = &rendering,
+      .pNext = dev->legacy ? nullptr : &rendering,
       .stageCount = descriptor->fragment != nullptr ? 2u : 1u,
       .pStages = stages.data(),
       .pVertexInputState = &vertexInput,
@@ -3513,6 +3861,8 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice dev, const WGPURend
       .pColorBlendState = &colorBlend,
       .pDynamicState = &dynamic,
       .layout = descriptor->layout->layout,
+      .renderPass = legacyPass,
+      .subpass = 0,
   };
   const VkResult result = vkCreateGraphicsPipelines(dev->device, dev->pipelineCache, 1, &info, nullptr, &pipeline->pipeline);
   if (result != VK_SUCCESS) {
@@ -3603,8 +3953,11 @@ void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder encoder, WGPUBuffer
     return;
   }
   WGPUDeviceImpl* dev = encoder->dev;
-  if (dev->renameIndexCopies && (destination->usage & WGPUBufferUsage_Index) && source->mapped != nullptr &&
-      destination->mapped != nullptr) {
+  // Tier 0 never renames an index buffer that is also bound as storage (GX index pulling): its bind
+  // group holds the VkBuffer and would go on reading the old memory.
+  const bool boundAsStorage = dev->legacy && (destination->usage & WGPUBufferUsage_Storage) != 0;
+  if (dev->renameIndexCopies && (destination->usage & WGPUBufferUsage_Index) && !boundAsStorage &&
+      source->mapped != nullptr && destination->mapped != nullptr) {
     // RenameIndexCopy: the draws recorded after this bind the new memory, the ones before keep the old.
     auto* old = new RetiredBacking;
     old->dev = dev;
@@ -3843,7 +4196,96 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
       .pStencilAttachment = hasStencil ? &stencil : nullptr,
   };
   const uint32_t startQuery = WriteTimestamp(encoder->slot, false, 2);
-  vkCmdBeginRendering(cb, &info);
+  if (encoder->dev->legacy) {
+    // Tier 0: the same pass as a VkRenderPass, with a framebuffer made for it. Attachments are listed
+    // the way LegacyRenderPass numbers them: colours, then resolve targets, then depth/stencil.
+    auto* framebuffer = new LegacyFramebuffer;
+    framebuffer->device = encoder->dev->device;
+    std::vector<VkImageView> views;
+    std::vector<VkClearValue> clears;
+    uint32_t fbWidth = UINT32_MAX;
+    uint32_t fbHeight = UINT32_MAX;
+    const auto attach = [&](WGPUTextureViewImpl* view, const VkClearValue& clear) {
+      view->AddRef();
+      framebuffer->views.push_back(view);
+      views.push_back(view->view);
+      clears.push_back(clear);
+      fbWidth = std::min(fbWidth, view->width);
+      fbHeight = std::min(fbHeight, view->height);
+    };
+    std::vector<LegacyAttachment> legacyColors(descriptor->colorAttachmentCount);
+    std::vector<LegacyAttachment> legacyResolves;
+    for (size_t i = 0; i < descriptor->colorAttachmentCount; ++i) {
+      const auto& a = descriptor->colorAttachments[i];
+      if (a.view == nullptr) {
+        continue;
+      }
+      LegacyAttachment& c = legacyColors[i];
+      c.format = a.view->format;
+      c.samples = static_cast<VkSampleCountFlagBits>(a.view->texture->samples);
+      c.load = colors[i].loadOp;
+      c.store = colors[i].storeOp;
+      c.layout = colorLayout;
+      attach(a.view, colors[i].clearValue);
+    }
+    for (size_t i = 0; i < descriptor->colorAttachmentCount; ++i) {
+      const auto& a = descriptor->colorAttachments[i];
+      if (a.view == nullptr || a.resolveTarget == nullptr) {
+        continue;
+      }
+      legacyResolves.resize(descriptor->colorAttachmentCount);
+      LegacyAttachment& r = legacyResolves[i];
+      r.format = a.resolveTarget->format;
+      r.samples = VK_SAMPLE_COUNT_1_BIT;
+      r.load = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+      r.store = VK_ATTACHMENT_STORE_OP_STORE;
+      r.layout = colorLayout;
+      attach(a.resolveTarget, VkClearValue{});
+    }
+    LegacyAttachment legacyDepth;
+    if (hasDepth || hasStencil) {
+      const auto* d = descriptor->depthStencilAttachment;
+      legacyDepth.format = d->view->format;
+      legacyDepth.samples = static_cast<VkSampleCountFlagBits>(d->view->texture->samples);
+      legacyDepth.load = hasDepth ? depth.loadOp : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+      legacyDepth.store = hasDepth ? depth.storeOp : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+      legacyDepth.stencilLoad = hasStencil ? stencil.loadOp : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+      legacyDepth.stencilStore = hasStencil ? stencil.storeOp : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+      legacyDepth.layout = depthLayout;
+      VkClearValue clear{};
+      clear.depthStencil.depth = depth.clearValue.depthStencil.depth;
+      clear.depthStencil.stencil = stencil.clearValue.depthStencil.stencil;
+      attach(d->view, clear);
+    }
+    if (views.empty()) {
+      fbWidth = std::max(1u, width);
+      fbHeight = std::max(1u, height);
+    }
+    const VkRenderPass renderPass = LegacyRenderPass(encoder->dev, legacyColors, legacyResolves, legacyDepth);
+    const VkFramebufferCreateInfo fbInfo{
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = renderPass,
+        .attachmentCount = static_cast<uint32_t>(views.size()),
+        .pAttachments = views.empty() ? nullptr : views.data(),
+        .width = fbWidth,
+        .height = fbHeight,
+        .layers = 1,
+    };
+    VK_CHECK(vkCreateFramebuffer(encoder->dev->device, &fbInfo, nullptr, &framebuffer->framebuffer));
+    encoder->Ref(framebuffer);
+    framebuffer->Release();
+    const VkRenderPassBeginInfo begin{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = renderPass,
+        .framebuffer = framebuffer->framebuffer,
+        .renderArea = {{0, 0}, {fbWidth, fbHeight}},
+        .clearValueCount = static_cast<uint32_t>(clears.size()),
+        .pClearValues = clears.empty() ? nullptr : clears.data(),
+    };
+    vkCmdBeginRenderPass(cb, &begin, VK_SUBPASS_CONTENTS_INLINE);
+  } else {
+    vkCmdBeginRendering(cb, &info);
+  }
   // WebGPU's defaults: the whole target, y up.
   const VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width), -static_cast<float>(height),
                             0.0f, 1.0f};
@@ -3865,7 +4307,11 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
 void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder pass) { pass->Release(); }
 
 void wgpuRenderPassEncoderEnd(WGPURenderPassEncoder pass) {
-  vkCmdEndRendering(pass->cb);
+  if (pass->encoder->dev->legacy) {
+    vkCmdEndRenderPass(pass->cb);
+  } else {
+    vkCmdEndRendering(pass->cb);
+  }
   if (pass->timed.query != UINT32_MAX) {
     WriteTimestamp(pass->encoder->slot, true);
     pass->encoder->slot.timing->passes.push_back(pass->timed);
@@ -4037,16 +4483,18 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
         .semaphore = acquire,
         .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
     };
+    // Tier 0 has no timeline semaphore: the serial's fence stands in for the signal.
+    const VkFence fence = NewSerialFence(dev, serial);
     const VkSubmitInfo2 submit{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
         .waitSemaphoreInfoCount = acquire != VK_NULL_HANDLE ? 1u : 0u,
         .pWaitSemaphoreInfos = &wait,
         .commandBufferInfoCount = static_cast<uint32_t>(cbs.size()),
         .pCommandBufferInfos = cbs.data(),
-        .signalSemaphoreInfoCount = 1,
-        .pSignalSemaphoreInfos = &signal,
+        .signalSemaphoreInfoCount = dev->legacy ? 0u : 1u,
+        .pSignalSemaphoreInfos = dev->legacy ? nullptr : &signal,
     };
-    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, fence));
     std::lock_guard inflightLock(dev->inflightMutex);
     dev->inflight.push_back(std::move(entry));
   }
@@ -4303,7 +4751,7 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
   }
   surface->wgpuFormat = config->format;
   surface->format = GetFormat(config->format).vk;
-  const VkSwapchainCreateInfoKHR info{
+  VkSwapchainCreateInfoKHR info{
       .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
       .surface = surface->surface,
       .minImageCount = imageCount,
@@ -4319,10 +4767,35 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
       .clipped = VK_TRUE,
       .oldSwapchain = old,
   };
-  VK_CHECK(vkCreateSwapchainKHR(dev->device, &info, nullptr, &surface->swapchain));
+  surface->swapchain = VK_NULL_HANDLE;
+  VkResult created = vkCreateSwapchainKHR(dev->device, &info, nullptr, &surface->swapchain);
+  // The old swapchain is retired even when creation fails.
   if (old != VK_NULL_HANDLE) {
     vkDestroySwapchainKHR(dev->device, old, nullptr);
   }
+  // Stock Adreno drivers refuse a new swapchain on the same ANativeWindow while the old one is
+  // still attached (ARMSX2 #374/#380): with the old one destroyed above, try once more without it.
+  if (created == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR && old != VK_NULL_HANDLE) {
+    Log("swapchain: native window in use, retrying without the old swapchain");
+    info.oldSwapchain = VK_NULL_HANDLE;
+    surface->swapchain = VK_NULL_HANDLE;
+    created = vkCreateSwapchainKHR(dev->device, &info, nullptr, &surface->swapchain);
+  }
+  if (created != VK_SUCCESS) {
+    // No swapchain: acquire reports Error (or Lost) and aurora reconfigures on a later frame,
+    // instead of aborting while the window is being torn down or handed back.
+    static int s_failures = 0;
+    if (++s_failures <= 8 || s_failures % 120 == 0) {
+      Log("swapchain: create failed (VkResult %d, %ux%u), will retry (%d)", static_cast<int>(created), extent.width,
+          extent.height, s_failures);
+    }
+    surface->swapchain = VK_NULL_HANDLE;
+    surface->surfaceLost = created == VK_ERROR_SURFACE_LOST_KHR;
+    surface->width = 0;
+    surface->height = 0;
+    return;
+  }
+  surface->surfaceLost = false;
   surface->width = extent.width;
   surface->height = extent.height;
   uint32_t count = 0;
@@ -4365,20 +4838,15 @@ void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture* out) 
   out->texture = nullptr;
   WGPUDeviceImpl* dev = surface->dev;
   if (dev == nullptr || surface->swapchain == VK_NULL_HANDLE) {
-    out->status = WGPUSurfaceGetCurrentTextureStatus_Error;
+    out->status = surface->surfaceLost ? WGPUSurfaceGetCurrentTextureStatus_Lost
+                                       : WGPUSurfaceGetCurrentTextureStatus_Error;
     return;
   }
   const uint32_t slot = surface->nextAcquire;
   // The semaphore must not still be waited on by an unfinished submission.
   if (const uint64_t serial = surface->acquireSemSerial[slot];
       serial != UINT64_MAX && serial > dev->completedSerial.load()) {
-    const VkSemaphoreWaitInfo wait{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-        .semaphoreCount = 1,
-        .pSemaphores = &dev->timeline,
-        .pValues = &serial,
-    };
-    vkWaitSemaphores(dev->device, &wait, UINT64_MAX);
+    WaitSerial(dev, serial, UINT64_MAX);
   }
   VkSemaphore sem = surface->acquireSems[slot];
   uint32_t index = 0;
@@ -4450,7 +4918,8 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
       debugViews[tex->image] = debugView;
     }
   }
-  if (debugView != VK_NULL_HANDLE) {
+  // Dynamic rendering only: tier 0 skips the debug clear.
+  if (debugView != VK_NULL_HANDLE && !dev->legacy) {
     {
       ImageLayoutBarrier(slot.cb, tex->image, VK_IMAGE_ASPECT_COLOR_BIT, from, VK_IMAGE_LAYOUT_GENERAL);
       from = VK_IMAGE_LAYOUT_GENERAL;
@@ -4515,16 +4984,19 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
         .semaphore = acquire,
         .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
     };
+    // Tier 0 has no timeline semaphore: only the present semaphore is signalled, and the serial's
+    // fence stands in for the timeline value.
+    const VkFence fence = NewSerialFence(dev, serial);
     const VkSubmitInfo2 submit{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
         .waitSemaphoreInfoCount = acquire != VK_NULL_HANDLE ? 1u : 0u,
         .pWaitSemaphoreInfos = &wait,
         .commandBufferInfoCount = static_cast<uint32_t>(cbs.size()),
         .pCommandBufferInfos = cbs.data(),
-        .signalSemaphoreInfoCount = static_cast<uint32_t>(signals.size()),
-        .pSignalSemaphoreInfos = signals.data(),
+        .signalSemaphoreInfoCount = dev->legacy ? 1u : static_cast<uint32_t>(signals.size()),
+        .pSignalSemaphoreInfos = dev->legacy ? &signals[1] : signals.data(),
     };
-    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, fence));
     {
       std::lock_guard inflightLock(dev->inflightMutex);
       dev->inflight.push_back(std::move(entry));

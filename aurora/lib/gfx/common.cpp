@@ -917,7 +917,7 @@ void initialize() {
     const wgpu::BufferDescriptor descriptor{
         .label = label,
         .usage = usage,
-        .size = size,
+        .size = size + webgpu::g_bufferTailSlack,
     };
     out = g_device.CreateBuffer(&descriptor);
   };
@@ -925,8 +925,10 @@ void initialize() {
                "Shared Uniform Buffer");
   createBuffer(g_vertexBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst, VertexBufferSize,
                "Shared Vertex Buffer");
-  createBuffer(g_indexBuffer, wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst, IndexBufferSize,
-               "Shared Index Buffer");
+  createBuffer(g_indexBuffer,
+               wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst |
+                   (webgpu::g_indexPulling ? wgpu::BufferUsage::Storage : wgpu::BufferUsage::None),
+               IndexBufferSize, "Shared Index Buffer");
   createBuffer(g_storageBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst, StorageBufferSize,
                "Shared Storage Buffer");
   for (int i = 0; i < g_stagingBuffers.size(); ++i) {
@@ -939,7 +941,7 @@ void initialize() {
   map_staging_buffer();
 
   {
-    constexpr std::array layoutEntries{
+    std::vector<wgpu::BindGroupLayoutEntry> layoutEntries{
         // Vertex data buffer
         wgpu::BindGroupLayoutEntry{
             .binding = 0,
@@ -959,13 +961,24 @@ void initialize() {
                 },
         },
     };
+    if (webgpu::g_indexPulling) {
+      // Index data buffer, read by the GX vertex shader (webgpu::g_indexPulling)
+      layoutEntries.push_back(wgpu::BindGroupLayoutEntry{
+          .binding = 2,
+          .visibility = wgpu::ShaderStage::Vertex,
+          .buffer =
+              wgpu::BufferBindingLayout{
+                  .type = wgpu::BufferBindingType::ReadOnlyStorage,
+              },
+      });
+    }
     const wgpu::BindGroupLayoutDescriptor layoutDesc{
         .label = "Static bind group layout",
         .entryCount = layoutEntries.size(),
         .entries = layoutEntries.data(),
     };
     g_staticBindGroupLayout = g_device.CreateBindGroupLayout(&layoutDesc);
-    const std::array entries{
+    std::vector<wgpu::BindGroupEntry> entries{
         wgpu::BindGroupEntry{
             .binding = 0,
             .buffer = g_vertexBuffer,
@@ -975,6 +988,12 @@ void initialize() {
             .buffer = g_storageBuffer,
         },
     };
+    if (webgpu::g_indexPulling) {
+      entries.push_back(wgpu::BindGroupEntry{
+          .binding = 2,
+          .buffer = g_indexBuffer,
+      });
+    }
     const wgpu::BindGroupDescriptor bindGroupDescriptor{
         .label = "Static bind group",
         .layout = g_staticBindGroupLayout,
@@ -1262,6 +1281,21 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
   g_uniforms.append_zeroes(gx::MaxUniformSize); // Pad the end of the buffer
   const auto used = staging_usage();
   for (unsigned i = 0; i < used.size(); ++i) g_stagingHighWater[i] = std::max(g_stagingHighWater[i], used[i]);
+  {
+    // Peak use of the shared buffers, logged each time one grows by 1 MiB or a batch split happens,
+    // so tester logs show how much of the fixed sizes (vertex 3, uniform 24, index 2, storage 8 MiB)
+    // a battle needs before anyone shrinks them for low-RAM phones.
+    static StagingSizes s_logged{};
+    static uint64_t s_loggedSplits = 0;
+    bool grew = g_stagingSplitCount != s_loggedSplits;
+    for (unsigned i = 0; i < used.size(); ++i) grew |= g_stagingHighWater[i] >= s_logged[i] + (1u << 20);
+    if (grew) {
+      s_logged = g_stagingHighWater;
+      s_loggedSplits = g_stagingSplitCount;
+      Log.info("staging peak: vertex {} KiB, uniform {} KiB, index {} KiB, storage {} KiB, splits {}",
+               s_logged[0] >> 10, s_logged[1] >> 10, s_logged[2] >> 10, s_logged[3] >> 10, s_loggedSplits);
+    }
+  }
   uint64_t bufferOffset = 0;
   const auto writeBuffer = [&](ByteBuffer& buf, wgpu::Buffer& out, uint64_t size, std::string_view label) {
     const auto writeSize = buf.size(); // Only need to copy this many bytes

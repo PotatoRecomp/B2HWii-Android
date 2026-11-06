@@ -85,6 +85,11 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, DrawEncod
     const wgpu::Color color{0.f, 0.f, 0.f, data.dstAlpha / 255.f};
     pass.SetBlendConstant(&color);
   }
+  if (webgpu::g_indexPulling) {
+    // The vertex shader reads index firstIndex + i itself (gx/shader.cpp, ibuf); base vertex is 0.
+    pass.Draw(data.indexCount, data.instanceCount, static_cast<uint32_t>(data.idxRange.offset / sizeof(uint16_t)));
+    return;
+  }
   if (!state.indexBufferBound) {
     // Bound once for the pass; draws select their range with firstIndex below.
     pass.SetIndexBuffer(gfx::g_indexBuffer, wgpu::IndexFormat::Uint16, 0, wgpu::kWholeSize);

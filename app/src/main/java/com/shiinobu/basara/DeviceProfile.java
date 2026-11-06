@@ -140,6 +140,15 @@ final class DeviceProfile {
         return v;
     }
 
+    /**
+     * Adreno 5xx on Android 10 or older: its 2020 Vulkan driver loses the device on the game's first
+     * screens, so the game runs Dawn's OpenGL ES backend there. Android 11 and later never match.
+     */
+    static boolean oldAdreno5(String gpu) {
+        if (android.os.Build.VERSION.SDK_INT >= 30 || gpu == null) return false;
+        return Pattern.compile("adreno[^0-9]*5\\d\\d").matcher(gpu.toLowerCase(Locale.ROOT)).find();
+    }
+
     /** Render scale for a GL_RENDERER string; 1x when the GPU is unknown. */
     static float scaleFor(String gpu) {
         final String g = gpu == null ? "" : gpu.toLowerCase(Locale.ROOT);

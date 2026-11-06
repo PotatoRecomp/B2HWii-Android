@@ -4,6 +4,7 @@
 #include "thermal.h"
 
 #if defined(__ANDROID__)
+#include <android/api-level.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <sched.h>
@@ -75,7 +76,8 @@ bool PinTo(const long long* freq, long long minKhz, int known) {
 // Helper threads that never hold the game thread up within a frame (the render worker queues GPU
 // work a frame behind, the SDL audio callback is a few hundred microseconds) are kept off the game
 // thread's cores, which on a phone with two big cores (Helio G81) are otherwise shared with them.
-// The GX thread is not one: it is in the hint session instead and the scheduler places it.
+// The GX thread is not one: it is in the hint session instead and the scheduler places it (except on
+// the Android 10 four-big-core phones of PinHelpers).
 bool IsHelperThread(const char* name) {
     return std::strncmp(name, "FrameWorker", 11) == 0 || std::strncmp(name, "SDLAudio", 8) == 0;
 }
@@ -129,20 +131,41 @@ void PinHelpers() {
         }
         return set;
     }();
+    // Android 10 phones whose fast cluster has four cores or more (Snapdragon 660/665: 4x A73 + 4x A53)
+    // keep the render workers and the GX thread on that cluster with the game thread, the way ARMSX2
+    // confines every busy emulator thread to the performance tier when the tier has a core for each:
+    // the game thread, two frame workers and the GX thread fit on four cores, and the other side is
+    // the A53 cluster, where the render worker's encode left a realme 5 (Adreno 610) waiting 6-11 ms a
+    // frame on it. Android 11+ is unchanged. BASARA_CPU_HELPERS=fast forces it, 0 turns placement off.
+    static const bool s_shareFast = [] {
+        const char* value = std::getenv("BASARA_CPU_HELPERS");
+        if (value != nullptr && std::strcmp(value, "fast") == 0) {
+            return true;
+        }
+        return android_get_device_api_level() < 30 && CPU_COUNT(&g_pinMask) >= 4;
+    }();
     if (!s_enabled || CPU_COUNT(&others) == 0) {
         return;
     }
     ForEachThread([&](int tid, const char* name) {
-        if (!IsHelperThread(name)) {
+        const bool worker = std::strncmp(name, "FrameWorker", 11) == 0;
+        const bool gx = std::strncmp(name, "GxThread", 8) == 0;
+        const cpu_set_t* target = nullptr;
+        if (s_shareFast && (worker || gx)) {
+            target = &g_pinMask;
+        } else if (IsHelperThread(name)) {
+            target = &others;
+        } else {
             return;
         }
         cpu_set_t current;
-        if (sched_getaffinity(tid, sizeof(current), &current) == 0 && CPU_EQUAL(&current, &others)) {
+        if (sched_getaffinity(tid, sizeof(current), &current) == 0 && CPU_EQUAL(&current, target)) {
             return;
         }
-        if (sched_setaffinity(tid, sizeof(others), &others) == 0 && ++g_helperPins <= 6) {
-            RT_LOGF(RT_TAG_RUNTIME, "cpu boost: %s (%d) kept off the game thread's cores (%d cores)\n", name,
-                    tid, CPU_COUNT(&others));
+        if (sched_setaffinity(tid, sizeof(*target), target) == 0 && ++g_helperPins <= 6) {
+            RT_LOGF(RT_TAG_RUNTIME, "cpu boost: %s (%d) %s (%d cores)\n", name, tid,
+                    target == &g_pinMask ? "shares the game thread's cluster" : "kept off the game thread's cores",
+                    CPU_COUNT(target));
         }
     });
 }

@@ -1420,8 +1420,9 @@ WGPUTextureFormat wgpuTextureGetFormat(WGPUTexture texture) {
   return dawn_wgpuTextureGetFormat(texture);
 }
 uint32_t dawn_wgpuTextureGetHeight(WGPUTexture texture);
+uint32_t vkw_wgpuTextureGetHeight(WGPUTexture texture);
 uint32_t wgpuTextureGetHeight(WGPUTexture texture) {
-  if (aurora_wgpu_vk) aurora_wgpu_missing("wgpuTextureGetHeight");
+  if (aurora_wgpu_vk) { return vkw_wgpuTextureGetHeight(texture); }
   return dawn_wgpuTextureGetHeight(texture);
 }
 uint32_t dawn_wgpuTextureGetMipLevelCount(WGPUTexture texture);
@@ -1445,8 +1446,9 @@ WGPUTextureUsage wgpuTextureGetUsage(WGPUTexture texture) {
   return dawn_wgpuTextureGetUsage(texture);
 }
 uint32_t dawn_wgpuTextureGetWidth(WGPUTexture texture);
+uint32_t vkw_wgpuTextureGetWidth(WGPUTexture texture);
 uint32_t wgpuTextureGetWidth(WGPUTexture texture) {
-  if (aurora_wgpu_vk) aurora_wgpu_missing("wgpuTextureGetWidth");
+  if (aurora_wgpu_vk) { return vkw_wgpuTextureGetWidth(texture); }
   return dawn_wgpuTextureGetWidth(texture);
 }
 void dawn_wgpuTexturePin(WGPUTexture texture, WGPUTextureUsage usage);

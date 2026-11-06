@@ -273,6 +273,12 @@ std::atomic<uint64_t> g_producerWaitNanos{0};
 
 bool frame_worker_requested() noexcept {
 #ifdef AURORA_ENABLE_GX
+  // Dawn's GL backend has one EGL context, current on one thread at a time; encode, submit and
+  // present from worker threads fail with EGL_BAD_ACCESS (Adreno 512, Android 10). Keep it on one.
+  if (webgpu::g_backendType == wgpu::BackendType::OpenGLES ||
+      webgpu::g_backendType == wgpu::BackendType::OpenGL) {
+    return false;
+  }
   static const bool enabled = [] {
 #if defined(__APPLE__)
     // ImGui's SDL backend may raise an SDL window from ImGui::NewFrame(). On
@@ -1021,10 +1027,13 @@ bool present_presentation_job(const PresentationJob& job) {
         const auto& surfaceConfig = webgpu::g_graphicsConfig.surfaceConfiguration;
         pass.SetPipeline(webgpu::surface_copy_pipeline(rotation));
         pass.SetBindGroup(0, job.image->bindGroup, 0, nullptr);
-        pass.SetViewport(0.f, 0.f,
-                         static_cast<float>(swapAxes ? surfaceConfig.height : surfaceConfig.width),
-                         static_cast<float>(swapAxes ? surfaceConfig.width : surfaceConfig.height),
-                         0.f, 1.f);
+        // The swapchain image's own size: on PowerVR it is narrower than the surface (width rounded
+        // down to 32, webgpu/gpu.cpp), and a viewport wider than the attachment is invalid.
+        const uint32_t imageWidth = acquired->texture ? acquired->texture.GetWidth()
+                                                      : (swapAxes ? surfaceConfig.height : surfaceConfig.width);
+        const uint32_t imageHeight = acquired->texture ? acquired->texture.GetHeight()
+                                                       : (swapAxes ? surfaceConfig.width : surfaceConfig.height);
+        pass.SetViewport(0.f, 0.f, static_cast<float>(imageWidth), static_cast<float>(imageHeight), 0.f, 1.f);
         pass.Draw(3);
         pass.End();
         const auto encodeFinished = PresentClock::now();

@@ -2128,7 +2128,7 @@ struct Uniform {{
 @group(0) @binding(0)
 var<storage, read> vbuf: array<u32>;
 @group(0) @binding(1)
-var<storage, read> abuf: array<u32>;
+var<storage, read> abuf: array<u32>;{11}
 @group(1) @binding(0)
 var<uniform> ubuf: Uniform;{1}
 
@@ -2138,9 +2138,9 @@ struct VertexOutput {{
 
 @vertex
 fn vs_main(
-    @builtin(vertex_index) vidx: u32{3}
+    @builtin(vertex_index) {12}: u32{3}
 ) -> VertexOutput {{
-    var out: VertexOutput;{7}{4}
+    var out: VertexOutput;{13}{7}{4}
     return out;
 }}
 
@@ -2151,7 +2151,14 @@ fn fs_main(in: VertexOutput) -> {9} {{{6}{5}
 )""",
                                         uniBufAttrs, texBindings, vtxOutAttrs, vtxInAttrs, vtxXfrAttrs, fragmentFn,
                                         fragmentFnPre, vtxXfrAttrsPre, uniformPre, fragmentReturnType,
-                                        fragmentReturn);
+                                        fragmentReturn,
+                                        webgpu::g_indexPulling ? "\n@group(0) @binding(2)\nvar<storage, read> ibuf: array<u32>;"sv
+                                                               : ""sv,
+                                        webgpu::g_indexPulling ? "raw_vidx"sv : "vidx"sv,
+                                        webgpu::g_indexPulling
+                                            ? "\n    let ibuf_word = ibuf[raw_vidx >> 1u];"
+                                              "\n    let vidx = select(ibuf_word & 0xffffu, ibuf_word >> 16u, (raw_vidx & 1u) != 0u);"sv
+                                            : ""sv);
   if (webgpu::g_shaderDebug != 0) {
     apply_shader_debug(shaderSource, hash);
   }

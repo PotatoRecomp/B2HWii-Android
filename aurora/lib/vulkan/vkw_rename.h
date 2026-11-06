@@ -91,6 +91,8 @@
 #define wgpuSurfaceUnconfigure vkw_wgpuSurfaceUnconfigure
 #define wgpuTextureAddRef vkw_wgpuTextureAddRef
 #define wgpuTextureCreateView vkw_wgpuTextureCreateView
+#define wgpuTextureGetHeight vkw_wgpuTextureGetHeight
+#define wgpuTextureGetWidth vkw_wgpuTextureGetWidth
 #define wgpuTextureRelease vkw_wgpuTextureRelease
 #define wgpuTextureViewAddRef vkw_wgpuTextureViewAddRef
 #define wgpuTextureViewRelease vkw_wgpuTextureViewRelease

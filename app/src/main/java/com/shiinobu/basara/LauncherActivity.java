@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -91,6 +92,7 @@ public final class LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashReport.installLauncherHandler(this);
         settings = new AppSettings(this);
         Tr.init(this);
         if (DeviceProfile.applyOnce(this, settings)) {
@@ -163,10 +165,9 @@ public final class LauncherActivity extends Activity {
 
         // Room for the status and navigation bars: the page is drawn edge to edge.
         page.setOnApplyWindowInsetsListener((v, insets) -> {
-            final android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars()
-                    | WindowInsets.Type.displayCutout());
+            final android.graphics.Insets bars = SystemBars.bars(insets, true);
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            return WindowInsets.CONSUMED;
+            return SystemBars.consumed(insets);
         });
         setContentView(page);
 
@@ -344,12 +345,67 @@ public final class LauncherActivity extends Activity {
             requireUpdate(requiredUpdate);
         } else if (AppFiles.gameReady(this)) {
             if (!requirePlayAccess()) return;
-            // A game left for the Start Menu is still running: Continue brings it back.
-            startActivity(new Intent(this, GameActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            if (gameRunning()) {
+                startGame();
+            } else {
+                final Runnable gpuThenPlay = () -> {
+                    if (!warnOldGpu(this::startGame)) startGame();
+                };
+                if (!warnChangedDisc(gpuThenPlay)) gpuThenPlay.run();
+            }
         } else {
             pickDisc();
         }
+    }
+
+    private void startGame() {
+        // A game left for the Start Menu is still running: Continue brings it back.
+        startActivity(new Intent(this, GameActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+    }
+
+    /**
+     * When the game file's archives aren't the original disc's sizes, says so once for those sizes,
+     * with Play Anyway running `play`. True when the warning is showing (so the caller waits for it).
+     */
+    private boolean warnChangedDisc(Runnable play) {
+        final File game = AppFiles.gameDir(this);
+        final String differences = AppFiles.discDifferences(game);
+        if (differences == null) return false;
+        final SharedPreferences prefs = getSharedPreferences("disc_check", MODE_PRIVATE);
+        final String signature = AppFiles.discSignature(game);
+        if (play != null && signature.equals(prefs.getString("warned", null))) return false;
+        prefs.edit().putString("warned", signature).apply();
+        final Sheet sheet = new Sheet(this, Tr.t("This isn't the original disc"),
+                Tr.t("The game file's archives differ from the original RBSJ08 disc, so the game may stop "
+                        + "after the first screen or crash later. A dump of your own disc avoids this.")
+                        + "\n\n" + differences);
+        if (play != null) {
+            sheet.action(Tr.t("Play Anyway"), null, true, false, play);
+            sheet.action(Tr.t("Cancel"), null, false, false, null);
+        } else {
+            sheet.action(Tr.t("OK"), null, true, false, null);
+        }
+        sheet.show();
+        return true;
+    }
+
+    /**
+     * Adreno 5xx on Android 10 (DeviceProfile.oldAdreno5): not supported, said once, with Play Anyway
+     * running `play` on OpenGL ES. True when the notice is showing.
+     */
+    private boolean warnOldGpu(Runnable play) {
+        final String gpu = settings.gpuName();
+        if (!DeviceProfile.oldAdreno5(gpu)) return false;
+        final SharedPreferences prefs = getSharedPreferences("gpu_check", MODE_PRIVATE);
+        if (gpu.equals(prefs.getString("warned", null))) return false;
+        prefs.edit().putString("warned", gpu).apply();
+        final Sheet sheet = new Sheet(this, Tr.t("This GPU isn't supported"),
+                gpu + Tr.t(" on Android 10 has a Vulkan driver that stops the game on its first screens. "
+                        + "The game tries OpenGL ES instead, which may be slower or still close."));
+        sheet.action(Tr.t("Play Anyway"), null, true, false, play);
+        sheet.action(Tr.t("Cancel"), null, false, false, null);
+        sheet.show();
+        return true;
     }
 
     /** A one-line strip of section tabs that scrolls sideways. */
@@ -434,7 +490,9 @@ public final class LauncherActivity extends Activity {
     /** The launcher's own System rows: the game file, updates, network play, the project. */
     private void systemRows(SettingsMenu rows) {
         final boolean ready = AppFiles.gameReady(this);
-        rows.actionRow(Tr.t("Game File"), ready ? Tr.t("Loaded (RBSJ08)") : Tr.t("Your ISO or RVZ (RBSJ08)"),
+        final boolean changed = ready && AppFiles.discDifferences(AppFiles.gameDir(this)) != null;
+        rows.actionRow(Tr.t("Game File"), changed ? Tr.t("Loaded (RBSJ08), not the original disc")
+                        : ready ? Tr.t("Loaded (RBSJ08)") : Tr.t("Your ISO or RVZ (RBSJ08)"),
                 ready ? Tr.t("Change") : Tr.t("Choose"), this::pickDisc);
         rows.actionRow(updating ? Tr.t("Checking…") : Tr.t("Check for Updates"),
                 Tr.t("Installed: ") + Updater.displayVersion(this), updating ? null : Tr.t("Check"),
@@ -569,18 +627,18 @@ public final class LauncherActivity extends Activity {
         // Back from "All files access".
         if (waitingFileAccess) {
             waitingFileAccess = false;
-            if (Environment.isExternalStorageManager()) {
+            if (AppFiles.hasFileAccess(this)) {
                 browseDisc();
             }
         }
         // Right after install (and until it is given): "All files access" is required, the logs,
         // saves and textures live in /sdcard/Basara2Heroes[-Beta].
-        if (!Environment.isExternalStorageManager() && !waitingFileAccess && !waitingPlayAccess && accessSheet == null) {
+        if (!AppFiles.hasFileAccess(this) && !waitingFileAccess && !waitingPlayAccess && accessSheet == null) {
             requireAccess(false);
         }
         if (waitingPlayAccess) {
             waitingPlayAccess = false;
-            if (Environment.isExternalStorageManager() && AppFiles.gameReady(this)) {
+            if (AppFiles.hasFileAccess(this) && AppFiles.gameReady(this)) {
                 startActivity(new Intent(this, GameActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
             }
@@ -592,7 +650,7 @@ public final class LauncherActivity extends Activity {
      * access": without it the game does not start, and this asks for it first.
      */
     private boolean requirePlayAccess() {
-        if (Environment.isExternalStorageManager()) return true;
+        if (AppFiles.hasFileAccess(this)) return true;
         requireAccess(true);
         return false;
     }
@@ -606,13 +664,17 @@ public final class LauncherActivity extends Activity {
         final Sheet sheet = new Sheet(this, Tr.t("Allow file access first"), Tr.t("The game writes its log to the ")
                 + AppFiles.HOME
                 + Tr.t(" folder on your phone's storage, so problems can be reported."))
-                .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
+                .step("1", Tr.t("Open Settings"), AppFiles.fileAccessStep())
                 .step("2", Tr.t("Come back"), forPlay ? Tr.t("The game starts by itself.") : Tr.t("Then return to this app."))
                 .cancelable(false);
         accessSheet = sheet;
         sheet.action(Tr.t("Open Settings"), null, true, false, () -> {
                     accessSheet = null;
                     waitingPlayAccess = forPlay;
+                    if (android.os.Build.VERSION.SDK_INT < 30) {
+                        AppFiles.requestLegacyFileAccess(this);
+                        return;
+                    }
                     try {
                         startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                                 Uri.parse("package:" + getPackageName())));
@@ -665,9 +727,7 @@ public final class LauncherActivity extends Activity {
 
     /** The page is drawn edge to edge under visible system bars (a dialog may have hidden them). */
     private void hideSystemBars() {
-        getWindow().setDecorFitsSystemWindows(false);
-        final WindowInsetsController controller = getWindow().getInsetsController();
-        if (controller != null) controller.show(WindowInsets.Type.systemBars());
+        SystemBars.show(getWindow());
     }
 
     /** While an update check runs, System says so. */
@@ -1018,7 +1078,7 @@ public final class LauncherActivity extends Activity {
         stripChip(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")), SettingsMenu.CONTROLS, false);
         if (settings.anyCheat()) stripChip(Tr.t("Cheats on"), SettingsMenu.CHEATS, true);
         // Each chip opens the section its setting is in.
-        if (settings.renderer() == 1) stripChip(Tr.t("Vulkan"), SettingsMenu.GRAPHICS, false);
+        if (settings.renderer() != 0) stripChip(AppSettings.rendererName(settings.renderer()), SettingsMenu.GRAPHICS, false);
         if (settings.hdTextures() != 0) stripChip(Tr.t("HD Textures"), SettingsMenu.TEXTURES, false);
         if (settings.customTextures()) stripChip(settings.dumpTextures() ? Tr.t("Custom + Dump Textures")
                 : Tr.t("Custom Textures"), SettingsMenu.TEXTURES, false);
@@ -1119,15 +1179,19 @@ public final class LauncherActivity extends Activity {
      */
     private void pickDisc() {
         endGame();  // a game still running from the old file must not carry on with the new one
-        if (Environment.isExternalStorageManager()) {
+        if (AppFiles.hasFileAccess(this)) {
             browseDisc();
             return;
         }
         new Sheet(this, Tr.t("Allow file access"), Tr.t("To list the folders on this phone and find your ISO or RVZ."))
-                .step("1", Tr.t("Open Settings"), Tr.t("Turn on \"Allow access to manage all files\" for this app."))
+                .step("1", Tr.t("Open Settings"), AppFiles.fileAccessStep())
                 .step("2", Tr.t("Come back"), Tr.t("The file browser opens by itself."))
                 .action(Tr.t("Open Settings"), null, true, false, () -> {
                     waitingFileAccess = true;
+                    if (android.os.Build.VERSION.SDK_INT < 30) {
+                        AppFiles.requestLegacyFileAccess(this);
+                        return;
+                    }
                     try {
                         startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                                 Uri.parse("package:" + getPackageName())));
@@ -1216,6 +1280,8 @@ public final class LauncherActivity extends Activity {
                 refresh();
                 if (failure != null && !failure.equals(DiscImport.CANCELLED)) {
                     message(Tr.t("Couldn't load the game"), failure + Tr.t("\n\nNothing was changed."));
+                } else if (failure == null) {
+                    warnChangedDisc(null);
                 }
             });
         }, "game-import").start();

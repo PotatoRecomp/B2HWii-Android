@@ -82,6 +82,11 @@ extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
 std::atomic_bool g_auroraFrameActive{false};
 std::atomic_bool g_auroraFrameHadWork{false};
 
+// dvd.cpp: disc reads so far, and the preload's bytes (-1 when off), for the stall watchdog.
+uint32_t DvdReadCount();
+int64_t DvdPreloadBytes();
+bool DvdDiscChanged();
+
 namespace {
 
 using namespace std::chrono_literals;
@@ -258,7 +263,12 @@ void Start() {
             if (choreographer == nullptr) {
                 return;
             }
-            AChoreographer_registerRefreshRateCallback(choreographer, OnRefreshRate, nullptr);
+            // API 30; on Android 10 the period comes from the measured gaps between frame callbacks.
+            using RegisterFn = void (*)(AChoreographer*, AChoreographer_refreshRateCallback, void*);
+            if (const auto registerRefreshRate = reinterpret_cast<RegisterFn>(
+                    dlsym(RTLD_DEFAULT, "AChoreographer_registerRefreshRateCallback"))) {
+                registerRefreshRate(choreographer, OnRefreshRate, nullptr);
+            }
             AChoreographer_postFrameCallback64(choreographer, OnFrame, choreographer);
             while (true) {
                 ALooper_pollOnce(-1, nullptr, nullptr, nullptr);
@@ -563,8 +573,15 @@ void StartStallWatchdogOnce() {
                 std::this_thread::sleep_until(start + std::chrono::seconds(seconds));
                 const uint32_t frames = s_presentedXfbFrames.load(std::memory_order_relaxed);
                 const bool black = g_vi.black;  // racy read; diagnostics only
-                RT_LOGF(RT_TAG_VI, "[watchdog] %d s: %u guest frame(s) presented, VI black=%d\n", seconds, frames,
-                        black ? 1 : 0);
+                // Retraces tell a stopped VI clock from a stuck game; the disc counters tell a stuck
+                // host read from a game that never asks (preload -1 = off). Racy reads, diagnostics only.
+                const int64_t preload = DvdPreloadBytes();
+                RT_LOGF(RT_TAG_VI,
+                        "[watchdog] %d s: %u guest frame(s) presented, VI black=%d, retraces %u, disc reads %u, "
+                        "preload %lld MiB%s\n",
+                        seconds, frames, black ? 1 : 0, g_vi.retraceCount, DvdReadCount(),
+                        static_cast<long long>(preload < 0 ? -1 : preload >> 20),
+                        DvdDiscChanged() ? ", disc NOT ORIGINAL" : "");
                 if (frames > 2 && !black) {  // Basara: also dump when stalled after the first frame
                     continue;
                 }

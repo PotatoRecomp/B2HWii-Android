@@ -224,6 +224,9 @@ bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::v
     return ok;
 }
 
+// Bytes the preload has read so far, and -1 once it is off; the stall watchdog prints them.
+std::atomic<int64_t> g_preloadBytes{0};
+
 void StartReadCachePreload() {
 #if defined(__ANDROID__)
     const uint64_t ram = static_cast<uint64_t>(sysconf(_SC_PHYS_PAGES)) * static_cast<uint64_t>(sysconf(_SC_PAGE_SIZE));
@@ -231,6 +234,7 @@ void StartReadCachePreload() {
     // under 0.1 GiB free in battle and lmkd killed the game. Only 6 GB phones and up keep it.
     if (ram < (5ull << 30) || std::getenv("BASARA_NO_DVD_PRELOAD") != nullptr) {
         RT_LOGF(RT_TAG_DVD, "read cache: off (%llu MiB of RAM)\n", static_cast<unsigned long long>(ram >> 20));
+        g_preloadBytes.store(-1, std::memory_order_relaxed);
         return;
     }
 #endif
@@ -268,6 +272,7 @@ void StartReadCachePreload() {
             }
             total += size;
             ++files;
+            g_preloadBytes.store(static_cast<int64_t>(total), std::memory_order_relaxed);
         }
 #if defined(_WIN32)
         ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
@@ -286,6 +291,43 @@ void StartReadCachePreload() {
 // Time spent in the game's disc reads since start, and how many (slow-frame breakdowns take deltas).
 uint64_t DvdReadNanosTotal() { return g_dvdReadNanos.load(std::memory_order_relaxed); }
 uint32_t DvdReadCount() { return g_dvdReads.load(std::memory_order_relaxed); }
+int64_t DvdPreloadBytes() { return g_preloadBytes.load(std::memory_order_relaxed); }
+
+// Basara: the three archives' sizes on the original RBSJ08 disc. Images that differ (patched, or
+// converted badly) stall after the first frame or crash later, so the log says so at boot and in
+// every watchdog line; the launcher warns the player but still lets them play.
+namespace {
+std::atomic<bool> g_discChanged{false};
+
+void CheckDiscArchives() {
+    static constexpr struct { const char* path; uint64_t size; } kArchives[] = {
+        {"/linkData.afs", 944601088ull}, {"/linkDt01.afs", 1454065664ull}, {"/linkDt02.afs", 1879459840ull}};
+    std::ostringstream diff;
+    for (const auto& archive : kArchives) {
+        int64_t size = -1;
+        for (const DVDFileEntry& entry : g_fileEntries) {
+            if (!entry.isDirectory && entry.dvdPath == archive.path) {
+                std::error_code ec;
+                const uint64_t bytes = fs::file_size(entry.hostPath, ec);
+                size = ec ? -1 : static_cast<int64_t>(bytes);
+                break;
+            }
+        }
+        if (size != static_cast<int64_t>(archive.size)) {
+            diff << " " << (archive.path + 1) << "=" << size << " (original " << archive.size << ")";
+        }
+    }
+    const std::string text = diff.str();
+    g_discChanged.store(!text.empty(), std::memory_order_relaxed);
+    if (text.empty()) {
+        RT_LOG(RT_TAG_DVD) << "disc check: original RBSJ08 archives" << std::endl;
+    } else {
+        RT_LOG(RT_TAG_DVD) << "disc check: NOT THE ORIGINAL DISC, archives differ:" << text << std::endl;
+    }
+}
+}  // namespace
+
+bool DvdDiscChanged() { return g_discChanged.load(std::memory_order_relaxed); }
 static std::map<std::string, int32_t> g_pathToEntry;
 // Maps each published file's disc range back to its runtime entry.
 struct PublishedExtent {
@@ -1046,6 +1088,7 @@ extern "C" void DVDInit_8015EA1C()
     RT_LOG(RT_TAG_DVD) << "disc index: " << vanillaEntryCount << " disc file(s), "
               << (g_fileEntries.size() - vanillaEntryCount) << " overlay registration(s) from "
               << overlays.size() << " root(s)" << std::endl;
+    CheckDiscArchives();
 
     StartReadCachePreload();
 

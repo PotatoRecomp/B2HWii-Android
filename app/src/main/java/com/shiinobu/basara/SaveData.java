@@ -33,6 +33,8 @@ final class SaveData {
     private static final String TITLE = "NAND/title/00010000/5242534a/data";
     private static final String SAVE = "basara2w.dat";
     private static final String BANNER = "banner.bin";
+    /** basara2w.dat is always this size: the game creates it whole. */
+    private static final int SAVE_SIZE = 173568;
     private static final long MAX_FILE = 8L << 20;
     private static final int KEEP_BACKUPS = 5;
 
@@ -247,11 +249,12 @@ final class SaveData {
         }
         if (save == null) throw new IOException(Tr.t("No basara2w.dat in this file: pick a backup made here."));
         if (save.length < 1024) throw new IOException(Tr.t("This is not a Sengoku Basara 2 Heroes save."));
-        final File current = new File(saveDir(context), SAVE);
-        if (current.isFile() && current.length() != save.length) {
+        // Checked against the game's own size, not the save already here: an earlier import of a wrong
+        // file must not keep a real save out.
+        if (save.length != SAVE_SIZE) {
             throw new IOException(String.format(Locale.ROOT,
                     Tr.t("This save is %d bytes, the game's is %d: not a save of this game."),
-                    save.length, current.length()));
+                    save.length, SAVE_SIZE));
         }
 
         final File dir = saveDir(context);

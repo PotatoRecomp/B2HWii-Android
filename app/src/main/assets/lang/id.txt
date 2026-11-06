@@ -199,7 +199,7 @@ Needs "All files access" for this app.	Perlu "Akses semua file" untuk aplikasi i
 Clear	Hapus
 Writes to the log while you play.	Menulis ke log selama main.
 Report Texture Keys	Laporkan Kunci Tekstur
-Lists the name of every texture the game uses in the log (only the names, no pictures), so testers can check that texture packs match the game. Takes effect when the game starts again.	Mencatat nama tiap tekstur yang dipakai game di log (hanya nama, tanpa gambar), supaya tester bisa mengecek paket tekstur cocok dengan game. Berlaku saat game dimulai lagi.
+Lists the name of every texture the game uses in the log (only the names, no pictures), so testers can check that texture packs match the game.	Mencatat nama tiap tekstur yang dipakai game di log (hanya nama, tanpa gambar), supaya tester bisa mengecek paket tekstur cocok dengan game.
 A wrong or very large pack can crash the game or use up RAM.	Paket yang salah atau sangat besar bisa membuat game crash atau menghabiskan RAM.
 Uses your own textures (tex1_*.png or .dds, Dolphin-style names) from 	Memakai tekstur buatanmu (tex1_*.png atau .dds, nama gaya Dolphin) dari 
  in place of the game's. Takes effect when the game starts again.	 sebagai pengganti tekstur game. Berlaku saat game dimulai lagi.
@@ -213,7 +213,7 @@ Turn Custom Textures on to choose.	Nyalakan Tekstur Custom untuk memilih.
 Can make the picture switch between sharp and soft during battles.	Gambar bisa berganti tajam dan lembut selama pertempuran.
 Lowers the render resolution while the GPU holds the game back (down to 0.5x) and raises it again when there is room. Render Resolution stays the highest it goes.	Menurunkan resolusi render saat GPU menahan game (sampai 0.5x) dan menaikkannya lagi bila ada ruang. Resolusi Render tetap jadi batas tertinggi.
 Known issue: textures and the sky can flicker white.	Masalah yang diketahui: tekstur dan langit bisa berkedip putih.
-Runs the graphics work on its own CPU core, so busy battles run faster on slower phones. Turning it on or off restarts the game.	Menjalankan kerja grafis di core CPU sendiri, jadi pertempuran ramai lebih cepat di HP lambat. Menyalakan atau mematikannya memulai ulang game.
+Runs the graphics work on its own CPU core, so busy battles run faster on slower phones.	Menjalankan kerja grafis di core CPU sendiri, jadi pertempuran ramai lebih cepat di HP lambat.
 Clear HD Texture Cache?	Hapus Cache Tekstur HD?
 The sharper textures are made again while you play.	Tekstur tajam akan dibuat lagi selama main.
 Choose your game file	Pilih file game
@@ -304,7 +304,7 @@ No basara2w.dat in this file: pick a backup made here.	Tidak ada basara2w.dat di
 This is not a Sengoku Basara 2 Heroes save.	Ini bukan save Sengoku Basara 2 Heroes.
 This save is %d bytes, the game's is %d: not a save of this game.	Save ini %d byte, save game %d: bukan save game ini.
 This file is too large to be a save.	File ini terlalu besar untuk sebuah save.
-They change your save: money and anything bought with it stay after the game saves. Back up your save first (Save Data). Cheats can break the game's balance or progress, and they are off in LAN play. Changes apply when you go back to the game.	Cheat mengubah save: uang dan barang yang dibeli tetap ada setelah game menyimpan. Backup save dulu (Data Save). Cheat bisa merusak keseimbangan atau progres game, dan mati saat main LAN. Perubahan berlaku saat kembali ke game.
+They change your save: money and anything bought with it stay after the game saves. Back up your save first (Save Data). Cheats can break the game's balance or progress, and they are off in LAN play.	Cheat mengubah save: uang dan barang yang dibeli tetap ada setelah game menyimpan. Backup save dulu (Data Save). Cheat bisa merusak keseimbangan atau progres game, dan mati saat main LAN.
 Money	Uang
 Infinite keeps the money at the amount below, whatever you buy. Once sets it to that amount one time (Set Now), then it goes down as you spend it.	Tak Terbatas menahan uang di jumlah di bawah, apa pun yang dibeli. Sekali mengatur uang ke jumlah itu satu kali (Atur Sekarang), lalu berkurang saat dipakai.
 Infinite	Tak Terbatas
@@ -399,7 +399,7 @@ Upscaler	Upscaler
 FSR Light	FSR Light
 FSR Full	FSR Full
 SGSR	SGSR
-Light sharpens the stretched picture and costs almost nothing. Full adds FSR1's edge-aware upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware upscale in one pass, lighter than FSR Full.	Light menajamkan gambar yang diperbesar dan hampir tanpa biaya. Full menambah upscale FSR1 yang peka tepi: paling tajam, tetapi beberapa ms di GPU HP kecil. SGSR: upscale peka tepi dari Qualcomm dalam satu pass, lebih ringan dari FSR Full.
+Keeps a picture rendered below the screen's resolution sharp when it is stretched. FSR Light sharpens it and costs almost nothing. FSR Full adds FSR1's edge-aware upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware upscale in one pass, lighter than FSR Full.	Menjaga gambar yang dirender di bawah resolusi layar tetap tajam saat diperbesar. FSR Light menajamkannya dan hampir tanpa biaya. FSR Full menambah upscale FSR1 yang peka tepi: paling tajam, tetapi beberapa ms di GPU HP kecil. SGSR: upscale peka tepi dari Qualcomm dalam satu pass, lebih ringan dari FSR Full.
 Turn Upscaling on to choose.	Nyalakan Upscaling untuk memilih.
 SGSR upscaling option.	Opsi upscaling SGSR.
 All settings	Semua pengaturan
@@ -689,3 +689,40 @@ Update required	Update wajib
 This version can't be played any more. Install Basara 	Versi ini tidak bisa dimainkan lagi. Pasang Basara 
  to keep playing; your saves and settings stay.	 untuk terus bermain; save dan pengaturanmu tetap aman.
 Update	Update
+Allow access to files (storage) for this app.	Izinkan akses ke file (penyimpanan) untuk aplikasi ini.
+/Auto: Undo Last Import puts it back. A .zip from Back Up, a basara2w.dat, or a data.bin exported from a Wii or Dolphin all work.	/Auto: Batalkan Impor Terakhir mengembalikannya. .zip hasil Backup, basara2w.dat, atau data.bin ekspor dari Wii atau Dolphin, semuanya bisa.
+Widescreen, Camera Distance, Android 10 and PowerVR phones	Layar lebar, Jarak Kamera, Android 10, dan HP PowerVR
+Android 10 support: the game and the launcher now run on Android 10. File access there is the usual storage permission dialog.	Dukungan Android 10: game dan launcher kini jalan di Android 10. Di sana akses file memakai dialog izin penyimpanan biasa.
+The log now records more when the game stops on a black screen, so such reports can be traced faster.	Log kini mencatat lebih banyak saat game berhenti di layar hitam, supaya laporan seperti itu lebih cepat dilacak.
+Phones with a PowerVR GPU (for example OPPO phones with Helio G35 or P90) no longer crash on Play with "Graphics adapter unavailable".	HP dengan GPU PowerVR (misalnya OPPO dengan Helio G35 atau P90) tidak lagi crash saat Main dengan "Graphics adapter unavailable".
+Save import refused a real save when an earlier import had put a wrong file in its place. Only a real save (173,568 bytes) is accepted now, and it always replaces whatever is there.	Impor save menolak save asli bila impor sebelumnya sempat memasukkan file yang salah. Kini hanya save asli (173.568 byte) yang diterima, dan selalu menimpa apa pun yang ada.
+Save Data's help now says that a data.bin exported from a Wii or Dolphin can be imported.	Bantuan Data Save kini menyebut bahwa data.bin ekspor dari Wii atau Dolphin bisa diimpor.
+A modified or damaged disc image (for example a patched ISO) stops on a black screen after the first frame. Use your own unmodified RBSJ08 dump.	Image disc yang dimodifikasi atau rusak (misalnya ISO hasil patch) berhenti di layar hitam setelah frame pertama. Pakai dump RBSJ08 milikmu sendiri yang tidak dimodifikasi.
+PowerVR GPUs are slow for this game: use the Low-End Preset.	GPU PowerVR lambat untuk game ini: pakai Preset Low-End.
+Loaded (RBSJ08), not the original disc	Sudah dimuat (RBSJ08), bukan disc asli
+This isn't the original disc	Ini bukan disc asli
+The game file's archives differ from the original RBSJ08 disc, so the game may stop after the first screen or crash later. A dump of your own disc avoids this.	Arsip di file game berbeda dari disc asli RBSJ08, jadi game bisa berhenti setelah layar pertama atau crash di tengah jalan. Dump dari disc milikmu sendiri menghindari ini.
+Play Anyway	Tetap Main
+missing	tidak ada
+ bytes	 byte
+ (original 	 (asli 
+The launcher checks the game file against the original disc. A changed one (patched or badly converted) gets a warning, Play Anyway still works, and the log says so.	Launcher kini mengecek file game dengan disc asli. File yang berubah (dipatch atau salah konversi) diberi peringatan, Tetap Main masih bisa, dan log mencatatnya.
+This GPU isn't supported	GPU ini tidak didukung
+ on Android 10 has a Vulkan driver that stops the game on its first screens. The game tries OpenGL ES instead, which may be slower or still close.	 di Android 10 punya driver Vulkan yang menghentikan game di layar awal. Game mencoba OpenGL ES sebagai gantinya, yang bisa lebih lambat atau tetap tertutup.
+Adreno 5xx phones on Android 10 (for example Redmi Note 7) run the game on OpenGL ES, since their Vulkan driver stops it on the first screens. The launcher says once that this GPU isn't supported.	HP Adreno 5xx di Android 10 (misalnya Redmi Note 7) menjalankan game lewat OpenGL ES, karena driver Vulkan-nya menghentikan game di layar awal. Launcher memberi tahu sekali bahwa GPU ini tidak didukung.
+Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, made for older phones. OpenGL ES runs Dawn on OpenGL ES, for phones whose Vulkan driver shows a black screen or closes the game.	Auto memakai Dawn, dan renderer Vulkan hanya untuk driver GPU yang tidak bisa dipakai Dawn (seperti malisx2 di Mali). Vulkan selalu mencoba renderer Vulkan dulu: lebih ringan, dibuat untuk HP lama. OpenGL ES menjalankan Dawn di OpenGL ES, untuk HP yang driver Vulkan-nya membuat layar hitam atau menutup game.
+Graphics > Renderer has a third choice, OpenGL ES, for phones whose Vulkan driver shows a black screen or closes the game.	Grafis > Renderer punya pilihan ketiga, OpenGL ES, untuk HP yang driver Vulkan-nya membuat layar hitam atau menutup game.
+Camera Distance	Jarak Kamera
+How far the camera stays from your character in battle. Farther shows more of the field. Off in LAN play.	Seberapa jauh kamera dari karaktermu saat bertempur. Makin jauh, makin luas medan yang terlihat. Mati saat main LAN.
+Default	Bawaan
+Real widescreen: 16:9 and Fill Screen now show more of the battlefield to the sides instead of stretching the 4:3 picture, so characters keep their shape. Health bars and names above characters stay on them, and screen effects line up.	Layar lebar sungguhan: 16:9 dan Penuhi Layar kini menampilkan medan perang lebih luas ke samping, bukan menarik gambar 4:3, jadi karakter tetap proporsional. Bar HP dan nama di atas karakter tetap menempel, dan efek layar tetap pas.
+New Camera Distance (Settings > Display): pull the battle camera back to 1.5x or 2x to see more of the field. Cutscenes and stage intros keep the normal camera, and it is off in LAN play.	Baru: Jarak Kamera (Pengaturan > Tampilan): tarik kamera pertempuran ke 1.5x atau 2x supaya medan lebih luas terlihat. Cutscene dan intro stage tetap memakai kamera normal, dan fitur ini mati saat main LAN.
+On Android 10 phones with four fast CPU cores, the graphics work now runs on the fast cores beside the game.	Di HP Android 10 dengan empat core CPU cepat, pekerjaan grafis kini berjalan di core cepat bersama game.
+16:9 and Fill Screen stretched the game's 4:3 picture sideways, so characters and the field looked squashed. They are now drawn wider instead.	16:9 dan Penuhi Layar menarik gambar 4:3 game ke samping, sehingga karakter dan medan tampak gepeng. Kini gambarnya digambar lebih lebar.
+In 16:9 and Fill Screen the HUD, text and menus are still stretched to the screen's width; only the 3D picture is widened.	Di 16:9 dan Penuhi Layar, HUD, teks, dan menu masih ditarik selebar layar; hanya gambar 3D yang dilebarkan.
+Some Adreno 610 phones with an older Vulkan driver (for example Redmi Note 13 4G) closed on Play ("No supported adapters"). They now start the game the same way as the PowerVR phones above.	Sebagian HP Adreno 610 dengan driver Vulkan lama (misalnya Redmi Note 13 4G) tertutup saat Main ("No supported adapters"). Kini game dimulai dengan cara yang sama seperti HP PowerVR di atas.
+Adreno 5xx phones (for example Redmi Note 7) closed on the first screens or as the first battle loaded, inside their Vulkan driver. The game now feeds their driver in a way it handles.	HP Adreno 5xx (misalnya Redmi Note 7) tertutup di layar awal atau saat pertempuran pertama dimuat, di dalam driver Vulkan-nya. Kini game mengirim data ke driver itu dengan cara yang bisa ia tangani.
+Closing the Wii HOME Menu could crash the game on slow phones (seen on realme 5).	Menutup Menu HOME Wii bisa membuat game crash di HP lambat (terlihat di realme 5).
+Graphics > Renderer > Vulkan now also works on Android 10 phones with an older Vulkan driver (for example realme 5, Adreno 610).	Grafis > Renderer > Vulkan kini juga jalan di HP Android 10 dengan driver Vulkan lama (misalnya realme 5, Adreno 610).
+Renderer Vulkan: if the phone isn't ready to show the picture when you come back to the game (from the home screen or after the screen turns off), the game now waits and tries again instead of closing.	Renderer Vulkan: kalau HP belum siap menampilkan gambar saat kamu kembali ke game (dari layar utama atau setelah layar mati), game kini menunggu dan mencoba lagi, tidak langsung tertutup.
+Renderer Vulkan on Android 10: the game takes memory in smaller pieces, and when memory runs short while loading a texture it tries again before giving up, so phones with 2-4 GB of RAM close less often.	Renderer Vulkan di Android 10: game mengambil memori dalam potongan lebih kecil, dan kalau memori menipis saat memuat tekstur, game mencoba lagi sebelum menyerah, jadi HP dengan RAM 2-4 GB lebih jarang tertutup.

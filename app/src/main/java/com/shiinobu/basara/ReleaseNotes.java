@@ -35,6 +35,34 @@ final class ReleaseNotes {
     }
 
     private static final Entry[] ALL = {
+        new Entry("1.1", "Widescreen, Camera Distance, Android 10 and PowerVR phones", "2026-11-07",
+                new String[] {
+                    "Real widescreen: 16:9 and Fill Screen now show more of the battlefield to the sides instead of stretching the 4:3 picture, so characters keep their shape. Health bars and names above characters stay on them, and screen effects line up.",
+                    "New Camera Distance (Settings > Display): pull the battle camera back to 1.5x or 2x to see more of the field. Cutscenes and stage intros keep the normal camera, and it is off in LAN play.",
+                    "Graphics > Renderer > Vulkan now also works on Android 10 phones with an older Vulkan driver (for example realme 5, Adreno 610).",
+                    "On Android 10 phones with four fast CPU cores, the graphics work now runs on the fast cores beside the game.",
+                    "Android 10 support: the game and the launcher now run on Android 10. File access there is the usual storage permission dialog.",
+                    "The log now records more when the game stops on a black screen, so such reports can be traced faster.",
+                    "The launcher checks the game file against the original disc. A changed one (patched or badly converted) gets a warning, Play Anyway still works, and the log says so.",
+                    "Adreno 5xx phones on Android 10 (for example Redmi Note 7) run the game on OpenGL ES, since their Vulkan driver stops it on the first screens. The launcher says once that this GPU isn't supported.",
+                    "Graphics > Renderer has a third choice, OpenGL ES, for phones whose Vulkan driver shows a black screen or closes the game.",
+                },
+                new String[] {
+                    "16:9 and Fill Screen stretched the game's 4:3 picture sideways, so characters and the field looked squashed. They are now drawn wider instead.",
+                    "Phones with a PowerVR GPU (for example OPPO phones with Helio G35 or P90) no longer crash on Play with \"Graphics adapter unavailable\".",
+                    "Some Adreno 610 phones with an older Vulkan driver (for example Redmi Note 13 4G) closed on Play (\"No supported adapters\"). They now start the game the same way as the PowerVR phones above.",
+                    "Adreno 5xx phones (for example Redmi Note 7) closed on the first screens or as the first battle loaded, inside their Vulkan driver. The game now feeds their driver in a way it handles.",
+                    "Closing the Wii HOME Menu could crash the game on slow phones (seen on realme 5).",
+                    "Save import refused a real save when an earlier import had put a wrong file in its place. Only a real save (173,568 bytes) is accepted now, and it always replaces whatever is there.",
+                    "Save Data's help now says that a data.bin exported from a Wii or Dolphin can be imported.",
+                    "Renderer Vulkan: if the phone isn't ready to show the picture when you come back to the game (from the home screen or after the screen turns off), the game now waits and tries again instead of closing.",
+                    "Renderer Vulkan on Android 10: the game takes memory in smaller pieces, and when memory runs short while loading a texture it tries again before giving up, so phones with 2-4 GB of RAM close less often.",
+                },
+                new String[] {
+                    "A modified or damaged disc image (for example a patched ISO) stops on a black screen after the first frame. Use your own unmodified RBSJ08 dump.",
+                    "PowerVR GPUs are slow for this game: use the Low-End Preset.",
+                    "In 16:9 and Fill Screen the HUD, text and menus are still stretched to the screen's width; only the 3D picture is widened.",
+                }),
         new Entry("1.0", "The first release", "2026-11-06",
                 new String[] {
                     "The whole game runs on Android, from boot through Story battles, with sound, saving and loading. The game's code is recompiled for the phone ahead of time: nothing is emulated.",
@@ -315,11 +343,11 @@ final class ReleaseNotes {
         dialog = new Dialog(activity, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen);
         dialog.setContentView(page);
         // Bars stay visible (like the launcher); the page keeps clear of them.
-        dialog.getWindow().setDecorFitsSystemWindows(false);
+        SystemBars.edgeToEdge(dialog.getWindow());
         page.setOnApplyWindowInsetsListener((v, insets) -> {
-            final android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+            final android.graphics.Insets bars = SystemBars.bars(insets, false);
             v.setPadding(dp(16) + bars.left, dp(16) + bars.top, dp(16) + bars.right, dp(16) + bars.bottom);
-            return WindowInsets.CONSUMED;
+            return SystemBars.consumed(insets);
         });
         done.setOnClickListener(v -> dialog.dismiss());
         showEntry(0);

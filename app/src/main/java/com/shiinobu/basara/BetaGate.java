@@ -10,7 +10,7 @@ import java.net.HttpURLConnection;
  * The testers' Beta (BuildConfig.BETA) stops once it is switched off or the release is out:
  * <ul>
  * <li>the latest GitHub release is RELEASE_VERSION or later, or</li>
- * <li>beta-channel.json in the release repo PotatoRecomp/B2HWii-Android says
+ * <li>beta-channel.json in shiinobu/basara2heroes-beta-android says
  * {"enabled": false, "message": "..."}, or {"min_beta": N} with this Beta's number below N.</li>
  * </ul>
  * The status file sits in the release repo; while that repo is private GitHub answers 404
@@ -22,7 +22,7 @@ import java.net.HttpURLConnection;
 final class BetaGate {
     static final String RELEASE_VERSION = "1.0";
     private static final String BETA_STATUS =
-            "https://raw.githubusercontent.com/PotatoRecomp/B2HWii-Android/main/beta-channel.json";
+            "https://raw.githubusercontent.com/shiinobu/basara2heroes-beta-android/main/beta-channel.json";
 
     private BetaGate() {}
 

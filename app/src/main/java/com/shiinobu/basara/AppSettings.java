@@ -265,6 +265,9 @@ final class AppSettings {
     /** TouchControlsView.STYLE_MODERN or STYLE_CLASSIC. */
     int touchStyle() { return prefs.getInt("touch_style", TouchControlsView.STYLE_MODERN); }
     void setTouchStyle(int style) { prefs.edit().putInt("touch_style", style).commit(); }
+    /** TouchIcons.COLOR_*: gold, red, blue or white; A, B, X and Y keep their own colours. */
+    int touchColor() { return prefs.getInt("touch_color", TouchIcons.COLOR_BLUE); }
+    void setTouchColor(int color) { prefs.edit().putInt("touch_color", color).commit(); }
     void setTouchCamera(boolean on) { prefs.edit().putBoolean("touch_camera", on).commit(); }
     /** Off: a drag to the right turns the view to the right. On (default): the scene follows the finger. */
     boolean invertCamera() { return prefs.getBoolean("invert_camera", true); }

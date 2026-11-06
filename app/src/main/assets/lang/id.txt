@@ -678,3 +678,9 @@ Two renderers and custom GPU drivers (Turnip for Adreno, malisx2 for Mali).	Dua 
 Settings in the launcher and in game, cheats, save backup and import, Share Log for bug reports, English and Indonesian.	Pengaturan di launcher dan di dalam game, cheat, backup dan impor save, Share Log untuk laporan bug, bahasa Inggris dan Indonesia.
 The first release	Rilis pertama
 Fill Screen on a phone wider than 16:9: the HUD, text and menus keep their shape in the middle instead of stretching to the edges. The 3D picture still fills the screen.	Fill Screen di HP yang lebih lebar dari 16:9: HUD, teks, dan menu tetap proporsional di tengah, tidak ditarik ke pinggir. Gambar 3D tetap memenuhi layar.
+Button Color	Warna Tombol
+The sticks, D-pad and buttons. A, B, X and Y keep their own colours.	Stick, D-pad, dan tombol. A, B, X, dan Y tetap dengan warnanya sendiri.
+Gold	Emas
+Red	Merah
+Blue	Biru
+White	Putih

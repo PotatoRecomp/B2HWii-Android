@@ -457,6 +457,7 @@ public final class GameActivity extends SDLActivity
         touch.setHaptics(settings.haptics());
         touch.setTouchCamera(settings.touchCamera());
         touch.setStyle(settings.touchStyle());
+        touch.setColor(settings.touchColor());
         touch.setInvertCamera(settings.invertCamera());
         if (layoutEditor != null && layoutEditor.isOpen()) return;  // the editor holds unsaved changes
         touch.setOpacity(settings.touchOpacity());

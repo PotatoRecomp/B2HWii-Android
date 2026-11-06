@@ -697,6 +697,9 @@ final class SettingsMenu {
         choiceRow(Tr.t("Button Style"), Tr.t("Modern: pictures for what each button does. Classic: the controller's letters."),
                 new String[] {"Modern", "Classic"}, settings.touchStyle() == TouchControlsView.STYLE_CLASSIC ? 1 : 0,
                 settings.touchControls(), which -> settings.setTouchStyle(which));
+        choiceRow(Tr.t("Button Color"), Tr.t("The sticks, D-pad and buttons. A, B, X and Y keep their own colours."),
+                new String[] {Tr.t("Gold"), Tr.t("Red"), Tr.t("Blue"), Tr.t("White")},
+                Math.max(0, Math.min(3, settings.touchColor())), settings.touchControls(), which -> settings.setTouchColor(which));
         actionRow(Tr.t("Touch Control Layout"), settings.touchLayout().isEmpty()
                         ? Tr.t("Move and resize the controls while playing: Back > Edit Controls Layout.")
                         : Tr.t("Arranged by you. Change it while playing: Back > Edit Controls Layout."),

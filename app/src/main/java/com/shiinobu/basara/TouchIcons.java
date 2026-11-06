@@ -24,7 +24,7 @@ final class TouchIcons {
     /** One set of colours and the shaders made from it. */
     private static final class Palette {
         final int ring, ringHi, ringLo, fillB, ic2, label;
-        final Shader base, hot, glyph, glyphHeld, letter, letterSmall;
+        final Shader base, hot, glyph, glyphHeld, letter, letterSmall, knob, knobGlow, knobGlowHeld;
         Palette(int ring, int ringHi, int ringLo, int fillA, int fillB, int ic1, int ic2, int ic3, int glow, int label) {
             this.ring = ring;
             this.ringHi = ringHi;
@@ -41,6 +41,10 @@ final class TouchIcons {
                     new int[] {rgb(0xFFFFFF), rgb(0xFFFFFF), rgb(ic2)}, new float[] {0f, 0.6f, 1f}, Shader.TileMode.CLAMP);
             letter = new LinearGradient(0f, 21f, 0f, 52f, stops, at, Shader.TileMode.CLAMP);
             letterSmall = new LinearGradient(0f, 27f, 0f, 53f, stops, at, Shader.TileMode.CLAMP);
+            // Knob shaders are in the knob's own space (centred on 0,0).
+            knob = new RadialGradient(-0.1f * KNOB, -0.2f * KNOB, 1.4f * KNOB, rgb(ic1), rgb(ic2), Shader.TileMode.CLAMP);
+            knobGlow = new RadialGradient(0f, 0f, 2.2f * KNOB, argb(0.4f, glow), 0, Shader.TileMode.CLAMP);
+            knobGlowHeld = new RadialGradient(0f, 0f, 2.4f * KNOB, argb(0.7f, glow), 0, Shader.TileMode.CLAMP);
         }
     }
 
@@ -52,14 +56,27 @@ final class TouchIcons {
             0xFFE1D8, 0xFF5A4A, 0x8E1620, 0xFF4632, 0xFFE3DC);
     private static final Palette AMBER = new Palette(0xE0A92A, 0xFFE08A, 0x5A420C, 0x2A2210, 0x0D0A04,
             0xFFF6D6, 0xF2BE3C, 0x7A5510, 0xFFBE3C, 0xFFF2CC);
+    private static final Palette WHITE = new Palette(0xD9DEE6, 0xFFFFFF, 0x4A4F58, 0x24272C, 0x0A0B0D,
+            0xFFFFFF, 0xE3E7EE, 0x8A93A3, 0xFFFFFF, 0xFFFFFF);
+
+    /** The controls' colour; A, B, X and Y keep their own. */
+    static final int COLOR_GOLD = 0, COLOR_RED = 1, COLOR_BLUE = 2, COLOR_WHITE = 3;
+    private static final Palette[] THEMES = {AMBER, RED, BLUE, WHITE};
+    private Palette theme = BLUE;
+
+    void setColor(int color) { theme = color >= 0 && color < THEMES.length ? THEMES[color] : BLUE; }
+
+    /** The colours of the sticks, D-pad and every button but A, B, X and Y. */
+    private Palette chrome() { return theme; }
 
     /** A face button's colours (A green, B red, X blue, Y amber); everything else is the theme's. */
-    private static Palette paletteOf(int bit) {
+    private Palette paletteOf(int bit) {
         switch (bit) {
             case TouchControlsView.A: return GREEN;
             case TouchControlsView.B: return RED;
             case TouchControlsView.Y: return AMBER;
-            default: return BLUE;
+            case TouchControlsView.X: return BLUE;
+            default: return theme;
         }
     }
 
@@ -92,12 +109,6 @@ final class TouchIcons {
 
     private final Shader gloss = new LinearGradient(40f, 2f, 40f, 40f, argb(0.15f, 0xFFFFFF), 0, Shader.TileMode.CLAMP);
     private final Shader wellShade = new RadialGradient(40f, 40f, WELL, argb(0.05f, 0), argb(0.32f, 0),
-            Shader.TileMode.CLAMP);
-    // Knob shaders are in the knob's own space (centred on 0,0).
-    private final Shader knobShade = new RadialGradient(-0.1f * KNOB, -0.2f * KNOB, 1.4f * KNOB, rgb(0xE6F3FF),
-            rgb(0x4EA4FF), Shader.TileMode.CLAMP);
-    private final Shader knobGlow = new RadialGradient(0f, 0f, 2.2f * KNOB, argb(0.4f, 0x3C96FF), 0, Shader.TileMode.CLAMP);
-    private final Shader knobGlowHeld = new RadialGradient(0f, 0f, 2.4f * KNOB, argb(0.7f, 0x3C96FF), 0,
             Shader.TileMode.CLAMP);
 
     TouchIcons() {
@@ -322,16 +333,17 @@ final class TouchIcons {
         enter(c, cx, cy, r / WELL, false);
         shade(fill, wellShade, 1f, active);
         c.drawCircle(40f, 40f, WELL, fill);
-        tint(line, active ? BLUE.ringHi : BLUE.ring, 1f, active);
+        final Palette p = chrome();
+        tint(line, active ? p.ringHi : p.ring, 1f, active);
         line.setStrokeWidth(active ? 2.4f : 2f);
         c.drawCircle(40f, 40f, WELL - 1.2f, line);
         final float travel = WELL - KNOB;
         c.translate(40f + vx * travel, 40f + vy * travel);
-        shade(fill, active ? knobGlowHeld : knobGlow, 1f, active);
+        shade(fill, active ? p.knobGlowHeld : p.knobGlow, 1f, active);
         c.drawCircle(0f, 0f, 2.4f * KNOB, fill);
         tint(fill, 0, 0.35f, active);
         c.drawCircle(0f, 0f, KNOB + 0.03f * 2f * WELL, fill);
-        shade(fill, knobShade, 1f, active);
+        shade(fill, p.knob, 1f, active);
         c.drawCircle(0f, 0f, KNOB, fill);
         c.restore();
     }
@@ -348,7 +360,7 @@ final class TouchIcons {
     }
 
     private void key(Canvas c, float left, float top, float s, float round, int dir, boolean lit) {
-        final Palette p = BLUE;
+        final Palette p = chrome();
         cell.set(left, top, left + s, top + s);
         shade(fill, p.base, 1f, lit);
         c.drawRoundRect(cell, round, round, fill);
@@ -374,7 +386,7 @@ final class TouchIcons {
 
     /** Classic D-pad: one cross, the held arms lit, chevrons and a centre dot. */
     void classicPad(Canvas c, float cx, float cy, float r, int heldBits) {
-        final Palette p = BLUE;
+        final Palette p = chrome();
         enter(c, cx, cy, r / 34f, false);
         shade(fill, p.base, 1f, false);
         c.drawPath(CROSS, fill);

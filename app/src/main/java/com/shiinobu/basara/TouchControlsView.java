@@ -206,6 +206,8 @@ final class TouchControlsView extends View {
         layoutControls(getWidth(), getHeight());
     }
 
+    void setColor(int color) { icons.setColor(color); invalidate(); }
+
     private boolean touchCamera = false;
     private boolean invertCamera = true;
     void setInvertCamera(boolean on) { invertCamera = on; }

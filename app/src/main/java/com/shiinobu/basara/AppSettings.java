@@ -60,8 +60,12 @@ final class AppSettings {
     void setCheatInfiniteHp(boolean on) { prefs.edit().putBoolean("cheat_infinite_hp", on).commit(); }
     boolean cheatInfiniteBasara() { return BuildConfig.CHEATS && prefs.getBoolean("cheat_infinite_basara", false); }
     void setCheatInfiniteBasara(boolean on) { prefs.edit().putBoolean("cheat_infinite_basara", on).commit(); }
+    boolean cheatUnlockAll() { return BuildConfig.CHEATS && prefs.getBoolean("cheat_unlock_all", false); }
+    void setCheatUnlockAll(boolean on) { prefs.edit().putBoolean("cheat_unlock_all", on).commit(); }
     /** Any cheat on (the launcher's IN USE panel). */
-    boolean anyCheat() { return cheatMoney() == MONEY_INFINITE || cheatInfiniteHp() || cheatInfiniteBasara(); }
+    boolean anyCheat() {
+        return cheatMoney() == MONEY_INFINITE || cheatInfiniteHp() || cheatInfiniteBasara() || cheatUnlockAll();
+    }
 
     /** GX Thread was on by default for slower phones and flickers: turn it off once on every install. */
     void resetGxThreadOnce() {

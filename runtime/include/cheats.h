@@ -18,9 +18,15 @@ enum MoneyMode : int32_t { kMoneyOff = 0, kMoneyInfinite = 1, kMoneyOnce = 2 };
 // False in a LAN session: a cheat there would make this player's game diverge.
 bool Available();
 
+// Unlocks all stages, weapons, accessories, skills, skins, and items.
+bool UnlockAll();
+void UnlockAllNow();
+
 // money: kMoney*; amount: the money Infinite holds and Once sets (clamped to kMaxMoney); onceSeq: a Once
-// request is applied at the next frame when it differs from the last one seen.
-void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara);
+// request is applied at the next frame when it differs from the last one seen; unlockAll: unlocks all
+// stages, weapons, accessories, skills, skins, and items.
+void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara,
+                     bool unlockAll = false);
 
 // Keeps the enabled cheats applied. Call once a frame on the guest thread.
 void Apply();

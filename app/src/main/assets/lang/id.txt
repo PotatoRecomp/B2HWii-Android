@@ -319,6 +319,8 @@ Infinite HP	HP Tak Terbatas
 Your characters lose no HP. Enemies and allied officers still do.	HP karaktermu tidak berkurang. Musuh dan officer sekutu tetap bisa.
 Infinite Basara	Basara Tak Terbatas
 Your characters' Basara gauge stays full, refilled as soon as a Basara attack ends.	Gauge Basara karaktermu selalu penuh, diisi lagi begitu serangan Basara selesai.
+Unlock all	Buka Semua
+Unlocks all stages, weapons, accessories, skills, skins, and items.	Buka semua stage, senjata, aksesoris, skill, skin, dan item.
 0 to 9,999,999.	0 sampai 9.999.999.
 Save	Simpan
 Infinite Money	Uang Tak Terbatas

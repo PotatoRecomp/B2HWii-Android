@@ -37,7 +37,7 @@ public final class GameActivity extends SDLActivity
 
     /** Settings > Cheats (runtime/src/cheats.cpp); a new onceSeq sets the money once at the next frame. */
     static native void nativeApplyCheats(int money, int amount, int onceSeq, boolean infiniteHp,
-            boolean infiniteBasara);
+            boolean infiniteBasara, boolean unlockAll);
 
     /** The in-game settings: upscaler (0 off, 1 FSR Light, 2 FSR Full, 3 SGSR), frameskip (0 off, 1 auto, 2 30 FPS lock). */
     static native void nativeApplyLiveSettings(int upscaler, int frameskip);
@@ -481,7 +481,7 @@ public final class GameActivity extends SDLActivity
                 settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
                 settings.thermalControl(), settings.textureFilter());
         nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
-                settings.cheatInfiniteHp(), settings.cheatInfiniteBasara());
+                settings.cheatInfiniteHp(), settings.cheatInfiniteBasara(), settings.cheatUnlockAll());
         try {
             nativeApplyLiveSettings(settings.fsr(), settings.fpsLock30() ? 2 : settings.frameskip() ? 1 : 0);
         } catch (UnsatisfiedLinkError e) {

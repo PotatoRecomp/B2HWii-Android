@@ -14,7 +14,13 @@ namespace {
 
 // The save/progress record at 0x80558F18 (0x8051DC10 + 0x40000 - 0x4CF8, getter 0x80155C24); its
 // money is the u32 at +0x18. The shop draws it once and again only after a purchase.
+constexpr uint32_t kSaveRecordAddr = 0x80558F18u;
 constexpr uint32_t kMoneyAddr = 0x80558F30u;
+
+// Playable characters' save data array (30 characters, 0x1588 stride).
+constexpr uint32_t kCharacterBaseAddr = 0x80530948u;
+constexpr uint32_t kCharacterStride = 0x1588u;
+constexpr uint32_t kCharacterCount = 30u;
 
 // Read on the guest thread, set from Config.toml at start and from the launcher (JNI, UI thread).
 std::atomic<int32_t> g_money{RuntimeConfigFile::CheatMoneyMode()};
@@ -24,6 +30,7 @@ std::atomic<uint32_t> g_onceSeq{RuntimeConfigFile::CheatMoneyOnceSeq()};
 std::atomic<bool> g_oncePending{false};
 std::atomic<bool> g_infiniteHp{RuntimeConfigFile::CheatInfiniteHp()};
 std::atomic<bool> g_infiniteBasara{RuntimeConfigFile::CheatInfiniteBasara()};
+std::atomic<bool> g_unlockAll{RuntimeConfigFile::CheatUnlockAll()};
 
 // A playable character's class is cPl or one of its cPl00..cPlNN subclasses; the same characters as
 // enemy officers are cEPlNN. The object's vtable starts with its RTTI, whose first word points at
@@ -44,14 +51,54 @@ bool Available() {
 bool InfiniteHp() { return g_infiniteHp.load(std::memory_order_relaxed) && Available(); }
 bool InfiniteBasara() { return g_infiniteBasara.load(std::memory_order_relaxed) && Available(); }
 bool InfiniteMoney() { return g_money.load(std::memory_order_relaxed) == kMoneyInfinite && Available(); }
+bool UnlockAll() { return g_unlockAll.load(std::memory_order_relaxed) && Available(); }
 
-void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara) {
+void UnlockAllNow() {
+    if (!Available()) {
+        return;
+    }
+
+    // 1. All stages (64 stages across 3 bitmasks).
+    Memory::TryWrite32(kSaveRecordAddr + 0x00u, 0xFFFFFFFFu);
+    Memory::TryWrite32(kSaveRecordAddr + 0x04u, 0xFFFFFFFFu);
+    Memory::TryWrite32(kSaveRecordAddr + 0x148u, 0xFFFFFFFFu);
+
+    // 2. Shop unlocks and all inventory items.
+    Memory::TryWrite32(kSaveRecordAddr + 0x28u, 0xFFFFFFFFu);
+    Memory::TryWrite32(kSaveRecordAddr + 0x30u, 0xFFFFFFFFu);
+    for (uint32_t offset = 0x38u; offset < 0x38u + 32u; offset += 4u) {
+        Memory::TryWrite32(kSaveRecordAddr + offset, 0x01010101u);
+    }
+    Memory::TryWrite32(kSaveRecordAddr + 0x68u, 0x64646464u);
+    Memory::TryWrite32(kSaveRecordAddr + 0x6Cu, 0x64646464u);
+    for (uint32_t offset = 0x70u; offset < 0x70u + 128u; offset += 4u) {
+        Memory::TryWrite32(kSaveRecordAddr + offset, 0x01010101u);
+    }
+
+    // 3. Characters: skills (max level 3), weapons (all 8), accessories (all 4), and skins (costumes 2 & 3).
+    for (uint32_t i = 0; i < kCharacterCount; ++i) {
+        const uint32_t charAddr = kCharacterBaseAddr + i * kCharacterStride;
+        Memory::TryWrite32(charAddr + 0x00u, 0x03030303u);
+        Memory::TryWrite32(charAddr + 0x04u, 0x03030303u);
+        Memory::TryWrite32(charAddr + 0x08u, 0x64646464u);
+        Memory::TryWrite32(charAddr + 0x0Cu, 0x64646464u);
+        Memory::TryWrite32(charAddr + 0x10u, 0x64646464u);
+        Memory::TryWrite32(charAddr + 0x1Cu, 0x01010000u);
+    }
+}
+
+void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara,
+                     bool unlockAll) {
     g_money = std::clamp<int32_t>(money, kMoneyOff, kMoneyOnce);
     g_amount = std::min(amount, kMaxMoney);
     g_infiniteHp = infiniteHp;
     g_infiniteBasara = infiniteBasara;
+    g_unlockAll = unlockAll;
     if (g_onceSeq.exchange(onceSeq) != onceSeq && money == kMoneyOnce) {
         g_oncePending = true;
+    }
+    if (unlockAll) {
+        UnlockAllNow();
     }
 }
 
@@ -74,6 +121,9 @@ void Apply() {
         if (Memory::TryWrite32(kMoneyAddr, amount)) {
             RT_LOGF(RT_TAG_OS, "cheats: money set to %u once\n", amount);
         }
+    }
+    if (UnlockAll()) {
+        UnlockAllNow();
     }
 }
 

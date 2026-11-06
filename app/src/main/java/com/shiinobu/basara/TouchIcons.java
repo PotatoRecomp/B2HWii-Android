@@ -105,6 +105,7 @@ final class TouchIcons {
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path tri = new Path();
     private final RectF cell = new RectF();
+    private final RectF rect = new RectF();
     private float opacity = 0.6f;
 
     private final Shader gloss = new LinearGradient(40f, 2f, 40f, 40f, argb(0.15f, 0xFFFFFF), 0, Shader.TileMode.CLAMP);
@@ -149,29 +150,30 @@ final class TouchIcons {
         c.translate(-40f, -40f);
     }
 
-    /** The disc under every round button: fill, held light, glow, gloss and the three-part ring. */
+    /**
+     * The disc under every round button in Feral Interactive style:
+     * - Subtle translucent dark circular backing
+     * - Soft press highlight fill when touched
+     * - Single crisp circular outline (circle line, monochrome)
+     */
     private void disc(Canvas c, Palette p, boolean down, boolean hot) {
-        shade(fill, p.base, 1f, down);
+        // Translucent dark circular backing
+        tint(fill, 0x050810, down ? 0.35f : 0.22f, down);
         c.drawCircle(40f, 40f, R, fill);
+
+        // Soft highlight fill when pressed or hot
         if (down) {
-            tint(fill, 0xFFFFFF, 0.1f, true);
-            c.drawCircle(40f, 40f, R, fill);
+            tint(fill, 0xFFFFFF, 0.28f, true);
+            c.drawCircle(40f, 40f, R - 1f, fill);
+        } else if (hot) {
+            tint(fill, 0xFFFFFF, 0.10f, false);
+            c.drawCircle(40f, 40f, R - 1f, fill);
         }
-        if (hot || down) {
-            shade(fill, p.hot, down ? 1.5f : 1f, down);
-            c.drawCircle(40f, 40f, R, fill);
-        }
-        shade(fill, gloss, 1f, down);
-        c.drawCircle(40f, 40f, R, fill);
-        tint(line, down ? 0xFFFFFF : p.ring, 1f, down);
-        line.setStrokeWidth(2.3f);
-        c.drawCircle(40f, 40f, R - 1.15f, line);
-        tint(line, p.ringLo, 1f, down);
-        line.setStrokeWidth(1.7f);
-        c.drawCircle(40f, 40f, R - 3.15f, line);
-        tint(line, p.ringHi, 0.9f, down);
-        line.setStrokeWidth(0.75f);
-        c.drawCircle(40f, 40f, R - 4.4f, line);
+
+        // Crisp circle line outline (clean monochrome white)
+        tint(line, 0xFFFFFF, down ? 1.0f : 0.85f, down);
+        line.setStrokeWidth(down ? 2.8f : 2.0f);
+        c.drawCircle(40f, 40f, R - 1.2f, line);
     }
 
     private void caption(Canvas c, Palette p, String caption, float size, float spacing, boolean down) {
@@ -187,47 +189,86 @@ final class TouchIcons {
     }
 
     /**
-     * Modern: a round button of radius `r` on screen. `glyph` from TouchGlyphs; `caption` drawn
-     * inside under it (null for none); `key` the controller letter (null for none), in a badge on top,
-     * or under the button when `keyBelow` (the small system buttons); `hot` adds a glow.
+     * Modern style: a clean circular line button with a detailed icon centered inside
+     * and a Wii Classic Controller button indicator badge seamlessly set into the top rim.
      */
     void button(Canvas c, int bit, Path glyph, String caption, String key, float cx, float cy, float r,
             boolean down, boolean hot, boolean keyBelow) {
-        final Palette p = paletteOf(bit);
         enter(c, cx, cy, r / R, down);
-        disc(c, p, down, hot);
-        final boolean captioned = caption != null;
-        final float size = (captioned ? 0.54f : 0.6f) * D;
-        final float gy = captioned ? 40f - 0.1f * D : 40f;
-        c.save();
-        c.translate(40f - size / 2f, gy - size / 2f);
-        final float k = size / TouchGlyphs.BOX;
-        c.scale(k, k);
-        c.save();
-        c.translate(0f, 1.6f / k);
-        tint(fill, 0, 0.7f, down);
-        c.drawPath(glyph, fill);
-        c.restore();
-        shade(fill, down ? p.glyphHeld : p.glyph, 1f, down);
-        c.drawPath(glyph, fill);
-        c.restore();
-        if (captioned) caption(c, p, caption, 0.13f * D, 0.05f, down);
-        if (key != null) badge(c, p, key, keyBelow, down);
+
+        final float C = 40f;
+        final float mainR = 30.5f;
+        final float by = C - mainR; // 9.5f, sits right on top rim
+        final boolean hasKey = key != null;
+        final boolean wide = hasKey && key.length() > 1; // "ZL", "ZR"
+        final float rx = wide ? 10.5f : 8.0f;
+        final float ry = 8.0f;
+        final float gap = (wide ? 10.5f : 8.0f) * 1.15f;
+
+        // 1. Backing (Dark translucent glass fill)
+        tint(fill, 0x050810, down ? 0.35f : 0.22f, down);
+        c.drawCircle(C, C, mainR, fill);
+        if (hasKey) {
+            cell.set(C - rx, by - ry, C + rx, by + ry);
+            c.drawRoundRect(cell, ry, ry, fill);
+        }
+
+        // 2. Press highlight fill
+        if (down) {
+            tint(fill, 0xFFFFFF, 0.28f, true);
+            c.drawCircle(C, C, mainR - 1f, fill);
+            if (hasKey) {
+                tint(fill, 0xFFFFFF, 1.0f, true);
+                c.drawRoundRect(cell, ry, ry, fill);
+            }
+        } else if (hot) {
+            tint(fill, 0xFFFFFF, 0.10f, false);
+            c.drawCircle(C, C, mainR - 1f, fill);
+        }
+
+        // 3. Main Circle Rim (with gap at top where badge sits)
+        tint(line, 0xFFFFFF, down ? 1.0f : 0.85f, down);
+        line.setStrokeWidth(down ? 2.8f : 2.0f);
+        if (hasKey) {
+            rect.set(C - mainR + 1f, C - mainR + 1f, C + mainR - 1f, C + mainR - 1f);
+            final float halfDeg = (float) Math.toDegrees(Math.asin(Math.min(gap / mainR, 1f)));
+            c.drawArc(rect, -90f + halfDeg, 360f - 2f * halfDeg, false, line);
+        } else {
+            c.drawCircle(C, C, mainR - 1f, line);
+        }
+
+        // 4. Badge on top rim
+        if (hasKey) {
+            cell.set(C - rx, by - ry, C + rx, by + ry);
+            tint(line, down ? 0xFFFFFF : 0xE6EDF5, down ? 1.0f : 0.85f, down);
+            line.setStrokeWidth(down ? 2.2f : 1.6f);
+            c.drawRoundRect(cell, ry, ry, line);
+
+            text.setTextSize(wide ? 9.5f : 11.5f);
+            text.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
+            if (down) {
+                tint(text, 0x080B12, 1.0f, true);
+            } else {
+                tint(text, 0xFFFFFF, 1.0f, false);
+            }
+            c.drawText(key, C, by - (text.descent() + text.ascent()) / 2f + 0.5f, text);
+        }
+
+        // 5. Action Icon centered inside the main circle
+        if (glyph != null) {
+            final float size = 0.46f * D;
+            c.save();
+            c.translate(C - size / 2f, C + mainR * 0.04f - size / 2f);
+            final float k = size / TouchGlyphs.BOX;
+            c.scale(k, k);
+            tint(fill, down ? 0xFFFFFF : 0xF2F5F8, down ? 1.0f : 0.90f, down);
+            c.drawPath(glyph, fill);
+            c.restore();
+        }
+
         c.restore();
     }
 
-    private void badge(Canvas c, Palette p, String key, boolean below, boolean down) {
-        final float r = (below ? 0.18f : 0.135f) * D;
-        final float y = below ? 2f + D + 0.12f * D - r : 2f - 0.1f * D + r;
-        tint(fill, p.fillB, 1f, down);
-        c.drawCircle(40f, y, r, fill);
-        tint(line, down ? 0xFFFFFF : p.ring, 1f, down);
-        line.setStrokeWidth(1.6f);
-        c.drawCircle(40f, y, r - 0.8f, line);
-        text.setTextSize(0.15f * D);
-        tint(text, 0xF1F2F5, 1f, down);
-        c.drawText(key, 40f, y - (text.descent() + text.ascent()) / 2f, text);
-    }
 
     /**
      * Classic: a round button with its letter, a small caption under it (null for none) and, for
@@ -328,60 +369,91 @@ final class TouchIcons {
         text.setShader(null);
     }
 
-    /** A stick ("minimal"): a thin ring over a clear well, a small lit knob moved by vx, vy (-1..1). */
+    /** A stick ("minimal"): a clean circle line well with a sleek lit knob moved by vx, vy (-1..1). */
     void stick(Canvas c, float cx, float cy, float r, float vx, float vy, boolean active) {
         enter(c, cx, cy, r / WELL, false);
-        shade(fill, wellShade, 1f, active);
+
+        // Clean dark translucent well backing
+        tint(fill, 0x050810, active ? 0.30f : 0.20f, active);
         c.drawCircle(40f, 40f, WELL, fill);
-        final Palette p = chrome();
-        tint(line, active ? p.ringHi : p.ring, 1f, active);
-        line.setStrokeWidth(active ? 2.4f : 2f);
+
+        // Well boundary circle line
+        tint(line, active ? 0xFFFFFF : 0xE6EDF5, active ? 1.0f : 0.85f, active);
+        line.setStrokeWidth(active ? 2.5f : 1.8f);
         c.drawCircle(40f, 40f, WELL - 1.2f, line);
+
+        // Knob
         final float travel = WELL - KNOB;
         c.translate(40f + vx * travel, 40f + vy * travel);
-        shade(fill, active ? p.knobGlowHeld : p.knobGlow, 1f, active);
-        c.drawCircle(0f, 0f, 2.4f * KNOB, fill);
-        tint(fill, 0, 0.35f, active);
-        c.drawCircle(0f, 0f, KNOB + 0.03f * 2f * WELL, fill);
-        shade(fill, p.knob, 1f, active);
+
+        // Knob backing
+        tint(fill, 0x050810, active ? 0.50f : 0.35f, active);
         c.drawCircle(0f, 0f, KNOB, fill);
+        if (active) {
+            tint(fill, 0xFFFFFF, 0.25f, true);
+            c.drawCircle(0f, 0f, KNOB, fill);
+        }
+
+        // Knob circle line
+        tint(line, active ? 0xFFFFFF : 0xE6EDF5, 1f, active);
+        line.setStrokeWidth(active ? 2.6f : 2.0f);
+        c.drawCircle(0f, 0f, KNOB - 1f, line);
+
+        // Knob center dot
+        tint(fill, 0xFFFFFF, active ? 1.0f : 0.85f, active);
+        c.drawCircle(0f, 0f, 3.2f, fill);
+
         c.restore();
     }
 
-    /** Modern D-pad: four keys, `r` = half its width on screen; `heldBits` = the directions down. */
+    /** Modern D-pad: 4 separate cross arrow buttons with clean thin circle lines and clear spacing. */
     void pad(Canvas c, float cx, float cy, float r, int heldBits) {
         enter(c, cx, cy, r / R, false);
-        final float s = 0.34f * D, round = 0.18f * s;
-        key(c, 2f + 0.33f * D, 2f, s, round, 0, (heldBits & TouchControlsView.UP) != 0);
-        key(c, 2f + 0.33f * D, 2f + D - s, s, round, 1, (heldBits & TouchControlsView.DOWN) != 0);
-        key(c, 2f, 2f + 0.33f * D, s, round, 2, (heldBits & TouchControlsView.LEFT) != 0);
-        key(c, 2f + D - s, 2f + 0.33f * D, s, round, 3, (heldBits & TouchControlsView.RIGHT) != 0);
+
+        final float C = 40f;
+        final float dist = 24.5f;
+        final float btnR = 11.5f;
+
+        final int[] bits = {TouchControlsView.UP, TouchControlsView.DOWN, TouchControlsView.LEFT, TouchControlsView.RIGHT};
+        final float[][] dirs = {{0f, -1f}, {0f, 1f}, {-1f, 0f}, {1f, 0f}};
+
+        for (int i = 0; i < 4; i++) {
+            final float bx = C + dirs[i][0] * dist;
+            final float by = C + dirs[i][1] * dist;
+            final boolean lit = (heldBits & bits[i]) != 0;
+
+            // Backing
+            tint(fill, 0x050810, lit ? 0.35f : 0.22f, lit);
+            c.drawCircle(bx, by, btnR, fill);
+            if (lit) {
+                tint(fill, 0xFFFFFF, 0.28f, true);
+                c.drawCircle(bx, by, btnR - 0.7f, fill);
+            }
+
+            // Button rim (thin, clean circle line)
+            tint(line, lit ? 0xFFFFFF : 0xE6EDF5, lit ? 1.0f : 0.85f, lit);
+            line.setStrokeWidth(lit ? 1.8f : 1.3f);
+            c.drawCircle(bx, by, btnR - 0.7f, line);
+
+            // Chevron arrow
+            drawChevron(c, bx, by, dirs[i][0], dirs[i][1], lit);
+        }
+
         c.restore();
     }
 
-    private void key(Canvas c, float left, float top, float s, float round, int dir, boolean lit) {
-        final Palette p = chrome();
-        cell.set(left, top, left + s, top + s);
-        shade(fill, p.base, 1f, lit);
-        c.drawRoundRect(cell, round, round, fill);
-        if (lit) {
-            tint(fill, 0xFFFFFF, 0.22f, true);
-            c.drawRoundRect(cell, round, round, fill);
-        }
-        tint(line, lit ? 0xFFFFFF : p.ring, 1f, lit);
-        line.setStrokeWidth(1.6f);
-        c.drawRoundRect(cell, round, round, line);
-        final float mx = cell.centerX(), my = cell.centerY(), a = 0.055f * D;
+    private void drawChevron(Canvas c, float cx, float cy, float dx, float dy, boolean lit) {
+        tint(line, lit ? 0xFFFFFF : 0xE6EDF5, 1f, lit);
+        line.setStrokeWidth(lit ? 1.9f : 1.5f);
         tri.reset();
-        switch (dir) {
-            case 0: tri.moveTo(mx, my - a * 0.8f); tri.lineTo(mx + a, my + a * 0.6f); tri.lineTo(mx - a, my + a * 0.6f); break;
-            case 1: tri.moveTo(mx, my + a * 0.8f); tri.lineTo(mx - a, my - a * 0.6f); tri.lineTo(mx + a, my - a * 0.6f); break;
-            case 2: tri.moveTo(mx - a * 0.8f, my); tri.lineTo(mx + a * 0.6f, my - a); tri.lineTo(mx + a * 0.6f, my + a); break;
-            default: tri.moveTo(mx + a * 0.8f, my); tri.lineTo(mx - a * 0.6f, my + a); tri.lineTo(mx - a * 0.6f, my - a); break;
-        }
-        tri.close();
-        tint(fill, lit ? 0xFFFFFF : p.ic2, 1f, lit);
-        c.drawPath(tri, fill);
+        final float t = 4.6f;
+        final float tx = cx + dx * t, ty = cy + dy * t;
+        final float b1x = cx - dx * t * 0.4f - dy * t, b1y = cy - dy * t * 0.4f + dx * t;
+        final float b2x = cx - dx * t * 0.4f + dy * t, b2y = cy - dy * t * 0.4f - dx * t;
+        tri.moveTo(b1x, b1y);
+        tri.lineTo(tx, ty);
+        tri.lineTo(b2x, b2y);
+        c.drawPath(tri, line);
     }
 
     /** Classic D-pad: one cross, the held arms lit, chevrons and a centre dot. */
@@ -419,8 +491,8 @@ final class TouchIcons {
     }
 
     private void chevron(Canvas c, Palette p, Path path, boolean lit) {
-        tint(line, lit ? 0xFFFFFF : p.ic2, 1f, lit);
-        line.setStrokeWidth(lit ? 2.8f : 2.4f);
+        tint(line, lit ? 0xFFFFFF : p.ringHi, 1f, lit);
+        line.setStrokeWidth(lit ? 3.0f : 2.2f);
         c.drawPath(path, line);
     }
 

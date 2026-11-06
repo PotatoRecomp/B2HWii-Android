@@ -292,6 +292,7 @@ final class AppFiles {
                 + "money_once_seq = " + settings.cheatMoneySeq() + "\n"
                 + "infinite_hp = " + settings.cheatInfiniteHp() + "\n"
                 + "infinite_basara = " + settings.cheatInfiniteBasara() + "\n"
+                + "unlock_all = " + settings.cheatUnlockAll() + "\n"
                 + "\n[network]\nenabled = false\n"
                 + "\n[discord]\nenabled = false\n"
                 + "\n[paths]\n"

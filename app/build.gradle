@@ -15,7 +15,7 @@ android {
     defaultConfig {
         applicationId 'com.shiinobu.basara'
         // Guest RAM uses memfd_create, which bionic has from Android 11 (API 30).
-        minSdk 30
+        minSdk 29
         targetSdk 34
         // -PbasaraVersionCode / -PbasaraVersionName: a newer build for testing the updater.
         versionCode((project.findProperty('basaraVersionCode') ?: '18') as int)

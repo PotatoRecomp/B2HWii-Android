@@ -52,9 +52,21 @@ final class FileBrowser {
         this.folderMode = accept == null;
         this.emptyText = emptyText;
         final StorageManager storage = (StorageManager) activity.getSystemService(Context.STORAGE_SERVICE);
-        for (StorageVolume volume : storage.getStorageVolumes()) {
-            final File dir = volume.getDirectory();
-            if (dir != null && dir.canRead()) roots.add(dir);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            for (StorageVolume volume : storage.getStorageVolumes()) {
+                final File dir = volume.getDirectory();
+                if (dir != null && dir.canRead()) roots.add(dir);
+            }
+        } else {
+            // Android 10 has no StorageVolume.getDirectory: each volume's root is above its
+            // Android/data/<package>/files folder.
+            for (File files : activity.getExternalFilesDirs(null)) {
+                if (files == null) continue;
+                final String full = files.getAbsolutePath();
+                final int cut = full.indexOf("/Android/data/");
+                final File dir = cut > 0 ? new File(full.substring(0, cut)) : null;
+                if (dir != null && dir.canRead()) roots.add(dir);
+            }
         }
         if (roots.isEmpty()) roots.add(Environment.getExternalStorageDirectory());
 

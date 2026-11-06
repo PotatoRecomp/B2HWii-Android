@@ -47,7 +47,8 @@ final class AppFiles {
      * access"; without it, null (the log stays in dataDir/Logs).
      */
     static File homeDir() {
-        if (!android.os.Environment.isExternalStorageManager()) return null;
+        // Android 10: the legacy storage permission; without it the folder below can't be written.
+        if (android.os.Build.VERSION.SDK_INT >= 30 && !android.os.Environment.isExternalStorageManager()) return null;
         final File storage = android.os.Environment.getExternalStorageDirectory();
         final File dir = new File(storage, HOME);
         fixCase(storage, dir);
@@ -179,6 +180,49 @@ final class AppFiles {
 
     static File runtimeDir(Context context) { return new File(context.getFilesDir(), "runtime"); }
 
+    /**
+     * The phone's folders are readable and writable: "All files access" on Android 11 and later, the
+     * legacy storage permission (with requestLegacyExternalStorage) on Android 10.
+     */
+    static boolean hasFileAccess(Context context) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) return android.os.Environment.isExternalStorageManager();
+        return context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** The step that tells the player how to give file access on this Android version. */
+    static String fileAccessStep() {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            return Tr.t("Turn on \"Allow access to manage all files\" for this app.");
+        }
+        return Tr.t("Allow access to files (storage) for this app.");
+    }
+
+    /**
+     * Android 10 only: asks for the storage permission, or opens the app's settings once the player has
+     * refused it for good (the dialog no longer shows). The activity resumes afterwards, so the callers'
+     * "back from Settings" checks in onResume run the same way.
+     */
+    static void requestLegacyFileAccess(android.app.Activity activity) {
+        final android.content.SharedPreferences prefs =
+                activity.getSharedPreferences("file_access", Context.MODE_PRIVATE);
+        final boolean askedBefore = prefs.getBoolean("asked", false);
+        if (askedBefore && !activity.shouldShowRequestPermissionRationale(
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+            try {
+                activity.startActivity(new android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.parse("package:" + activity.getPackageName())));
+                return;
+            } catch (android.content.ActivityNotFoundException ignored) {
+                // fall through to the dialog
+            }
+        }
+        prefs.edit().putBoolean("asked", true).apply();
+        activity.requestPermissions(new String[] {android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0x5A);
+    }
+
     /** An extracted disc: sys/main.dol and the files/ tree. */
     static boolean isGameRoot(File dir) {
         return new File(dir, "sys/main.dol").isFile() && new File(dir, "files").isDirectory();
@@ -189,6 +233,35 @@ final class AppFiles {
     /** Imported, and the one game and revision this port runs. */
     static boolean gameReady(Context context) {
         return hasGameData(context) && gameProblem(gameDir(context)) == null;
+    }
+
+    /** The game's archives and their sizes on the original RBSJ08 disc. */
+    private static final String[] DISC_ARCHIVES = {"linkData.afs", "linkDt01.afs", "linkDt02.afs"};
+    private static final long[] DISC_ARCHIVE_SIZES = {944601088L, 1454065664L, 1879459840L};
+
+    /**
+     * How the archives at `root` differ from the original disc's, one line each, or null when they
+     * match. A changed disc (a patch, a bad conversion) can still be played; this is only a warning.
+     */
+    static String discDifferences(File root) {
+        final StringBuilder out = new StringBuilder();
+        for (int i = 0; i < DISC_ARCHIVES.length; ++i) {
+            final File file = new File(root, "files/" + DISC_ARCHIVES[i]);
+            final long size = file.isFile() ? file.length() : -1;
+            if (size == DISC_ARCHIVE_SIZES[i]) continue;
+            if (out.length() > 0) out.append('\n');
+            out.append(DISC_ARCHIVES[i]).append(": ")
+                    .append(size < 0 ? Tr.t("missing") : size + Tr.t(" bytes"))
+                    .append(Tr.t(" (original ")).append(DISC_ARCHIVE_SIZES[i]).append(')');
+        }
+        return out.length() > 0 ? out.toString() : null;
+    }
+
+    /** A key for the archive sizes at `root`, so a warning seen once is not shown again for them. */
+    static String discSignature(File root) {
+        final StringBuilder out = new StringBuilder();
+        for (String name : DISC_ARCHIVES) out.append(new File(root, "files/" + name).length()).append('/');
+        return out.toString();
     }
 
     /** Why the extracted game at `root` can't be played, or null when it can. */
@@ -292,6 +365,7 @@ final class AppFiles {
                 + "money_once_seq = " + settings.cheatMoneySeq() + "\n"
                 + "infinite_hp = " + settings.cheatInfiniteHp() + "\n"
                 + "infinite_basara = " + settings.cheatInfiniteBasara() + "\n"
+                + "camera_distance = " + String.format(java.util.Locale.ROOT, "%.2f", settings.cameraDistanceFactor()) + "\n"
                 + "\n[network]\nenabled = false\n"
                 + "\n[discord]\nenabled = false\n"
                 + "\n[paths]\n"

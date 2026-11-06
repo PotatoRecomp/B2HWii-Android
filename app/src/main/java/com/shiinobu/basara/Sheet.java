@@ -70,13 +70,7 @@ final class Sheet {
             window.setLayout(width, WindowManager.LayoutParams.WRAP_CONTENT);
         }
         dialog.setOnShowListener(d -> {
-            if (window == null) return;
-            window.setDecorFitsSystemWindows(false);
-            final WindowInsetsController controller = window.getInsetsController();
-            if (controller != null) {
-                controller.hide(WindowInsets.Type.systemBars());
-                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
+            SystemBars.hide(window);
         });
     }
 

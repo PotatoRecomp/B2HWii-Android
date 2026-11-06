@@ -67,3 +67,64 @@ extern "C" void BasaraTaskWait_HLE_802bf9d4(CpuContext* ctx) {
     InvokeIndirectCpu(0x803807ECu, ctx);
 }
 PPC_NATIVE_OVERRIDE_VOID(802BF9D4, BasaraTaskWait_HLE_802bf9d4, (CpuContext* ctx), (ctx));
+
+// HOME menu sound shutdown: nw4hbm::snd::SoundThread::Shutdown (804770F4). The AX callback
+// (804771EC) posts a tick (1) to the sound thread's 8-slot queue every audio frame, without
+// blocking. When the sound thread falls behind, the queue is full, the stop message (2) sent with
+// NOBLOCK fails, Shutdown returns 0 and SoundSystem panics (snd_SoundSystem.cpp:141) as the HOME
+// menu closes. Same steps here, but stale ticks are dropped to make room for the stop message.
+namespace {
+
+constexpr uint32_t kHbmSoundThread = 0x80655428u;    // SoundThread object; OSThread at +0
+constexpr uint32_t kHbmQueue = kHbmSoundThread + 0x2338u;
+constexpr uint32_t kHbmCreated = kHbmSoundThread + 0x2394u;
+constexpr uint32_t kHbmStaticInit = 0x80663098u;      // guard byte of the object's static init
+
+} // namespace
+
+extern "C" void BasaraHbmSoundShutdown_HLE_804770f4(CpuContext* ctx) {
+    const uint32_t self = ctx->gpr[3];
+    if (Memory::Read8(self + 0x2394u) == 0u) {
+        ctx->gpr[3] = 0;
+        return;
+    }
+    if (self != kHbmSoundThread || Memory::Read8(kHbmStaticInit) == 0u) {
+        // Not the object this override knows; leave it to the guest copy's own logic.
+        RT_LOGF(RT_TAG_OS, "hbm sound: unexpected shutdown target 0x%08X\n", self);
+        ctx->gpr[3] = 0;
+        return;
+    }
+    bool sent = false;
+    int dropped = 0;
+    for (int attempt = 0; attempt < 16 && !sent; ++attempt) {
+        ctx->gpr[3] = kHbmQueue;
+        ctx->gpr[4] = 2;  // stop
+        ctx->gpr[5] = 0;  // OS_MESSAGE_NOBLOCK
+        InvokeIndirectCpu(0x80360738u, ctx);  // OSSendMessage
+        sent = ctx->gpr[3] != 0;
+        if (!sent) {
+            ctx->gpr[3] = kHbmQueue;
+            ctx->gpr[4] = 0;  // drop the message
+            ctx->gpr[5] = 0;  // OS_MESSAGE_NOBLOCK
+            InvokeIndirectCpu(0x80360800u, ctx);  // OSReceiveMessage
+            dropped += ctx->gpr[3] != 0 ? 1 : 0;
+        }
+    }
+    if (dropped != 0) {
+        RT_LOGF(RT_TAG_OS, "hbm sound: queue was full, dropped %d tick(s) to send stop (%s)\n", dropped,
+                sent ? "sent" : "still full");
+    }
+    if (!sent) {
+        ctx->gpr[3] = 0;
+        return;
+    }
+    ctx->gpr[3] = self;  // OSThread at +0
+    ctx->gpr[4] = 0;
+    InvokeIndirectCpu(0x803633B0u, ctx);  // OSJoinThread
+    if (ctx->gpr[3] == 0) {
+        RT_LOGF(RT_TAG_OS, "hbm sound: OSJoinThread failed\n");
+    }
+    Memory::Write8(kHbmCreated, 0);
+    ctx->gpr[3] = 1;
+}
+PPC_NATIVE_OVERRIDE_VOID(804770F4, BasaraHbmSoundShutdown_HLE_804770f4, (CpuContext* ctx), (ctx));

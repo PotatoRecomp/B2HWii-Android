@@ -229,13 +229,54 @@ bool DynamicResolutionTick() {
     return true;
 }
 
-// Fill: only aurora's 3D projection widens to the surface (Hor+); see the Basara note above.
+// Basara's only MTXPerspective wrapper (802BF3F4, every camera) passes the .sdata2 aspect 10/7 and
+// then scales m11 by 0.9333 (448/480), a 4:3 view. Rewriting that constant makes the game's own
+// projection wide (Hor+, like the PS2 SLPM-66848 widescreen patch), so everything the game derives
+// from it (markers over enemies) follows. BASARA_WIDE_GUEST=0 leaves it (aurora alone then widens).
+// 803586AC's C_MTXLightPerspective (a screen effect projecting the camera's EFB copy) reads its own
+// 10/7 copy (0x80668B08); it has to match the camera or the effect slides off the picture.
+constexpr uint32_t kCameraAspectAddrs[] = {0x80667784u, 0x80668B08u};
+constexpr float kCameraAspectStock = 10.0f / 7.0f;
+constexpr float kCameraHeightScale = 0.93333334f;
+
+void ApplyGuestCameraAspect(float pictureAspect) {
+    static const bool s_enabled = [] {
+        const char* v = std::getenv("BASARA_WIDE_GUEST");
+        return !(v && *v == '0');
+    }();
+    if (!s_enabled) {
+        return;
+    }
+    const float value = pictureAspect > 4.0f / 3.0f + 0.01f ? pictureAspect / kCameraHeightScale : kCameraAspectStock;
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    for (const uint32_t addr : kCameraAspectAddrs) {
+        uint32_t current = 0;
+        if (!Memory::TryRead32(addr, current) || current == bits) {
+            continue;
+        }
+        float before = 0.0f;
+        std::memcpy(&before, &current, sizeof(before));
+        // Only ever replace the stock value or one written here (a sane aspect), never unrelated data.
+        if (!(before > 1.3f && before < 3.5f)) {
+            continue;
+        }
+        if (Memory::TryWrite32(addr, bits) && addr == kCameraAspectAddrs[0]) {
+            RT_LOGF(RT_TAG_VI, "display: camera aspect %.3f (picture %.3f)\n", value * kCameraHeightScale,
+                    pictureAspect);
+        }
+    }
+}
+
+// Fill: aurora's 3D projection widens to the surface (Hor+); Basara's camera aspect follows too.
 void ApplyGameCanvas(int32_t aspect) {
     // 3D: cameras set up for 16:9 follow the surface's aspect (aurora's projection), the same view
     // height with more or less to the sides, instead of being stretched or squashed onto it.
+    // Basara's cameras are all 4:3, so 16:9 widens them too (Hor+) instead of stretching the picture.
     const bool fitted = aspect == kAspectFill && g_surfaceWidth != 0 && g_surfaceHeight != 0;
     AuroraSetWidePerspectiveAspect(
-        fitted ? static_cast<float>(g_surfaceWidth) / static_cast<float>(g_surfaceHeight) : 0.0f);
+        fitted ? static_cast<float>(g_surfaceWidth) / static_cast<float>(g_surfaceHeight)
+               : aspect == kAspect16x9 ? kRatio16x9 : 0.0f);
     // BASARA_FILL_2D=1 (test): 2D (HUD, text, menus) keeps its 16:9 shape in the middle instead of
     // stretching to the edges. Off: players found the narrowed HUD and the bars in menus worse.
     static const bool s_fill2D = [] {
@@ -243,6 +284,8 @@ void ApplyGameCanvas(int32_t aspect) {
         return v && *v == '1';
     }();
     AuroraSetFill2D(fitted && s_fill2D);
+    ApplyGuestCameraAspect(fitted ? static_cast<float>(g_surfaceWidth) / static_cast<float>(g_surfaceHeight)
+                                  : aspect == kAspect16x9 ? kRatio16x9 : 4.0f / 3.0f);
 }
 
 } // namespace

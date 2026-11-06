@@ -304,6 +304,7 @@ extern "C" void GX__Begin_8016f0f0(uint32_t t, uint32_t vf, uint32_t nv) {
         WriteDisplayListData((u16)nv, 2);
         return;
     }
+    BasaraHud_Begin();
     ServiceDeferredTimingDuringGxWork();
     ApplyAuroraVtxStateForBegin(static_cast<GXVtxFmt>(vf));
     g_hleGxState.currentVtxFmt=(GXVtxFmt)vf; g_hleGxState.currentPrim=(GXPrimitive)t;

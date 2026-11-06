@@ -476,7 +476,9 @@ static void apply_xf_projection() {
   if (wide > 0.0f && raw[0] != 0.0f && raw[2] != 0.0f) {
     const float aspect = raw[2] / raw[0];
     const bool screenSized = g_gxState.projType != GX_ORTHOGRAPHIC || 2.0f / raw[2] > 150.0f;
-    if (aspect > 1.68f && aspect < 1.88f && screenSized) {
+    // Basara: a 4:3-only game (it never reads IPL.AR); every camera is 4:3 and is widened the same way.
+    const bool wideCamera = (aspect > 1.68f && aspect < 1.88f) || (aspect > 1.30f && aspect < 1.37f);
+    if (wideCamera && screenSized && aspect < wide) {
       widen = aspect / wide;
     }
   }
@@ -497,6 +499,18 @@ static void apply_xf_projection() {
       s_seen.push_back(key);
       std::fprintf(stderr, "[gx] ortho: %.0f x %.0f units (x scale %g offset %g, y scale %g offset %g), widen %.3f\n",
                    2.0f / std::fabs(raw[0]), 2.0f / std::fabs(raw[2]), raw[0], raw[1], raw[2], raw[3], widen);
+    }
+  }
+  if (g_logOrtho && g_gxState.projType != GX_ORTHOGRAPHIC && raw[0] != 0.0f) {
+    static std::mutex s_plock;
+    static std::vector<std::array<int, 3>> s_pseen;
+    std::lock_guard<std::mutex> lock(s_plock);
+    const std::array<int, 3> key{static_cast<int>(raw[2] / raw[0] * 100.0f), static_cast<int>(raw[2] * 100.0f),
+                                 static_cast<int>(raw[1] * 100.0f)};
+    if (s_pseen.size() < 64 && std::find(s_pseen.begin(), s_pseen.end(), key) == s_pseen.end()) {
+      s_pseen.push_back(key);
+      std::fprintf(stderr, "[gx] persp: aspect %.3f (x scale %g offset %g, y scale %g offset %g), widen %.3f\n",
+                   raw[2] / raw[0], raw[0], raw[1], raw[2], raw[3], widen);
     }
   }
   proj.m0[0] = raw[0] * widen;

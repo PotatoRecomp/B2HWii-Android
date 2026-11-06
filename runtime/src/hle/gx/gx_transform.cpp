@@ -165,6 +165,7 @@ extern "C" void GX__SetProjection_8017301c(uint32_t ma, uint32_t pt) {
                          -m[7] / m[5], chain);
         }
     }
+    BasaraHud_SetProjection(pt == GX_ORTHOGRAPHIC, m[0]);
     GXSetProjection(m, (GXProjectionType)pt);
     UpdateProjectionVectorFromMatrix(m, (GXProjectionType)pt);
 }
@@ -216,6 +217,7 @@ extern "C" void GX__SetProjectionv_80173080(uint32_t pa) {
     }
     float m[16]={0.f}; m[0]=v[1]; m[5]=v[3]; m[10]=v[5]; m[11]=v[6];
     if(pt==GX_PERSPECTIVE){ m[2]=v[2]; m[6]=v[4]; m[14]=-1.f; } else { m[3]=v[2]; m[7]=v[4]; m[15]=1.f; }
+    BasaraHud_SetProjection(pt == GX_ORTHOGRAPHIC, v[1]);
     GXSetProjection(m, pt);
     UpdateProjectionVectorFromProjV(v);
 }

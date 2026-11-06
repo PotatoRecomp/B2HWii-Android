@@ -309,6 +309,8 @@ void SubmitAttribute(GXAttr attr, float* comps, const VtxAttrFmt& fmt, const u32
     switch (attr) {
     case GX_VA_POS:
         if (rawComps) {
+            BasaraHud_Position(ConvertCompToFloat(rawComps[0], fmt.type, fmt.frac),
+                               ConvertCompToFloat(rawComps[1], fmt.type, fmt.frac));
             if (fmt.cnt == GX_POS_XY) {
                 switch (fmt.type) {
                 case GX_U8: GXPosition2u8(r8(0), r8(1)); return;

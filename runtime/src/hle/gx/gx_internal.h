@@ -366,6 +366,10 @@ void MarkTlutObjsDirtyForRange(uint32_t addr, uint32_t size);
 extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 
 void HleFifoWrite(u32 val, uint32_t sizeBytes);
+// gx_hud.cpp: the Basara 2D layer (BASARA_LOG_2D).
+void BasaraHud_SetProjection(bool ortho, float xScale);
+void BasaraHud_Begin();
+void BasaraHud_Position(float x, float y);
 void SubmitAttribute(GXAttr attr, float* comps, const VtxAttrFmt& fmt, const u32* rawComps = nullptr);
 void SubmitIndexedAttribute(GXAttr attr, uint32_t index);
 bool VPosDiagEnabled();

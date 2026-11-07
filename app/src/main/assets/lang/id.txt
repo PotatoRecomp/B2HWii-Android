@@ -319,6 +319,8 @@ Infinite HP	HP Tak Terbatas
 Your characters lose no HP. Enemies and allied officers still do.	HP karaktermu tidak berkurang. Musuh dan officer sekutu tetap bisa.
 Infinite Basara	Basara Tak Terbatas
 Your characters' Basara gauge stays full, refilled as soon as a Basara attack ends.	Gauge Basara karaktermu selalu penuh, diisi lagi begitu serangan Basara selesai.
+Unlock All	Buka Semua
+Opens every character, stage, skill, weapon and item. What the game saves stays open after you turn this off.	Membuka semua karakter, stage, skill, senjata, dan item. Yang sudah disimpan game tetap terbuka walau ini dimatikan.
 0 to 9,999,999.	0 sampai 9.999.999.
 Save	Simpan
 Infinite Money	Uang Tak Terbatas
@@ -726,3 +728,13 @@ Closing the Wii HOME Menu could crash the game on slow phones (seen on realme 5)
 Graphics > Renderer > Vulkan now also works on Android 10 phones with an older Vulkan driver (for example realme 5, Adreno 610).	Grafis > Renderer > Vulkan kini juga jalan di HP Android 10 dengan driver Vulkan lama (misalnya realme 5, Adreno 610).
 Renderer Vulkan: if the phone isn't ready to show the picture when you come back to the game (from the home screen or after the screen turns off), the game now waits and tries again instead of closing.	Renderer Vulkan: kalau HP belum siap menampilkan gambar saat kamu kembali ke game (dari layar utama atau setelah layar mati), game kini menunggu dan mencoba lagi, tidak langsung tertutup.
 Renderer Vulkan on Android 10: the game takes memory in smaller pieces, and when memory runs short while loading a texture it tries again before giving up, so phones with 2-4 GB of RAM close less often.	Renderer Vulkan di Android 10: game mengambil memori dalam potongan lebih kecil, dan kalau memori menipis saat memuat tekstur, game mencoba lagi sebelum menyerah, jadi HP dengan RAM 2-4 GB lebih jarang tertutup.
+New cheat Unlock All (Settings > Cheats): opens every character, stage, skill, weapon and item. It only fills what is still locked; what the game saves stays open after you turn it off.	Cheat baru Buka Semua (Settings > Cheats): membuka semua karakter, stage, skill, senjata, dan item. Hanya mengisi yang masih terkunci; yang sudah disimpan game tetap terbuka walau dimatikan.
+New look for the Modern touch buttons: lighter round buttons with the controller letter on the rim and a D-pad of four round keys, in the same colours. L is now labelled SWITCH and R GUARD.	Tampilan baru tombol sentuh Modern: tombol bulat yang lebih ringan dengan huruf kontroler di tepinya dan D-pad empat tombol bulat, warnanya tetap. L kini berlabel SWITCH dan R GUARD.
+Gamepad Buttons	Tombol Gamepad
+Default: by position, like a Wii Classic Controller (A right, B bottom, X top, Y left).	Bawaan: menurut posisi, seperti Classic Controller Wii (A kanan, B bawah, X atas, Y kiri).
+Set by you.	Diatur olehmu.
+Tap a button, then press the gamepad button you want for it.	Ketuk satu tombol, lalu tekan tombol gamepad yang kamu mau untuknya.
+Not on the gamepad	Tidak dipakai di gamepad
+Reset to Default	Kembalikan ke Bawaan
+Press a gamepad button	Tekan tombol gamepad
+Gamepad Buttons (Settings > Controls): choose which gamepad button presses each Classic Controller button. Tap one, press the gamepad button, done; Reset to Default puts back the usual layout.	Tombol Gamepad (Settings > Controls): pilih tombol gamepad untuk tiap tombol Classic Controller. Ketuk satu, tekan tombol gamepad, selesai; Kembalikan ke Bawaan memasang lagi tata letak biasa.

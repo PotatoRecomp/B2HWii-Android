@@ -39,6 +39,9 @@ final class ReleaseNotes {
                 new String[] {
                     "Real widescreen: 16:9 and Fill Screen now show more of the battlefield to the sides instead of stretching the 4:3 picture, so characters keep their shape. Health bars and names above characters stay on them, and screen effects line up.",
                     "New Camera Distance (Settings > Display): pull the battle camera back to 1.5x or 2x to see more of the field. Cutscenes and stage intros keep the normal camera, and it is off in LAN play.",
+                    "New cheat Unlock All (Settings > Cheats): opens every character, stage, skill, weapon and item. It only fills what is still locked; what the game saves stays open after you turn it off.",
+                    "New look for the Modern touch buttons: lighter round buttons with the controller letter on the rim and a D-pad of four round keys, in the same colours. L is now labelled SWITCH and R GUARD.",
+                    "Gamepad Buttons (Settings > Controls): choose which gamepad button presses each Classic Controller button. Tap one, press the gamepad button, done; Reset to Default puts back the usual layout.",
                     "Graphics > Renderer > Vulkan now also works on Android 10 phones with an older Vulkan driver (for example realme 5, Adreno 610).",
                     "On Android 10 phones with four fast CPU cores, the graphics work now runs on the fast cores beside the game.",
                     "Android 10 support: the game and the launcher now run on Android 10. File access there is the usual storage permission dialog.",

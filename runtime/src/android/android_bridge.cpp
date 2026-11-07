@@ -102,10 +102,12 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyLiveSett
 
 // GameActivity.nativeApplyCheats: Settings > Cheats (cheats.h). A Once request applies at the next frame.
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyCheats(
-    JNIEnv*, jclass, jint money, jint amount, jint onceSeq, jboolean infiniteHp, jboolean infiniteBasara)
+    JNIEnv*, jclass, jint money, jint amount, jint onceSeq, jboolean infiniteHp, jboolean infiniteBasara,
+    jboolean unlockAll)
 {
     Cheats::SetFromLauncher(static_cast<int32_t>(money), static_cast<uint32_t>(amount < 0 ? 0 : amount),
-                            static_cast<uint32_t>(onceSeq), infiniteHp == JNI_TRUE, infiniteBasara == JNI_TRUE);
+                            static_cast<uint32_t>(onceSeq), infiniteHp == JNI_TRUE, infiniteBasara == JNI_TRUE,
+                            unlockAll == JNI_TRUE);
 }
 
 // GameActivity.nativeSetCameraDistance: Settings > Display > Camera Distance (cheats.cpp).

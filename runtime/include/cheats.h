@@ -19,15 +19,18 @@ enum MoneyMode : int32_t { kMoneyOff = 0, kMoneyInfinite = 1, kMoneyOnce = 2 };
 bool Available();
 
 // money: kMoney*; amount: the money Infinite holds and Once sets (clamped to kMaxMoney); onceSeq: a Once
-// request is applied at the next frame when it differs from the last one seen.
-void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara);
+// request is applied at the next frame when it differs from the last one seen; unlockAll: see Apply().
+void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara,
+                     bool unlockAll);
 
 // Camera distance (1 = the game's own camera, up to 2 = twice as far from what it looks at).
 // Config.toml [cheats] camera_distance, env BASARA_CAMERA_DISTANCE, or the launcher.
 float CameraDistance();
 void SetCameraDistance(float distance);
 
-// Keeps the enabled cheats applied. Call once a frame on the guest thread.
+// Keeps the enabled cheats applied. Call once a frame on the guest thread. Unlock all gives every
+// character, stage, skill, weapon and item the game has a place for in the save, once a second; what
+// the game saves with them stays after the cheat is turned off.
 void Apply();
 
 } // namespace Cheats

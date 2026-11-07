@@ -662,6 +662,9 @@ final class SettingsMenu {
         toggleRow(Tr.t("Infinite Basara"), Tr.t("Your characters' Basara gauge stays full, refilled as soon as a "
                         + "Basara attack ends."),
                 settings.cheatInfiniteBasara(), on -> settings.setCheatInfiniteBasara(on));
+        toggleRow(Tr.t("Unlock All"), Tr.t("Opens every character, stage, skill, weapon and item. What the game "
+                        + "saves stays open after you turn this off."),
+                settings.cheatUnlockAll(), on -> settings.setCheatUnlockAll(on));
     }
 
     private void askMoneyAmount() {

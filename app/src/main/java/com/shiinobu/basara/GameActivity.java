@@ -37,7 +37,7 @@ public final class GameActivity extends SDLActivity
 
     /** Settings > Cheats (runtime/src/cheats.cpp); a new onceSeq sets the money once at the next frame. */
     static native void nativeApplyCheats(int money, int amount, int onceSeq, boolean infiniteHp,
-            boolean infiniteBasara);
+            boolean infiniteBasara, boolean unlockAll);
 
     /** Settings > Display > Camera Distance (1 = the game's camera). */
     static native void nativeSetCameraDistance(float distance);
@@ -485,7 +485,7 @@ public final class GameActivity extends SDLActivity
                 settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
                 settings.thermalControl(), settings.textureFilter());
         nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
-                settings.cheatInfiniteHp(), settings.cheatInfiniteBasara());
+                settings.cheatInfiniteHp(), settings.cheatInfiniteBasara(), settings.cheatUnlockAll());
         try {
             nativeSetCameraDistance(settings.cameraDistanceFactor());
         } catch (UnsatisfiedLinkError e) {

@@ -365,6 +365,7 @@ final class AppFiles {
                 + "money_once_seq = " + settings.cheatMoneySeq() + "\n"
                 + "infinite_hp = " + settings.cheatInfiniteHp() + "\n"
                 + "infinite_basara = " + settings.cheatInfiniteBasara() + "\n"
+                + "unlock_all = " + settings.cheatUnlockAll() + "\n"
                 + "camera_distance = " + String.format(java.util.Locale.ROOT, "%.2f", settings.cameraDistanceFactor()) + "\n"
                 + "\n[network]\nenabled = false\n"
                 + "\n[discord]\nenabled = false\n"

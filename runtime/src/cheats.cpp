@@ -27,6 +27,86 @@ std::atomic<uint32_t> g_onceSeq{RuntimeConfigFile::CheatMoneyOnceSeq()};
 std::atomic<bool> g_oncePending{false};
 std::atomic<bool> g_infiniteHp{RuntimeConfigFile::CheatInfiniteHp()};
 std::atomic<bool> g_infiniteBasara{RuntimeConfigFile::CheatInfiniteBasara()};
+std::atomic<bool> g_unlockAll{RuntimeConfigFile::CheatUnlockAll()};
+
+// Unlock all. The save lives at 0x8051DC10; its accessors are at 0x80155BE0..0x80156630.
+// - Record (getter 0x80155C24): stages 0..48 open = bits of the u64 at +0x00 (+0x08 = shown as new),
+//   stages 49..78 open = bits of the u32 at +0x148 (+0x14C = new); 0x80140D04 reads them, 0x802848F8
+//   opens one. Items: one byte each at +0x38, 0xB7 of them (setter 0x80156338).
+// - Characters (getter 0x80155BE0): id 0..31 -> slot through the table at 0x80497E00 (-1 = none), a
+//   0x1588-byte record per slot at 0x80530928. +0x3C and +0x3D: the character is open (0x80154148;
+//   0x8009FF64 and 0x800A00FC open them); +0x20[8] skill levels 0..3, each character's skills listed
+//   at 0x80497E80 (10 bytes per id, 0xFF = none; 0x80155CD8, the new-game setup 0x8002F33C gives the
+//   first two level 1); +0x28[8] weapons and +0x30[1..3] (setters 0x80156368, 0x801563DC; 0x800A0330
+//   and 0x800A01E8 give them at level 1).
+// Each such byte keeps a value in its low 7 bits and a "new" mark in bit 7. Unlock all only fills the
+// empty ones with 1, so nothing the player has is changed and no "new" marks appear.
+constexpr uint32_t kRecordAddr = 0x80558F18u;
+constexpr uint32_t kCharRecords = 0x80530928u;
+constexpr uint32_t kCharStride = 0x1588u;
+constexpr uint32_t kCharSlots = 0x80497E00u;
+constexpr uint32_t kCharSkills = 0x80497E80u;
+constexpr uint32_t kCharIds = 32u;
+constexpr uint32_t kItems = 0xB7u;
+constexpr uint32_t kHighStageBits = (1u << (0x4Fu - 49u)) - 1u;  // stages 49..78
+
+// Sets the byte at addr to 1 when its value (low 7 bits) is 0. True when it changed.
+bool FillEmpty(uint32_t addr) {
+    const uint32_t word = addr & ~3u;
+    const uint32_t shift = (3u - (addr & 3u)) * 8u;
+    uint32_t value = 0;
+    if (!Memory::TryRead32(word, value) || ((value >> shift) & 0x7Fu) != 0) {
+        return false;
+    }
+    return Memory::TryWrite32(word, value | (1u << shift));
+}
+
+bool OrWord(uint32_t addr, uint32_t bits) {
+    uint32_t value = 0;
+    if (!Memory::TryRead32(addr, value) || (value & bits) == bits) {
+        return false;
+    }
+    return Memory::TryWrite32(addr, value | bits);
+}
+
+uint8_t ReadByte(uint32_t addr) {
+    uint32_t value = 0;
+    Memory::TryRead32(addr & ~3u, value);
+    return static_cast<uint8_t>(value >> ((3u - (addr & 3u)) * 8u));
+}
+
+// Returns how many entries it opened.
+uint32_t UnlockAllNow() {
+    uint32_t opened = 0;
+    opened += OrWord(kRecordAddr + 0x00u, 0xFFFFFFFFu);
+    opened += OrWord(kRecordAddr + 0x04u, 0xFFFFFFFFu);
+    opened += OrWord(kRecordAddr + 0x148u, kHighStageBits);
+    for (uint32_t item = 1; item < kItems; ++item) {
+        opened += FillEmpty(kRecordAddr + 0x38u + item);
+    }
+    for (uint32_t id = 0; id < kCharIds; ++id) {
+        uint32_t slot = 0;
+        if (!Memory::TryRead32(kCharSlots + id * 4u, slot) || static_cast<int32_t>(slot) < 0) {
+            continue;
+        }
+        const uint32_t chr = kCharRecords + slot * kCharStride;
+        opened += FillEmpty(chr + 0x3Cu);
+        opened += FillEmpty(chr + 0x3Du);
+        for (uint32_t i = 0; i < 10; ++i) {
+            const uint8_t skill = ReadByte(kCharSkills + id * 10u + i);
+            if (skill < 8) {
+                opened += FillEmpty(chr + 0x20u + skill);
+            }
+        }
+        for (uint32_t i = 0; i < 8; ++i) {
+            opened += FillEmpty(chr + 0x28u + i);
+        }
+        for (uint32_t i = 1; i < 4; ++i) {
+            opened += FillEmpty(chr + 0x30u + i);
+        }
+    }
+    return opened;
+}
 
 // A playable character's class is cPl or one of its cPl00..cPlNN subclasses; the same characters as
 // enemy officers are cEPlNN. The object's vtable starts with its RTTI, whose first word points at
@@ -61,11 +141,13 @@ std::atomic<float> g_cameraDistance{[] {
 float CameraDistance() { return Available() ? g_cameraDistance.load(std::memory_order_relaxed) : 1.0f; }
 void SetCameraDistance(float distance) { g_cameraDistance = ClampDistance(distance); }
 
-void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara) {
+void SetFromLauncher(int32_t money, uint32_t amount, uint32_t onceSeq, bool infiniteHp, bool infiniteBasara,
+                     bool unlockAll) {
     g_money = std::clamp<int32_t>(money, kMoneyOff, kMoneyOnce);
     g_amount = std::min(amount, kMaxMoney);
     g_infiniteHp = infiniteHp;
     g_infiniteBasara = infiniteBasara;
+    g_unlockAll = unlockAll;
     if (g_onceSeq.exchange(onceSeq) != onceSeq && money == kMoneyOnce) {
         g_oncePending = true;
     }
@@ -89,6 +171,16 @@ void Apply() {
         const uint32_t amount = g_amount.load(std::memory_order_relaxed);
         if (Memory::TryWrite32(kMoneyAddr, amount)) {
             RT_LOGF(RT_TAG_OS, "cheats: money set to %u once\n", amount);
+        }
+    }
+    // Once a second: a save loaded later replaces what was opened before it.
+    static uint32_t s_frame = 0;
+    if (g_unlockAll.load(std::memory_order_relaxed) && ++s_frame % 60u == 1u) {
+        static int s_logged = 0;
+        const uint32_t opened = UnlockAllNow();
+        if (opened != 0 && s_logged < 8) {
+            ++s_logged;
+            RT_LOGF(RT_TAG_OS, "cheats: unlock all opened %u entries\n", opened);
         }
     }
 }

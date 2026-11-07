@@ -127,4 +127,13 @@ BlobCacheStats blob_cache_stats() noexcept;
 // Persists the monolithic Vulkan pipeline cache into the blob cache (no-op elsewhere).
 void serialize_pipeline_caches() noexcept;
 
+bool vulkan_backend_active() noexcept;
+void vulkan_flush_buffer_range(const wgpu::Buffer& buffer, uint64_t offset, uint64_t size) noexcept;
+uint64_t vulkan_submitted_serial() noexcept;
+uint64_t vulkan_poll_completed() noexcept;
+void vulkan_wait_serial(uint64_t serial) noexcept;
+void vulkan_clear_attachments(const wgpu::RenderPassEncoder& pass, bool clearColor, const wgpu::Color& color,
+                              bool clearDepth, float depth, uint32_t x, uint32_t y, uint32_t width,
+                              uint32_t height) noexcept;
+
 } // namespace aurora::webgpu

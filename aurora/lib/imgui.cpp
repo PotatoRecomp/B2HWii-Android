@@ -165,14 +165,17 @@ void new_frame(const AuroraWindowSize& size) noexcept {
     ImGui_ImplSDLRenderer3_NewFrame();
     g_scale = size.scale;
   } else {
-    if (g_scale != size.scale) {
-      if (g_scale > 0.f) {
+    if (g_scale != size.scale || !ImGui::GetIO().Fonts->IsBuilt()) {
+      std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
+      if (g_scale != size.scale) {
+        if (g_scale > 0.f) {
+          ImGui_ImplWGPU_CreateDeviceObjects();
+        }
+        g_scale = size.scale;
+      }
+      if (!ImGui::GetIO().Fonts->IsBuilt()) {
         ImGui_ImplWGPU_CreateDeviceObjects();
       }
-      g_scale = size.scale;
-    }
-    if (!ImGui::GetIO().Fonts->IsBuilt()) {
-      ImGui_ImplWGPU_CreateDeviceObjects();
     }
     ImGui_ImplWGPU_NewFrame();
   }

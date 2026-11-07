@@ -151,11 +151,12 @@ extern "C" void BasaraMainLoop_HLE_802be4f4(CpuContext* ctx) {
     // BASARA_GX_FRAME_SYNC: 2 (default) waits at the top of the frame, 1 after the logic, 0 never.
     const int gxFrameSync = [] {
         const char* env = std::getenv("BASARA_GX_FRAME_SYNC");
-        const int value = env != nullptr ? std::clamp(std::atoi(env), 0, 2) : 2;
+        const int value = env != nullptr ? std::clamp(std::atoi(env), 0, 2) : 0;
         if (AuroraGxThreadEnabled()) RT_LOGF(RT_TAG_VI, "gx thread: frame sync %d\n", value);
         return value;
     }();
     uint64_t gxFrameMark = 0;
+    uint64_t prevGxFrameMark = 0;
     for (;;) {
         Cheats::Apply();
         const int mode = Mode();
@@ -219,7 +220,11 @@ extern "C" void BasaraMainLoop_HLE_802be4f4(CpuContext* ctx) {
         // GX thread: the previous frame's draws read guest memory (vertex arrays, matrices, textures)
         // on the GX thread after the game has moved on; the game rewrites those buffers for the next
         // frame, which showed as flicker. Wait for that frame before the game starts on the next one.
-        if (gxFrameSync == 2) AuroraGxThreadWaitMark(gxFrameMark);
+        if (gxFrameSync == 2) {
+            AuroraGxThreadWaitMark(gxFrameMark);
+        } else if (gxFrameSync == 0 && prevGxFrameMark != 0) {
+            AuroraGxThreadWaitMark(prevGxFrameMark);
+        }
         Call(ctx, 0x80338F38u, Memory::Read32(kGraphicsSystem));
         Call(ctx, 0x8034518Cu, 0x8057199Cu);
         Memory::Write32(kGameState + 0x138u, Memory::Read32(kGameState + 0x130u));
@@ -251,6 +256,7 @@ extern "C" void BasaraMainLoop_HLE_802be4f4(CpuContext* ctx) {
         if (!skip) {
             Call(ctx, 0x80338FBCu, Memory::Read32(kGraphicsSystem));
         }
+        prevGxFrameMark = gxFrameMark;
         gxFrameMark = AuroraGxThreadMark();
         // The original asserts here (spins forever) on a bad counter pair; it only clears +4.
         Memory::Write32(Memory::Read32(kFrameCounterPtr) + 4u, 0u);

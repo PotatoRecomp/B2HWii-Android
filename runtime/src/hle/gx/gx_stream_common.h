@@ -337,6 +337,46 @@ inline bool ApplyIndexedXfArrayForPacket(uint8_t cmd, uint32_t value) {
     return true;
 }
 
+// Resolves a single GX_LOAD_INDX_A..D packet immediately from guest memory and
+// submits an equivalent direct GX_LOAD_XF_REG_CMD (0x10) packet so the GX thread
+// never holds a live guest RAM pointer to a dynamic bone/matrix/light array.
+inline bool EmitIndexedXfPacketAsDirect(uint8_t cmd, uint32_t value) {
+    const int attr = GX_POS_MTX_ARRAY +
+                     (((cmd & GxCmd::GX_OPCODE_MASK_CMD) - GxCmd::GX_LOAD_INDX_A_CMD) / 0x08);
+    if (attr < GX_POS_MTX_ARRAY || attr > GX_LIGHT_ARRAY) {
+        return false;
+    }
+
+    const uint32_t index = value >> 16;
+    const uint32_t lenMinus1 = (value >> 12) & 0x0fu;
+    const uint32_t bytes = (lenMinus1 + 1u) * 4u;
+    const uint16_t addr = static_cast<uint16_t>(value & 0x0fffu);
+    const auto& arr = g_hleGxState.vtxArray[attr];
+    if (arr.base == 0 || arr.stride == 0 || bytes == 0 || bytes > 64u) {
+        return false;
+    }
+
+    const uint32_t offset = index * arr.stride;
+    if (!Memory::Contains(arr.base + offset, bytes)) {
+        return false;
+    }
+
+    const auto* hostPtr = static_cast<const uint8_t*>(GuestToHostPtr(arr.base + offset, bytes));
+    if (!hostPtr) {
+        return false;
+    }
+
+    uint8_t pkt[5 + 64];
+    pkt[0] = GxCmd::GX_LOAD_XF_REG_CMD;
+    pkt[1] = static_cast<uint8_t>((lenMinus1 >> 8) & 0xffu);
+    pkt[2] = static_cast<uint8_t>(lenMinus1 & 0xffu);
+    pkt[3] = static_cast<uint8_t>((addr >> 8) & 0xffu);
+    pkt[4] = static_cast<uint8_t>(addr & 0xffu);
+    std::memcpy(pkt + 5, hostPtr, bytes);
+    GXCallDisplayList(pkt, 5u + bytes);
+    return true;
+}
+
 // --- Render state ---------------------------------------------------------
 
 // Draw paths that bypass the guest's own GXSetAlphaCompare (raw FIFO packets,

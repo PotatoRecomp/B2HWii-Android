@@ -12,6 +12,9 @@ struct DrawData {
   float depth = 0.f;
   bool useScissor = false;
   ClipRect scissor{};
+  bool clearColor = true;
+  bool clearAlpha = true;
+  bool clearDepth = true;
 };
 
 constexpr uint32_t ClearPipelineConfigVersion = 3;

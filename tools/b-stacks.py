@@ -1,3 +1,4 @@
+import re
 """Summarise a BASARA_PROFILE profile-stacks.txt (Android) with symbols.
 
 Usage: python -I tools/b-stacks.py STACKS LIBMAIN [--top 25] [--scene HEX]
@@ -40,7 +41,8 @@ with open(args.stacks) as f:
             continue
         if args.scene and parts[0][1:].upper() != args.scene.upper():
             continue
-        frames = parts[1:]
+        # A frame is a libmain offset (hex) or module+offset; drop bare module names and "?".
+        frames = [x for x in parts[1:] if "+" in x or re.fullmatch(r"[0-9A-Fa-f]+", x)]
         if not frames:
             continue
         total += 1

@@ -76,6 +76,7 @@ struct DrawEncodeState {
   bool vertexBufferBound = false;
   // Dynamic offset of the uniform bind group last set in slot 1 by a GX draw.
   uint32_t uniformOffset = UINT32_MAX;
+  uint32_t boundDstAlpha = UINT32_MAX;
 };
 
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, DrawEncodeState& state,

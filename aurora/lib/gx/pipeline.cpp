@@ -119,9 +119,10 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, DrawEncod
     wgpuRenderPassEncoderSetBindGroup(pass.Get(), 2, data.bindGroups.resolvedTextureBindGroup, 0, nullptr);
     state.boundTextureBindGroup = data.bindGroups.resolvedTextureBindGroup;
   }
-  if (data.dstAlpha != UINT32_MAX) {
+  if (data.dstAlpha != UINT32_MAX && data.dstAlpha != state.boundDstAlpha) {
     const wgpu::Color color{0.f, 0.f, 0.f, data.dstAlpha / 255.f};
     pass.SetBlendConstant(&color);
+    state.boundDstAlpha = data.dstAlpha;
   }
   if (webgpu::g_indexPulling) {
     // The vertex shader reads index firstIndex + i itself (gx/shader.cpp, ibuf); base vertex is 0.

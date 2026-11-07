@@ -652,6 +652,9 @@ void GXCopyTex(void* dest, GXBool clear) {
             .clearDepth = false,
         }),
         .color = wgpu::Color{0.f, 0.f, 0.f, g_gxState.dstAlpha / 255.f},
+        .clearColor = false,
+        .clearAlpha = true,
+        .clearDepth = false,
     });
   }
   if (aurora::gx::render_target_has_alpha(g_gxState.pixelFmt)) {

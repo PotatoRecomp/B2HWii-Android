@@ -2416,7 +2416,11 @@ extern "C" void aurora_texture_memory_report(char* buffer, size_t size) {
 
 static wgpu::AddressMode wgpu_address_mode(GXTexWrapMode mode) {
   switch (mode) {
-    DEFAULT_FATAL("invalid wrap mode {}", underlying(mode));
+  default:
+    // The 2-bit field's value 3 (GX_MAX_TEXWRAPMODE) behaves as clamp on hardware (Dolphin
+    // BPMemory.h WrapMode). Basara sets it in some battles: a fatal error here stopped the game on
+    // a PowerVR BXM-8-256 (tester report 2026-11-07).
+    return wgpu::AddressMode::ClampToEdge;
   case GX_CLAMP:
     return wgpu::AddressMode::ClampToEdge;
   case GX_REPEAT:

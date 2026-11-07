@@ -451,6 +451,7 @@ void initialize() {
           .buffer =
               wgpu::BufferBindingLayout{
                   .type = wgpu::BufferBindingType::Uniform,
+                  .hasDynamicOffset = true,
               },
       },
   };
@@ -477,6 +478,7 @@ void initialize() {
           .buffer =
               wgpu::BufferBindingLayout{
                   .type = wgpu::BufferBindingType::Uniform,
+                  .hasDynamicOffset = true,
               },
       },
   };
@@ -521,7 +523,18 @@ void initialize() {
   g_linearSampler = g_device.CreateSampler(&linearSamplerDescriptor);
 }
 
+struct CachedCopyBindGroup {
+  WGPUTextureView view = nullptr;
+  WGPUBuffer buffer = nullptr;
+  uint32_t uniformSize = 0;
+  SampleFilter filter = SampleFilter::Nearest;
+  bool isDepth = false;
+  wgpu::BindGroup bindGroup;
+};
+static std::vector<CachedCopyBindGroup> g_copyBindGroups;
+
 void shutdown() {
+  g_copyBindGroups.clear();
   g_pipelines.clear();
   g_blitPipelines.clear();
   g_bindGroupLayout = {};
@@ -531,50 +544,72 @@ void shutdown() {
 }
 
 static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, const wgpu::RenderPipeline& pipeline) {
+  const bool isDepth = gx::is_depth_format(req.fmt);
   wgpu::BindGroup bindGroup;
-  if (gx::is_depth_format(req.fmt)) {
-    const std::array bindGroupEntries{
-        wgpu::BindGroupEntry{
-            .binding = 0,
-            .textureView = req.srcView,
-        },
-        wgpu::BindGroupEntry{
-            .binding = 1,
-            .buffer = g_uniformBuffer,
-            .offset = req.uniformRange.offset,
-            .size = req.uniformRange.size,
-        },
-    };
-    const wgpu::BindGroupDescriptor bindGroupDescriptor{
-        .layout = g_depthBindGroupLayout,
-        .entryCount = bindGroupEntries.size(),
-        .entries = bindGroupEntries.data(),
-    };
-    bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
-  } else {
-    const auto& sampler = req.sampleFilter == SampleFilter::Linear ? g_linearSampler : g_nearestSampler;
-    const std::array bindGroupEntries{
-        wgpu::BindGroupEntry{
-            .binding = 0,
-            .sampler = sampler,
-        },
-        wgpu::BindGroupEntry{
-            .binding = 1,
-            .textureView = req.srcView,
-        },
-        wgpu::BindGroupEntry{
-            .binding = 2,
-            .buffer = g_uniformBuffer,
-            .offset = req.uniformRange.offset,
-            .size = req.uniformRange.size,
-        },
-    };
-    const wgpu::BindGroupDescriptor bindGroupDescriptor{
-        .layout = g_bindGroupLayout,
-        .entryCount = bindGroupEntries.size(),
-        .entries = bindGroupEntries.data(),
-    };
-    bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
+  for (const auto& entry : g_copyBindGroups) {
+    if (entry.view == req.srcView.Get() && entry.buffer == g_uniformBuffer.Get() &&
+        entry.uniformSize == req.uniformRange.size && entry.isDepth == isDepth &&
+        (isDepth || entry.filter == req.sampleFilter)) {
+      bindGroup = entry.bindGroup;
+      break;
+    }
+  }
+  if (!bindGroup) {
+    if (isDepth) {
+      const std::array bindGroupEntries{
+          wgpu::BindGroupEntry{
+              .binding = 0,
+              .textureView = req.srcView,
+          },
+          wgpu::BindGroupEntry{
+              .binding = 1,
+              .buffer = g_uniformBuffer,
+              .offset = 0,
+              .size = req.uniformRange.size,
+          },
+      };
+      const wgpu::BindGroupDescriptor bindGroupDescriptor{
+          .layout = g_depthBindGroupLayout,
+          .entryCount = bindGroupEntries.size(),
+          .entries = bindGroupEntries.data(),
+      };
+      bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
+    } else {
+      const auto& sampler = req.sampleFilter == SampleFilter::Linear ? g_linearSampler : g_nearestSampler;
+      const std::array bindGroupEntries{
+          wgpu::BindGroupEntry{
+              .binding = 0,
+              .sampler = sampler,
+          },
+          wgpu::BindGroupEntry{
+              .binding = 1,
+              .textureView = req.srcView,
+          },
+          wgpu::BindGroupEntry{
+              .binding = 2,
+              .buffer = g_uniformBuffer,
+              .offset = 0,
+              .size = req.uniformRange.size,
+          },
+      };
+      const wgpu::BindGroupDescriptor bindGroupDescriptor{
+          .layout = g_bindGroupLayout,
+          .entryCount = bindGroupEntries.size(),
+          .entries = bindGroupEntries.data(),
+      };
+      bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
+    }
+    if (g_copyBindGroups.size() >= 32) {
+      g_copyBindGroups.erase(g_copyBindGroups.begin());
+    }
+    g_copyBindGroups.push_back(CachedCopyBindGroup{
+        .view = req.srcView.Get(),
+        .buffer = g_uniformBuffer.Get(),
+        .uniformSize = req.uniformRange.size,
+        .filter = req.sampleFilter,
+        .isDepth = isDepth,
+        .bindGroup = bindGroup,
+    });
   }
 
   const std::array colorAttachments{
@@ -592,7 +627,8 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
   };
   const auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
   pass.SetPipeline(pipeline);
-  pass.SetBindGroup(0, bindGroup);
+  const uint32_t dynamicOffset = req.uniformRange.offset;
+  pass.SetBindGroup(0, bindGroup, 1, &dynamicOffset);
   pass.Draw(3);
   pass.End();
 }

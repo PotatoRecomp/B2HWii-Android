@@ -1076,6 +1076,11 @@ bool present_presentation_job(const PresentationJob& job) {
           }
           presentDuration = std::chrono::duration_cast<std::chrono::nanoseconds>(
               PresentClock::now() - presentStarted);
+          // On Android native Vulkan (Adreno), swapchain backpressure blocks inside vkQueuePresentKHR
+          // rather than vkAcquireNextImageKHR. Include presentDuration so presenter_main detects
+          // backed-up flip queues and drops queued frames instead of stalling the shared queue mutex.
+          g_lastAcquireNanos.store((acquireDuration + presentDuration).count(),
+                                   std::memory_order_relaxed);
           if (presentStatus == wgpu::Status::Success) {
             presented = true;
             record_successful_present(
@@ -1565,6 +1570,9 @@ bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imgui
 bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) noexcept {
 #ifdef AURORA_ENABLE_GX
   std::lock_guard gpuLock(g_rendererGpuMutex);
+  if (window::frame_buffer_resize_pending()) {
+    window::sync_frame_buffer_size();
+  }
   // Note the debt before gfx::begin_frame() can fail: the synchronous path always started the
   // ImGui frame here, and the runtime's retry loop depends on that pairing.
   if (imguiPolicy == ImGuiFramePolicy::Immediate) {
@@ -1910,27 +1918,13 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
   const bool prepared = begin_frame_impl(
       false, overlapEncode ? ImGuiFramePolicy::Deferred : ImGuiFramePolicy::Immediate,
       &imguiNewFrameOwed);
-  {
-    const auto prepareEnd = WorkerClock::now();
-    const auto msOf = [](WorkerClock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
-    const double busy = msOf(published - cycleStart) + msOf(prepareEnd - prepareStart);
-    g_workerBusyNanos.fetch_add(static_cast<uint64_t>(busy * 1e6), std::memory_order_relaxed);
-    g_workerPrepareNanos.fetch_add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(prepareEnd - prepareStart).count(),
-        std::memory_order_relaxed);
-    static WorkerClock::time_point s_window{};
-    static int s_logged = 0;
-    if (prepareEnd - s_window > std::chrono::minutes(1)) {
-      s_window = prepareEnd;
-      s_logged = 0;
-    }
-    if (busy >= 16.7 && s_logged++ < 30) {
-      Log.info("Slow render frame: {:.1f} ms (lock {:.1f}, seal {:.1f}, encode {:.1f}, publish {:.1f}, prepare next {:.1f}; "
-               "{} pipelines queued)",
-               busy, msOf(locked - cycleStart), msOf(sealed - locked), msOf(encoded - sealed), msOf(published - encoded),
-               msOf(prepareEnd - prepareStart), gfx::g_stats.queuedPipelines);
-    }
-  }
+  const auto prepareEnd = WorkerClock::now();
+  const auto msOf = [](WorkerClock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+  const double sealPrepareBusy = msOf(published - cycleStart) + msOf(prepareEnd - prepareStart);
+  g_workerBusyNanos.fetch_add(static_cast<uint64_t>(sealPrepareBusy * 1e6), std::memory_order_relaxed);
+  g_workerPrepareNanos.fetch_add(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(prepareEnd - prepareStart).count(),
+      std::memory_order_relaxed);
 
   {
     std::lock_guard lock(g_frameWorker.mutex);
@@ -1942,6 +1936,7 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
   }
   g_frameWorker.cv.notify_all();
 
+  double overlapMs = 0.0;
   if (overlapEncode) {
     // Mutex-free: the producer drains and records the next frame in parallel, taking the renderer
     // mutex per drain, and this phase never takes it.
@@ -1950,17 +1945,36 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
     publish_presentations(std::move(presentationJobs), ctx.interpolationActive);
     if (imguiNewFrameOwed) {
       // Safe only now: every slot has replayed this frame's ImGui draw lists.
-      std::lock_guard gpuLock(g_rendererGpuMutex);
+      // imgui::new_frame locks g_rendererGpuMutex internally only when building font textures.
       imgui::new_frame(window::get_window_size());
     }
+    const auto overlapDur = WorkerClock::now() - overlapStart;
+    overlapMs = msOf(overlapDur);
     g_workerBusyNanos.fetch_add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(WorkerClock::now() - overlapStart).count(),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(overlapDur).count(),
         std::memory_order_relaxed);
     {
       std::lock_guard lock(g_frameWorker.mutex);
       g_frameWorker.ready.store(true, std::memory_order_release);
     }
     g_frameWorker.cv.notify_all();
+  }
+
+  {
+    const auto cycleEnd = WorkerClock::now();
+    const double busy = sealPrepareBusy + overlapMs;
+    static WorkerClock::time_point s_window{};
+    static int s_logged = 0;
+    if (cycleEnd - s_window > std::chrono::minutes(1)) {
+      s_window = cycleEnd;
+      s_logged = 0;
+    }
+    if (busy >= 16.7 && s_logged++ < 30) {
+      Log.info("Slow render frame: {:.1f} ms (lock {:.1f}, seal {:.1f}, encode {:.1f}, publish {:.1f}, prepare next {:.1f}, overlap {:.1f}; "
+               "{} pipelines queued)",
+               busy, msOf(locked - cycleStart), msOf(sealed - locked), msOf(encoded - sealed), msOf(published - encoded),
+               msOf(prepareEnd - prepareStart), overlapMs, gfx::g_stats.queuedPipelines);
+    }
   }
 
   g_workerCycles.fetch_add(1, std::memory_order_relaxed);

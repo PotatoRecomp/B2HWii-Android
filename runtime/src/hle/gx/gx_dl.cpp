@@ -839,8 +839,10 @@ struct DlInterpretVisitor {
         return true;
     }
     bool OnIndexedXf(const uint8_t* cmdPtr, uint8_t cmd, uint32_t value) {
-        ApplyIndexedXfArrayForPacket(cmd, value);
-        GXCallDisplayList(cmdPtr, 5);
+        if (!EmitIndexedXfPacketAsDirect(cmd, value)) {
+            ApplyIndexedXfArrayForPacket(cmd, value);
+            GXCallDisplayList(cmdPtr, 5);
+        }
         GXMarkFrameWork();
         return true;
     }
@@ -1260,7 +1262,10 @@ static bool ApplyAuroraArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX
         // GX thread: the game rewrites small arrays (a single 6-byte vertex was caught) right after
         // queuing the draw, without a cache flush. Copy those at queue time instead of handing the
         // GX thread a pointer into live guest RAM.
-        constexpr uint32_t kSnapshotMaxBytes = 256;
+        static const uint32_t kSnapshotMaxBytes = [] {
+            const char* env = std::getenv("BASARA_GX_SNAPSHOT_BYTES");
+            return env != nullptr ? static_cast<uint32_t>(std::max(0, std::atoi(env))) : 256u;
+        }();
         const bool needsPack = arr.stride > 0xffu || (s_gxThread && span <= kSnapshotMaxBytes);
         if (!Memory::Contains(arr.base, span)) {
             ok = false;
@@ -1350,6 +1355,28 @@ static bool ApplyAuroraArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX
 static bool ApplyAuroraIndexedXFArraysForDisplayList(const std::array<uint32_t, GX_VA_MAX_ATTR>& maxXfIdx,
                                                      const std::array<uint32_t, GX_VA_MAX_ATTR>& maxXfBytes,
                                                      const std::array<bool, GX_VA_MAX_ATTR>& sawXfIdx) {
+    constexpr uint32_t kXfPackedSlots = 256;
+    constexpr int kNumXfAttrs = GX_LIGHT_ARRAY - GX_POS_MTX_ARRAY + 1;
+    struct XfPackedSlot {
+        std::vector<uint8_t> bytes;
+        uint64_t fence = 0;
+        uint32_t guestBase = 0;
+        uint32_t stride = 0;
+    };
+    static std::array<std::array<XfPackedSlot, kXfPackedSlots>, kNumXfAttrs> s_xfPackedArrays;
+    static std::array<uint32_t, kNumXfAttrs> s_xfPackedCursor{};
+    static const bool s_gxThread = AuroraGxThreadEnabled();
+    static std::array<uint64_t*, kNumXfAttrs> s_xfPackedPending{};
+    static bool s_anyXfPackedPending = false;
+    if (s_anyXfPackedPending) {
+        const uint64_t fence = AuroraGxThreadMark();
+        for (auto& pending : s_xfPackedPending) {
+            if (pending != nullptr) *pending = fence;
+            pending = nullptr;
+        }
+        s_anyXfPackedPending = false;
+    }
+
     bool ok = true;
     for (int attr = GX_POS_MTX_ARRAY; attr <= GX_LIGHT_ARRAY; ++attr) {
         if (!sawXfIdx[attr]) {
@@ -1369,6 +1396,35 @@ static bool ApplyAuroraIndexedXFArraysForDisplayList(const std::array<uint32_t, 
         const uint8_t* hostPtr = static_cast<const uint8_t*>(GuestToHostPtr(arr.base, span));
         if (!hostPtr) {
             ok = false;
+            continue;
+        }
+        if (s_gxThread) {
+            const int xfIdx = attr - GX_POS_MTX_ARRAY;
+            auto& curSlot = s_xfPackedArrays[xfIdx][s_xfPackedCursor[xfIdx] % kXfPackedSlots];
+            // Submeshes of a character often share the same unchanged bone matrix palette across
+            // consecutive display lists. Reuse the current snapshot if its prefix still matches.
+            if (curSlot.guestBase == arr.base && curSlot.stride == arr.stride &&
+                curSlot.bytes.size() >= span &&
+                std::memcmp(curSlot.bytes.data(), hostPtr, span) == 0) {
+                ApplyAuroraArrayIfChanged(static_cast<GXAttr>(attr), curSlot.bytes.data(),
+                                          static_cast<uint32_t>(curSlot.bytes.size()),
+                                          static_cast<uint8_t>(arr.stride));
+                s_xfPackedPending[xfIdx] = &curSlot.fence;
+                s_anyXfPackedPending = true;
+                continue;
+            }
+            auto& slot = s_xfPackedArrays[xfIdx][++s_xfPackedCursor[xfIdx] % kXfPackedSlots];
+            if (slot.fence != 0) {
+                if (!AuroraGxThreadMarkReached(slot.fence)) AuroraGxThreadWaitMark(slot.fence);
+                slot.fence = 0;
+            }
+            slot.bytes.assign(hostPtr, hostPtr + span);
+            slot.guestBase = arr.base;
+            slot.stride = arr.stride;
+            ApplyAuroraArrayIfChanged(static_cast<GXAttr>(attr), slot.bytes.data(), span,
+                                      static_cast<uint8_t>(arr.stride));
+            s_xfPackedPending[xfIdx] = &slot.fence;
+            s_anyXfPackedPending = true;
             continue;
         }
         ApplyAuroraArrayIfChanged(static_cast<GXAttr>(attr), hostPtr, span, static_cast<uint8_t>(arr.stride));

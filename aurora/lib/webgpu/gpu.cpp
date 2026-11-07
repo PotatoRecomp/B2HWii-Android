@@ -58,12 +58,45 @@ extern "C" void aurora_vk_save_pipeline_cache();
 extern "C" bool aurora_vk_has_bc();
 static bool vulkan_backend_has_bc() { return aurora_vk_has_bc(); }
 extern "C" int aurora_vk_surface_rotation();
-static bool vulkan_backend_active() { return aurora_wgpu_vk; }
+extern "C" void aurora_vk_flush_buffer_range(WGPUBuffer buffer, uint64_t offset, uint64_t size);
+extern "C" uint64_t aurora_vk_submitted_serial();
+extern "C" uint64_t aurora_vk_poll_completed();
+extern "C" void aurora_vk_wait_serial(uint64_t serial);
+extern "C" void aurora_vk_clear_attachments(WGPURenderPassEncoder pass, bool clearColor, WGPUColor color,
+                                            bool clearDepth, float depth, uint32_t x, uint32_t y, uint32_t width,
+                                            uint32_t height);
+bool vulkan_backend_active() noexcept { return aurora_wgpu_vk; }
 static void set_vulkan_backend(bool on) { aurora_wgpu_vk = on; }
+void vulkan_flush_buffer_range(const wgpu::Buffer& buffer, uint64_t offset, uint64_t size) noexcept {
+  if (aurora_wgpu_vk) {
+    aurora_vk_flush_buffer_range(buffer.Get(), offset, size);
+  }
+}
+uint64_t vulkan_submitted_serial() noexcept { return aurora_wgpu_vk ? aurora_vk_submitted_serial() : 0; }
+uint64_t vulkan_poll_completed() noexcept { return aurora_wgpu_vk ? aurora_vk_poll_completed() : 0; }
+void vulkan_wait_serial(uint64_t serial) noexcept {
+  if (aurora_wgpu_vk) {
+    aurora_vk_wait_serial(serial);
+  }
+}
+void vulkan_clear_attachments(const wgpu::RenderPassEncoder& pass, bool clearColor, const wgpu::Color& color,
+                              bool clearDepth, float depth, uint32_t x, uint32_t y, uint32_t width,
+                              uint32_t height) noexcept {
+  if (aurora_wgpu_vk) {
+    aurora_vk_clear_attachments(pass.Get(), clearColor, WGPUColor{color.r, color.g, color.b, color.a}, clearDepth,
+                                depth, x, y, width, height);
+  }
+}
 #else
-static bool vulkan_backend_active() { return false; }
+bool vulkan_backend_active() noexcept { return false; }
 static void set_vulkan_backend(bool) {}
 static bool vulkan_backend_has_bc() { return true; }
+void vulkan_flush_buffer_range(const wgpu::Buffer&, uint64_t, uint64_t) noexcept {}
+uint64_t vulkan_submitted_serial() noexcept { return 0; }
+uint64_t vulkan_poll_completed() noexcept { return 0; }
+void vulkan_wait_serial(uint64_t) noexcept {}
+void vulkan_clear_attachments(const wgpu::RenderPassEncoder&, bool, const wgpu::Color&, bool, float, uint32_t,
+                              uint32_t, uint32_t, uint32_t) noexcept {}
 #endif
 
 wgpu::Device g_device;
@@ -1207,29 +1240,27 @@ static void reset_instance() {
   g_instance = {};
 }
 
-// Two WebGPU implementations share libmain on Android (lib/vulkan/wgpu_dispatch.cpp): Dawn, and aurora's
-// own Vulkan backend (lib/vulkan/vk_webgpu.cpp), which needs fewer Vulkan features (no 4x MSAA, Vulkan
-// 1.1) so it also runs drivers Dawn rejects, such as malisx2 on Mali. The order:
-//   BASARA_RENDERER=vulkan: the Vulkan backend first, then Dawn;
-//   otherwise Dawn, then the Vulkan backend (on the player's driver when one is installed);
-//   a player driver that neither starts is dropped, and Dawn runs on the system driver.
+// Two WebGPU implementations share libmain on Android (lib/vulkan/wgpu_dispatch.cpp): aurora's own
+// Vulkan backend (lib/vulkan/vk_webgpu.cpp, including tier 0 VkRenderPass + fences for Vulkan 1.1
+// devices without dynamic rendering) and Dawn. The order:
+//   default (Auto / Vulkan): aurora's Vulkan backend first, then Dawn as fallback;
+//   BASARA_RENDERER=dawn (or debug flag `dawn`): Dawn first, then aurora's Vulkan backend;
+//   BASARA_RENDERER=gles (Adreno 5xx on Android 10): Dawn's OpenGL ES backend first, then Vulkan;
+//   a player driver that neither starts is dropped, and the order runs again on the system driver.
 bool initialize(AuroraBackend auroraBackend) {
   const bool custom = custom_driver::begin();
+  load_gfx_flags();
 #if defined(__ANDROID__) && defined(AURORA_VULKAN_BACKEND)
   const char* renderer = std::getenv("BASARA_RENDERER");
-  const char* driverEnv = std::getenv("BASARA_GPU_DRIVER");
-  const bool maliCustom = custom && driverEnv != nullptr && contains_ignore_case(driverEnv, "mali");
-  const bool vulkanFirst = (renderer != nullptr && std::strcmp(renderer, "vulkan") == 0) || maliCustom;
+  const bool dawnFirst =
+      gfx_flag("dawn") || (renderer != nullptr && std::strcmp(renderer, "dawn") == 0);
   const bool vulkanTarget = auroraBackend == BACKEND_VULKAN || auroraBackend == BACKEND_AUTO;
   std::vector<bool> order;
-  if (vulkanFirst && vulkanTarget) order = {true, false};
-  // Dawn first, then the Vulkan backend, on the system driver too: Dawn finds no adapter on some
-  // drivers (Adreno 610, Redmi Pad SE), and the Null fallback after it cannot present.
-  // Dawn once more after both: on an Adreno 610 (Android 11+, Vulkan 1.1 system driver) Dawn finds no
-  // adapter on the first try, the Vulkan backend skips the 1.1 device, and Dawn then starts (the
-  // Renderer = Vulkan order, which players found working, 2026-11-07).
-  else if (vulkanTarget) order = {false, true, false};
-  else order = {false};
+  if (vulkanTarget) {
+    order = dawnFirst ? std::vector<bool>{false, true} : std::vector<bool>{true, false};
+  } else {
+    order = {false};
+  }
 #else
   const std::vector<bool> order{false};
 #endif
@@ -1237,7 +1268,6 @@ bool initialize(AuroraBackend auroraBackend) {
   // BASARA_RENDERER=gles (the launcher sets it for Adreno 5xx on Android 10 only, whose Vulkan driver
   // loses the device): Dawn's OpenGL ES backend first, then the usual Vulkan order if it cannot start.
   // Debug flag `gles` forces it on any phone, `nogles` turns it off.
-  load_gfx_flags();
   const char* rendererEnv = std::getenv("BASARA_RENDERER");
   const bool glesFirst = !custom && !gfx_flag("nogles") &&
                          (gfx_flag("gles") || (rendererEnv != nullptr && std::strcmp(rendererEnv, "gles") == 0));
@@ -1327,11 +1357,25 @@ void serialize_pipeline_caches() noexcept {
 #endif
 }
 
+struct CachedEfbTargets {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t msaaSamples = 0;
+  wgpu::TextureFormat colorFormat = wgpu::TextureFormat::Undefined;
+  wgpu::TextureFormat depthFormat = wgpu::TextureFormat::Undefined;
+  TextureWithSampler frameBuffer;
+  TextureWithSampler frameBufferResolved;
+  TextureWithSampler depthBuffer;
+  wgpu::BindGroup copyBindGroup;
+};
+static std::vector<CachedEfbTargets> g_efbTargetCache;
+
 void shutdown() {
   serialize_pipeline_caches();
   g_initialized.store(false, std::memory_order_release);
   fsr::shutdown();
   sgsr::shutdown();
+  g_efbTargetCache.clear();
   g_CopyBindGroupLayout = {};
   g_CopyPipeline = {};
   g_CopyPipelineRotated = {};
@@ -1481,10 +1525,37 @@ void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, ui
     // offscreen targets are not swapchain images, so reallocating them would only stall the frame.
     return;
   }
+  const auto colorFormat = g_graphicsConfig.surfaceConfiguration.format;
+  const auto depthFormat = g_graphicsConfig.depthFormat;
+  const uint32_t msaaSamples = g_graphicsConfig.msaaSamples;
+  for (const auto& entry : g_efbTargetCache) {
+    if (entry.width == render_width && entry.height == render_height && entry.msaaSamples == msaaSamples &&
+        entry.colorFormat == colorFormat && entry.depthFormat == depthFormat) {
+      g_frameBuffer = entry.frameBuffer;
+      g_frameBufferResolved = entry.frameBufferResolved;
+      g_depthBuffer = entry.depthBuffer;
+      g_CopyBindGroup = entry.copyBindGroup;
+      return;
+    }
+  }
   g_frameBuffer = create_render_texture(render_width, render_height, true);
-  g_frameBufferResolved = create_render_texture(render_width, render_height, false);
+  g_frameBufferResolved = msaaSamples > 1 ? create_render_texture(render_width, render_height, false) : TextureWithSampler{};
   g_depthBuffer = create_depth_texture(render_width, render_height);
   g_CopyBindGroup = create_copy_bind_group(present_source());
+  if (g_efbTargetCache.size() >= 4) {
+    g_efbTargetCache.erase(g_efbTargetCache.begin());
+  }
+  g_efbTargetCache.push_back(CachedEfbTargets{
+      .width = render_width,
+      .height = render_height,
+      .msaaSamples = msaaSamples,
+      .colorFormat = colorFormat,
+      .depthFormat = depthFormat,
+      .frameBuffer = g_frameBuffer,
+      .frameBufferResolved = g_frameBufferResolved,
+      .depthBuffer = g_depthBuffer,
+      .copyBindGroup = g_CopyBindGroup,
+  });
 }
 } // namespace aurora::webgpu
 

@@ -172,6 +172,16 @@ public:
     m_length = 0;
   }
 
+  void attach_ring(uint8_t* base, size_t offset, size_t capacity) noexcept {
+    if (m_data != nullptr && m_owned) {
+      free(m_data);
+    }
+    m_data = base;
+    m_length = offset;
+    m_capacity = capacity;
+    m_owned = false;
+  }
+
   void reserve_extra(size_t size) { resize(m_length + size, true); }
 
   ByteBuffer clone() const {

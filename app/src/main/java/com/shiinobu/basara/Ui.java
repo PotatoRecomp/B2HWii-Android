@@ -245,7 +245,14 @@ final class Ui {
                 case MotionEvent.ACTION_CANCEL:
                     held = false;
                     invalidate();
-                    if (listener != null) listener.released(step);
+                    // Posted like a click: the listener may rebuild the menu (removeAllViews), and doing
+                    // that inside this touch dispatch crashed the next draw (NullPointerException in
+                    // ViewGroup.dispatchDraw, tester video 2026-11-07, reproduced on a Redmi).
+                    if (listener != null) {
+                        final Listener l = listener;
+                        final int picked = step;
+                        post(() -> l.released(picked));
+                    }
                     return true;
                 default:
                     return true;

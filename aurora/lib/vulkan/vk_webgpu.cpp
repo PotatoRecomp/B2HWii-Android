@@ -872,6 +872,10 @@ struct GpuTimingStats {
   std::unordered_map<uint32_t, PipelineCost> pipelines;
   double heaviestDrawMs = 0;
   SlotTiming::Draw heaviestDraw{};
+  // Windows whose GPU busy time added up to more than the wall time, and whether the device's
+  // timestamps were given up on for that (see AddGpuTiming).
+  int implausibleWindows = 0;
+  bool implausible = false;
 };
 
 struct StagingChunk {
@@ -915,6 +919,7 @@ struct WGPUInstanceImpl : Object {};
 struct WGPUAdapterImpl : Object {};
 struct WGPUSurfaceImpl;
 struct WGPUTextureImpl;
+void DestroyViewFramebuffers(WGPUDeviceImpl* dev, VkImageView view);
 
 struct WGPUDeviceImpl : Object {
   VkInstance instance = VK_NULL_HANDLE;
@@ -952,6 +957,12 @@ struct WGPUDeviceImpl : Object {
   bool hasMemoryBudget = false;
   std::mutex renderPassMutex;
   std::unordered_map<std::string, VkRenderPass> renderPasses;
+  struct CachedFramebuffer {
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    std::vector<VkImageView> views;
+  };
+  std::mutex framebufferMutex;
+  std::unordered_map<std::string, CachedFramebuffer> framebuffers;
   // Submitted fences in serial order, and the last serial seen finished. Guarded by fenceMutex.
   std::mutex fenceMutex;
   std::deque<std::pair<uint64_t, std::shared_ptr<SerialFence>>> serialFences;
@@ -963,7 +974,7 @@ struct WGPUDeviceImpl : Object {
   GpuTimingStats gpuStats;
 
   std::recursive_mutex queueMutex;
-  uint64_t submittedSerial = 0;
+  std::atomic<uint64_t> submittedSerial{0};
   std::atomic<uint64_t> completedSerial{0};
   CmdSlot upload{};
   bool uploadOpen = false;
@@ -972,6 +983,8 @@ struct WGPUDeviceImpl : Object {
   VkSemaphore pendingAcquire = VK_NULL_HANDLE;
   // The surface slot that records which submission waited on pendingAcquire.
   uint64_t* pendingAcquireSerial = nullptr;
+  VkSemaphore pendingPresent = VK_NULL_HANDLE;
+  bool presentSignaled = false;
 
   std::mutex slotMutex;
   std::vector<CmdSlot> freeSlots;
@@ -1380,7 +1393,12 @@ void WaitSerial(WGPUDeviceImpl* dev, uint64_t serial, uint64_t timeoutNs) {
         .pSemaphores = &dev->timeline,
         .pValues = &serial,
     };
-    vkWaitSemaphores(dev->device, &wait, timeoutNs);
+    if (vkWaitSemaphores(dev->device, &wait, timeoutNs) == VK_SUCCESS) {
+      // The timeline only grows, so a finished wait proves `serial` complete without another query.
+      uint64_t prev = dev->completedSerial.load(std::memory_order_relaxed);
+      while (serial > prev && !dev->completedSerial.compare_exchange_weak(prev, serial)) {
+      }
+    }
     return;
   }
   // The first fence at or after `serial`; none left means it has already finished.
@@ -1473,8 +1491,10 @@ void AddGpuTiming(WGPUDeviceImpl* dev, SlotTiming& timing) {
     return;
   }
   ++s.frames;
-  aurora::g_gpuNanos.fetch_add(static_cast<uint64_t>(s.frameMs * 1e6), std::memory_order_relaxed);
-  aurora::g_gpuFrames.fetch_add(1, std::memory_order_relaxed);
+  if (!s.implausible) {
+    aurora::g_gpuNanos.fetch_add(static_cast<uint64_t>(s.frameMs * 1e6), std::memory_order_relaxed);
+    aurora::g_gpuFrames.fetch_add(1, std::memory_order_relaxed);
+  }
   s.worstFrameMs = std::max(s.worstFrameMs, s.frameMs);
   s.frameMs = 0;
   const auto now = std::chrono::steady_clock::now();
@@ -1483,6 +1503,19 @@ void AddGpuTiming(WGPUDeviceImpl* dev, SlotTiming& timing) {
   }
   if (now - s.windowStart < std::chrono::seconds(2)) {
     return;
+  }
+  // One queue runs one frame after another, so its busy time cannot exceed the wall time. The stock
+  // Adreno 618 driver (512.502, tile rendering) reported 1.5-2.2 s of GPU work a second (40 ms frames
+  // at 46 fps) while the frame worker never waited on the GPU: its timestamps say nothing about
+  // load, and dynamic resolution dropped to 50-60% on them. Two such windows and the device's GPU
+  // time is no longer passed on (dynamic resolution and the overlay fall back to the worker's).
+  const double wallMs = std::chrono::duration<double, std::milli>(now - s.windowStart).count();
+  if (!s.implausible) {
+    s.implausibleWindows = s.busyMs > wallMs * 1.1 ? s.implausibleWindows + 1 : 0;
+    if (s.implausibleWindows >= 2) {
+      s.implausible = true;
+      Log("gpu timestamps add up to %.2f s of work a second: not used for dynamic resolution", s.busyMs / wallMs);
+    }
   }
   const double frames = static_cast<double>(s.frames);
   Log("gpu: %.2f ms a frame (worst %.2f), passes %.2f ms in %.1f with %.0f draws, outside passes %.2f; "
@@ -1513,9 +1546,19 @@ void AddGpuTiming(WGPUDeviceImpl* dev, SlotTiming& timing) {
   s.passes = s.draws = 0;
 }
 
-// Releases the resources of every finished submission.
-void Retire(WGPUDeviceImpl* dev) {
-  const uint64_t completed = PollCompleted(dev);
+// The completed serial for the frame worker's hot path. On a timeline device CompletionThread keeps
+// completedSerial current (it waits on the oldest submission, then polls), so the worker reads the
+// atomic instead of asking the driver: Turnip on KGSL emulates timelines, and its
+// vkGetSemaphoreCounterValue blocked the Redmi's frame worker 57% of the time (2026-11-08). Tier 0
+// fences stay polled: they are cheap on the stock drivers that use them.
+uint64_t KnownCompleted(WGPUDeviceImpl* dev) {
+  return dev->legacy ? PollCompleted(dev) : dev->completedSerial.load(std::memory_order_acquire);
+}
+
+// Releases the resources of every finished submission. `poll` asks the driver for the latest serial;
+// without it the last known one is used (see KnownCompleted).
+void Retire(WGPUDeviceImpl* dev, bool poll = true) {
+  const uint64_t completed = poll ? PollCompleted(dev) : KnownCompleted(dev);
   std::vector<InFlight> done;
   {
     std::lock_guard lock(dev->inflightMutex);
@@ -1589,7 +1632,9 @@ void CompletionThread(WGPUDeviceImpl* dev) {
     } else {
       WaitSerial(dev, target, 50'000'000);
     }
-    Retire(dev);
+    // A timeline wait that finished already raised completedSerial (WaitSerial); an unfinished
+    // oldest submission means nothing later is done either.
+    Retire(dev, dev->legacy);
     FireReady(dev, [](const FutureRec& f) { return f.mode == WGPUCallbackMode_AllowSpontaneous; });
   }
 }
@@ -1677,6 +1722,7 @@ struct WGPUTextureImpl : Object {
 
   ~WGPUTextureImpl() override {
     if (defaultView != VK_NULL_HANDLE) {
+      DestroyViewFramebuffers(dev, defaultView);
       vkDestroyImageView(dev->device, defaultView, nullptr);
     }
     if (image != VK_NULL_HANDLE && !swapchain) {
@@ -1696,6 +1742,7 @@ struct WGPUTextureViewImpl : Object {
 
   ~WGPUTextureViewImpl() override {
     if (view != VK_NULL_HANDLE && view != texture->defaultView) {
+      DestroyViewFramebuffers(texture->dev, view);
       vkDestroyImageView(texture->dev->device, view, nullptr);
     }
     texture->Release();
@@ -1818,11 +1865,13 @@ struct WGPUCommandEncoderImpl : Object {
   bool needBarrier = true;
   bool finished = false;
   bool touchesSwapchain = false;
+  WGPUTextureImpl* swapchainTex = nullptr;
   std::vector<Object*> refs;
   std::vector<WGPUBufferImpl*> mapTracked;
 
   void Ref(Object* obj) {
-    if (obj != nullptr && obj->encoderStamp.exchange(id, std::memory_order_relaxed) != id) {
+    if (obj != nullptr && obj->encoderStamp.load(std::memory_order_relaxed) != id &&
+        obj->encoderStamp.exchange(id, std::memory_order_relaxed) != id) {
       obj->AddRef();
       refs.push_back(obj);
     }
@@ -1848,7 +1897,10 @@ struct WGPUCommandEncoderImpl : Object {
   }
   // Swapchain images move from their acquire/present layout to home before first use.
   void PrepareTexture(WGPUTextureImpl* tex) {
-    touchesSwapchain |= tex->swapchain;
+    if (tex->swapchain) {
+      touchesSwapchain = true;
+      swapchainTex = tex;
+    }
     if (tex->swapchain && tex->layout != tex->home) {
       transitions.push_back(
           LayoutTransition(tex->image, tex->aspects, 0, 1, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, tex->home));
@@ -1908,6 +1960,7 @@ constexpr uint32_t kMaxDynamic = 8;
 
 struct BindState {
   VkDescriptorSet sets[kMaxGroups]{};
+  VkDescriptorSetLayout boundSetLayouts[kMaxGroups]{};
   uint32_t dynamicCount[kMaxGroups]{};
   uint32_t dynamic[kMaxGroups][kMaxDynamic]{};
   uint32_t dirty = 0;
@@ -1931,9 +1984,23 @@ struct BindState {
     }
     if (layout->layout != boundLayout) {
       boundLayout = layout->layout;
-      dirty = (1u << layout->groups.size()) - 1;
+      const uint32_t groupCount = std::min<uint32_t>(static_cast<uint32_t>(layout->groups.size()), kMaxGroups);
+      // Adapted from Dolphin StateTracker (GPL-2.0-or-later) / Vulkan pipeline layout compatibility:
+      // shared prefix descriptor set layouts (sets 0 and 1 across GX pipelines) stay valid.
+      for (uint32_t i = 0; i < groupCount; ++i) {
+        const VkDescriptorSetLayout setLayout =
+            layout->groups[i] != nullptr ? layout->groups[i]->layout : VK_NULL_HANDLE;
+        if (setLayout != boundSetLayouts[i]) {
+          for (uint32_t j = i; j < kMaxGroups; ++j) {
+            boundSetLayouts[j] =
+                (j < groupCount && layout->groups[j] != nullptr) ? layout->groups[j]->layout : VK_NULL_HANDLE;
+          }
+          dirty |= ((1u << (groupCount - i)) - 1u) << i;
+          break;
+        }
+      }
     }
-    const uint32_t groupCount = static_cast<uint32_t>(layout->groups.size());
+    const uint32_t groupCount = std::min<uint32_t>(static_cast<uint32_t>(layout->groups.size()), kMaxGroups);
     for (uint32_t i = 0; i < groupCount; ++i) {
       if ((dirty & (1u << i)) && sets[i] != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(cb, point, layout->layout, i, 1, &sets[i], dynamicCount[i], dynamic[i]);
@@ -2024,10 +2091,13 @@ void WGPUSurfaceImpl::DestroySwapchain() {
     vkQueueWaitIdle(dev->queue);
     dev->pendingAcquire = VK_NULL_HANDLE;
     dev->pendingAcquireSerial = nullptr;
+    dev->pendingPresent = VK_NULL_HANDLE;
+    dev->presentSignaled = false;
   }
   Retire(dev);
   for (auto* image : images) {
     if (image->defaultView != VK_NULL_HANDLE) {
+      DestroyViewFramebuffers(dev, image->defaultView);
       vkDestroyImageView(dev->device, image->defaultView, nullptr);
       image->defaultView = VK_NULL_HANDLE;
     }
@@ -2089,6 +2159,10 @@ WGPUDeviceImpl::~WGPUDeviceImpl() {
       std::lock_guard lock(fenceMutex);
       serialFences.clear();
     }
+    for (const auto& [key, fb] : framebuffers) {
+      vkDestroyFramebuffer(device, fb.fb, nullptr);
+    }
+    framebuffers.clear();
     for (const auto& [key, renderPass] : renderPasses) {
       vkDestroyRenderPass(device, renderPass, nullptr);
     }
@@ -2450,21 +2524,56 @@ VkRenderPass LegacyCompatiblePass(WGPUDeviceImpl* dev, const std::vector<VkForma
   return LegacyRenderPass(dev, colors, {}, depth);
 }
 
-// A tier 0 pass's framebuffer. The encoder references it like any other object, so it is destroyed
-// once the GPU is done with the command buffer; it holds its views, so none goes before it.
-struct LegacyFramebuffer : Object {
-  VkDevice device = VK_NULL_HANDLE;
-  VkFramebuffer framebuffer = VK_NULL_HANDLE;
-  std::vector<WGPUTextureViewImpl*> views;
-  ~LegacyFramebuffer() override {
-    if (framebuffer != VK_NULL_HANDLE) {
-      vkDestroyFramebuffer(device, framebuffer, nullptr);
-    }
-    for (WGPUTextureViewImpl* view : views) {
-      view->Release();
+// A tier 0 pass's framebuffer, cached on the device and evicted when any of its views is destroyed.
+VkFramebuffer GetCachedFramebuffer(WGPUDeviceImpl* dev, VkRenderPass renderPass, const std::vector<VkImageView>& views,
+                                   uint32_t width, uint32_t height) {
+  std::string key;
+  key.reserve(sizeof(renderPass) + sizeof(width) + sizeof(height) + views.size() * sizeof(VkImageView));
+  const auto put = [&key](const auto& v) { key.append(reinterpret_cast<const char*>(&v), sizeof(v)); };
+  put(renderPass);
+  put(width);
+  put(height);
+  for (VkImageView v : views) {
+    put(v);
+  }
+  std::lock_guard lock(dev->framebufferMutex);
+  if (const auto it = dev->framebuffers.find(key); it != dev->framebuffers.end()) {
+    return it->second.fb;
+  }
+  const VkFramebufferCreateInfo fbInfo{
+      .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass = renderPass,
+      .attachmentCount = static_cast<uint32_t>(views.size()),
+      .pAttachments = views.empty() ? nullptr : views.data(),
+      .width = width,
+      .height = height,
+      .layers = 1,
+  };
+  VkFramebuffer fb = VK_NULL_HANDLE;
+  VK_CHECK(vkCreateFramebuffer(dev->device, &fbInfo, nullptr, &fb));
+  dev->framebuffers.emplace(std::move(key), WGPUDeviceImpl::CachedFramebuffer{fb, views});
+  return fb;
+}
+
+} // namespace
+
+void DestroyViewFramebuffers(WGPUDeviceImpl* dev, VkImageView view) {
+  if (dev == nullptr || view == VK_NULL_HANDLE || !dev->legacy) {
+    return;
+  }
+  std::lock_guard lock(dev->framebufferMutex);
+  for (auto it = dev->framebuffers.begin(); it != dev->framebuffers.end();) {
+    const auto& views = it->second.views;
+    if (std::find(views.begin(), views.end(), view) != views.end()) {
+      vkDestroyFramebuffer(dev->device, it->second.fb, nullptr);
+      it = dev->framebuffers.erase(it);
+    } else {
+      ++it;
     }
   }
-};
+}
+
+namespace {
 
 WGPUDeviceImpl* CreateDevice() {
   auto* dev = new WGPUDeviceImpl;
@@ -2502,29 +2611,62 @@ WGPUDeviceImpl* CreateDevice() {
   constexpr bool kAllowTier1 = false;
 #endif
   // AURORA_VK_FORCE_1_1 runs a 1.3 device through the 1.1 path too, so drivers compare on the same path.
-  const bool forceTier1 = kAllowTier1 && std::getenv("AURORA_VK_FORCE_1_1") != nullptr;
-  // Tier 0: a Vulkan 1.1 device without the extensions above, on Android 10 and older only (Adreno 5xx
-  // and PowerVR GE8320 drivers). It renders through VkRenderPass and tracks submissions with fences,
-  // as ARMSX2 and PPSSPP do on these GPUs. On Android 11 and newer only PowerVR (Imagination, vendor
-  // 0x1010) takes it: Dawn refuses its proprietary driver at the core level and the compatibility
-  // level shows a black screen (Infinix X669C, Android 12). Other devices run exactly as before.
+  const bool forceTier1 = kAllowTier1 && [] {
+    const char* v = std::getenv("AURORA_VK_FORCE_1_1");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+  }();
+  // Tier 0: Vulkan 1.1 devices without the tier 1 extensions, plus drivers whose dynamic rendering is
+  // broken (ARMSX2 GSGPUDriverProfile.cpp: Qualcomm proprietary < 512.801, ARM Mali proprietary < r52,
+  // and PowerVR). It renders through VkRenderPass + cached VkFramebuffer and tracks submissions with
+  // fences when timeline semaphores are unavailable.
 #if defined(__ANDROID__)
-  const bool allowTier0 = android_get_device_api_level() < 30;
-  constexpr bool kTier0PowerVR = true;
+  constexpr bool allowTier0 = true;
 #else
   constexpr bool allowTier0 = false;
-  constexpr bool kTier0PowerVR = false;
 #endif
   // AURORA_VK_FORCE_TIER0=1 runs the chosen device through tier 0 too (Android), to compare.
-  const bool forceTier0 = kAllowTier1 && std::getenv("AURORA_VK_FORCE_TIER0") != nullptr;
+  const bool forceTier0 = kAllowTier1 && [] {
+    const char* v = std::getenv("AURORA_VK_FORCE_TIER0");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+  }();
+  // Adapted from ARMSX2/PCSX2 GSGPUDriverProfile.cpp (GPL-3.0): detect drivers with broken dynamic rendering.
+  const auto hasBrokenDynamicRendering = [](const VkPhysicalDeviceProperties& p) {
+    const std::string_view devName(p.deviceName);
+    // PowerVR (Imagination, vendor 0x1010).
+    if (p.vendorID == 0x1010) {
+      return true;
+    }
+    // Qualcomm proprietary driver before 512.801. A custom driver loaded through adrenotools is Mesa
+    // Turnip under any name ("Turnip Adreno", "PurpleVK-public Adreno"); the stock one names itself
+    // "Adreno (TM) ...". Treating Turnip as stock put it on tier 0, whose fence polling cost the frame
+    // worker half its time on a Redmi (Adreno 618, PurpleVK T30, 2026-11-08).
+    if (p.vendorID == 0x5143 && !UsingCustomDriver() && devName.find("Turnip") == std::string_view::npos &&
+        devName.rfind("Adreno", 0) == 0) {
+      const uint32_t drv = p.driverVersion;
+      if ((drv & 0x80000000u) == 0 || VK_API_VERSION_MAJOR(drv) < 512 ||
+          (VK_API_VERSION_MAJOR(drv) == 512 && VK_API_VERSION_MINOR(drv) < 801)) {
+        return true;
+      }
+    }
+    // ARM Mali proprietary driver before r52 (PanVK/Panfrost and custom malisx2 wrapper are excluded).
+    if (p.vendorID == 0x13B5 && devName.find("PanVK") == std::string_view::npos &&
+        devName.find("Panfrost") == std::string_view::npos && !UsingCustomDriver()) {
+      const uint32_t major = VK_API_VERSION_MAJOR(p.driverVersion);
+      if (major < 52 || major > 100 || VK_API_VERSION_PATCH(p.driverVersion) != 0) {
+        return true;
+      }
+    }
+    return false;
+  };
   bool chosenTier0 = false;
   for (VkPhysicalDevice candidate : devices) {
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(candidate, &props);
     auto list = deviceExtensions(candidate);
+    const bool brokenDynRender = allowTier0 && hasBrokenDynamicRendering(props);
     // Only Android loads the KHR entry points (LoadDeviceFunctions); elsewhere calls bind to the
     // loader's core names, so a device must have 1.3.
-    const bool api13 = props.apiVersion >= VK_API_VERSION_1_3 && !forceTier1;
+    const bool api13 = props.apiVersion >= VK_API_VERSION_1_3 && !forceTier1 && !brokenDynRender;
     bool tier0 = false;
     if (!api13) {
       std::string missing;
@@ -2533,15 +2675,17 @@ WGPUDeviceImpl* CreateDevice() {
           missing += missing.empty() ? name : std::string{", "} + name;
         }
       }
-      if (!kAllowTier1 || props.apiVersion < VK_API_VERSION_1_1 || !missing.empty()) {
-        tier0 = (allowTier0 || (kTier0PowerVR && props.vendorID == 0x1010)) && props.apiVersion >= VK_API_VERSION_1_1;
+      if (!kAllowTier1 || props.apiVersion < VK_API_VERSION_1_1 || !missing.empty() || brokenDynRender) {
+        tier0 = allowTier0 && props.apiVersion >= VK_API_VERSION_1_1;
         if (!tier0) {
           Log("skipping %s (Vulkan %u.%u): missing %s", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
               VK_API_VERSION_MINOR(props.apiVersion), missing.empty() ? "Vulkan 1.3" : missing.c_str());
           continue;
         }
-        Log("%s (Vulkan %u.%u) has no %s: tier 0 (render passes, fences)", props.deviceName,
-            VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion), missing.c_str());
+        Log("%s (Vulkan %u.%u) %s: tier 0 (render passes, fences)", props.deviceName,
+            VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion),
+            brokenDynRender && missing.empty() ? "driver rule (broken dynamic rendering)"
+                                               : ("has no " + missing).c_str());
       }
     }
     // Vulkan 1.3 first, then tier 1, then tier 0; within each, discrete before integrated.
@@ -2788,14 +2932,15 @@ WGPUDeviceImpl* CreateDevice() {
     bool rename = UsingCustomDriver() && (name.find("Mali-G52") != std::string::npos ||
                                           name.find("Mali-G76") != std::string::npos);
     // Adreno 5xx's Vulkan driver reads an indexed draw's indices on the CPU as well (a Redmi Note 7
-    // faulted in vkCmdDrawIndexed under Dawn), so a tier 0 Adreno gets the same CPU-written indices.
-    rename = rename || (dev->legacy && name.find("Adreno") != std::string::npos);
+    // faulted in vkCmdDrawIndexed under Dawn), so a tier 0 Adreno 5xx gets the same CPU-written indices.
+    const bool adreno5xx = dev->legacy && name.find("Adreno (TM) 5") != std::string::npos;
+    rename = rename || adreno5xx;
     if (const char* v = std::getenv("AURORA_VK_INDEX_RENAME"); v != nullptr && *v != 0) {
       rename = *v == '1';
     }
     dev->renameIndexCopies = rename;
     if (rename) {
-      Log("index buffers are written by the CPU (%s)", dev->legacy && name.find("Adreno") != std::string::npos ? "tier 0 Adreno" : "job-manager Mali driver");
+      Log("index buffers are written by the CPU (%s)", adreno5xx ? "tier 0 Adreno 5xx" : "job-manager Mali driver");
     }
   }
 
@@ -3029,7 +3174,7 @@ WGPUWaitStatus wgpuInstanceWaitAny(WGPUInstance, size_t futureCount, WGPUFutureW
 
 void wgpuInstanceProcessEvents(WGPUInstance) {
   if (WGPUDeviceImpl* dev = g_device) {
-    Retire(dev);
+    Retire(dev, false);
     FireReady(dev, [](const FutureRec& f) { return f.mode != WGPUCallbackMode_WaitAnyOnly; });
   }
 }
@@ -3234,8 +3379,20 @@ WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice dev, const WGPUBufferDescriptor* de
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
   }
   VmaAllocationInfo result{};
-  VK_CHECK(vmaCreateBuffer(dev->vma, &info, &allocInfo, &buffer->buffer, &buffer->alloc, &result));
+  VkResult bufRes = vmaCreateBuffer(dev->vma, &info, &allocInfo, &buffer->buffer, &buffer->alloc, &result);
+  if (bufRes != VK_SUCCESS && allocInfo.requiredFlags != 0) {
+    allocInfo.requiredFlags = 0;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    bufRes = vmaCreateBuffer(dev->vma, &info, &allocInfo, &buffer->buffer, &buffer->alloc, &result);
+  }
+  VK_CHECK(bufRes);
   buffer->mapped = static_cast<uint8_t*>(result.pMappedData);
+  // Adapted from ARMSX2 VKStreamBuffer.cpp (GPL-3.0): pre-touch mapped ring buffers on UMA/mobile GPUs
+  // at creation time so first-touch page faults do not hitch during gameplay.
+  if (mapWrite && buffer->mapped != nullptr && dev->props.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+    std::memset(buffer->mapped, 0, result.size);
+    vmaFlushAllocation(dev->vma, buffer->alloc, 0, VK_WHOLE_SIZE);
+  }
   if (descriptor->mappedAtCreation && buffer->mapped == nullptr) {
     buffer->staging.resize(descriptor->size);
     buffer->stagingMapped = true;
@@ -3927,6 +4084,26 @@ WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice dev, const WGPUComm
 void wgpuCommandEncoderRelease(WGPUCommandEncoder encoder) { encoder->Release(); }
 
 WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder encoder, const WGPUCommandBufferDescriptor*) {
+  static const bool debugClear = [] {
+    const char* v = std::getenv("AURORA_VK_DEBUG_CLEAR");
+    return v != nullptr && v[0] == '1';
+  }();
+  if (encoder->swapchainTex != nullptr && !debugClear) {
+    // Transition the swapchain image directly to PRESENT_SRC_KHR at the end of the presentation
+    // encoder so wgpuQueueSubmit can signal the present semaphore and wgpuSurfacePresent needs
+    // no second command buffer or vkQueueSubmit2.
+    encoder->Use(encoder->swapchainTex, 0, 0, 1, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    encoder->needBarrier = false;
+    encoder->Barrier();
+    encoder->away.erase(
+        std::remove_if(encoder->away.begin(), encoder->away.end(),
+                       [&](const auto& a) { return a.tex == encoder->swapchainTex; }),
+        encoder->away.end());
+    encoder->swapchainTex->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    if (encoder->slot.timing != nullptr) {
+      encoder->slot.timing->present = true;
+    }
+  }
   if (!encoder->away.empty() || !encoder->transitions.empty()) {
     encoder->needBarrier = false;
     encoder->Settle();
@@ -4200,17 +4377,13 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
   };
   const uint32_t startQuery = WriteTimestamp(encoder->slot, false, 2);
   if (encoder->dev->legacy) {
-    // Tier 0: the same pass as a VkRenderPass, with a framebuffer made for it. Attachments are listed
+    // Tier 0: the same pass as a VkRenderPass, with a cached framebuffer. Attachments are listed
     // the way LegacyRenderPass numbers them: colours, then resolve targets, then depth/stencil.
-    auto* framebuffer = new LegacyFramebuffer;
-    framebuffer->device = encoder->dev->device;
     std::vector<VkImageView> views;
     std::vector<VkClearValue> clears;
     uint32_t fbWidth = UINT32_MAX;
     uint32_t fbHeight = UINT32_MAX;
     const auto attach = [&](WGPUTextureViewImpl* view, const VkClearValue& clear) {
-      view->AddRef();
-      framebuffer->views.push_back(view);
       views.push_back(view->view);
       clears.push_back(clear);
       fbWidth = std::min(fbWidth, view->width);
@@ -4265,22 +4438,11 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
       fbHeight = std::max(1u, height);
     }
     const VkRenderPass renderPass = LegacyRenderPass(encoder->dev, legacyColors, legacyResolves, legacyDepth);
-    const VkFramebufferCreateInfo fbInfo{
-        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-        .renderPass = renderPass,
-        .attachmentCount = static_cast<uint32_t>(views.size()),
-        .pAttachments = views.empty() ? nullptr : views.data(),
-        .width = fbWidth,
-        .height = fbHeight,
-        .layers = 1,
-    };
-    VK_CHECK(vkCreateFramebuffer(encoder->dev->device, &fbInfo, nullptr, &framebuffer->framebuffer));
-    encoder->Ref(framebuffer);
-    framebuffer->Release();
+    const VkFramebuffer fb = GetCachedFramebuffer(encoder->dev, renderPass, views, fbWidth, fbHeight);
     const VkRenderPassBeginInfo begin{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = renderPass,
-        .framebuffer = framebuffer->framebuffer,
+        .framebuffer = fb,
         .renderArea = {{0, 0}, {fbWidth, fbHeight}},
         .clearValueCount = static_cast<uint32_t>(clears.size()),
         .pClearValues = clears.empty() ? nullptr : clears.data(),
@@ -4475,12 +4637,29 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
       }
     }
     const VkSemaphore acquire = TakeAcquire(dev, touchesSwapchain, serial);
-    const VkSemaphoreSubmitInfo signal{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = dev->timeline,
-        .value = serial,
-        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    };
+    VkSemaphore presentSem = VK_NULL_HANDLE;
+    if (touchesSwapchain && dev->pendingPresent != VK_NULL_HANDLE) {
+      presentSem = dev->pendingPresent;
+      dev->pendingPresent = VK_NULL_HANDLE;
+      dev->presentSignaled = true;
+    }
+    std::vector<VkSemaphoreSubmitInfo> signals;
+    signals.reserve(2);
+    if (!dev->legacy) {
+      signals.push_back(VkSemaphoreSubmitInfo{
+          .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+          .semaphore = dev->timeline,
+          .value = serial,
+          .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+      });
+    }
+    if (presentSem != VK_NULL_HANDLE) {
+      signals.push_back(VkSemaphoreSubmitInfo{
+          .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+          .semaphore = presentSem,
+          .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+      });
+    }
     const VkSemaphoreSubmitInfo wait{
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
         .semaphore = acquire,
@@ -4494,8 +4673,8 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
         .pWaitSemaphoreInfos = &wait,
         .commandBufferInfoCount = static_cast<uint32_t>(cbs.size()),
         .pCommandBufferInfos = cbs.data(),
-        .signalSemaphoreInfoCount = dev->legacy ? 0u : 1u,
-        .pSignalSemaphoreInfos = dev->legacy ? nullptr : &signal,
+        .signalSemaphoreInfoCount = static_cast<uint32_t>(signals.size()),
+        .pSignalSemaphoreInfos = signals.empty() ? nullptr : signals.data(),
     };
     VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, fence));
     std::lock_guard inflightLock(dev->inflightMutex);
@@ -4722,6 +4901,11 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
   }
   surface->rotatedByCompositor = transform != caps.currentTransform;
   g_surfaceRotation.store(preRotated ? rotation : 0, std::memory_order_release);
+  // PowerVR driver quirk (ARMSX2 GSGPUDriverProfile.cpp vk-powervr-old-swapchain-width): align
+  // swapchain width to 32 pixels to avoid visual corruption on Imagination drivers.
+  if (dev->props.vendorID == 0x1010 && extent.width >= 64) {
+    extent.width &= ~31u;
+  }
   extent.width = std::max(1u, extent.width);
   extent.height = std::max(1u, extent.height);
   VkSwapchainKHR old = surface->swapchain;
@@ -4731,10 +4915,13 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
       vkQueueWaitIdle(dev->queue);
       dev->pendingAcquire = VK_NULL_HANDLE;
       dev->pendingAcquireSerial = nullptr;
+      dev->pendingPresent = VK_NULL_HANDLE;
+      dev->presentSignaled = false;
     }
     Retire(dev);
     for (auto* image : surface->images) {
       if (image->defaultView != VK_NULL_HANDLE) {
+        DestroyViewFramebuffers(dev, image->defaultView);
         vkDestroyImageView(dev->device, image->defaultView, nullptr);
         image->defaultView = VK_NULL_HANDLE;
       }
@@ -4870,6 +5057,10 @@ void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture* out) 
     out->status = WGPUSurfaceGetCurrentTextureStatus_Error;
     return;
   }
+  static const bool debugClear = [] {
+    const char* v = std::getenv("AURORA_VK_DEBUG_CLEAR");
+    return v != nullptr && v[0] == '1';
+  }();
   surface->nextAcquire = (slot + 1) % static_cast<uint32_t>(surface->acquireSems.size());
   {
     std::lock_guard lock(dev->queueMutex);
@@ -4877,6 +5068,8 @@ void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture* out) 
     // Until a submission waits on it, the semaphore must not be reused.
     surface->acquireSemSerial[slot] = UINT64_MAX;
     dev->pendingAcquireSerial = &surface->acquireSemSerial[slot];
+    dev->pendingPresent = debugClear ? VK_NULL_HANDLE : surface->presentSems[index];
+    dev->presentSignaled = false;
   }
   surface->current = index;
   WGPUTextureImpl* tex = surface->images[index];
@@ -4895,15 +5088,37 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
   }
   const uint32_t index = surface->current;
   WGPUTextureImpl* tex = surface->images[index];
-  CmdSlot slot = AcquireSlot(dev);
-  VkImageLayout from =
-      tex->layout == tex->home ? tex->home : VK_IMAGE_LAYOUT_UNDEFINED;
   // AURORA_VK_DEBUG_CLEAR=1 clears the left half of each presented image to magenta: magenta on screen
   // means presentation works and only the frame's content is missing.
   static const bool debugClear = [] {
     const char* v = std::getenv("AURORA_VK_DEBUG_CLEAR");
     return v != nullptr && v[0] == '1';
   }();
+  {
+    std::lock_guard lock(dev->queueMutex);
+    if (dev->presentSignaled && !dev->uploadOpen && !debugClear && tex->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+      dev->presentSignaled = false;
+      const VkPresentInfoKHR present{
+          .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+          .waitSemaphoreCount = 1,
+          .pWaitSemaphores = &surface->presentSems[index],
+          .swapchainCount = 1,
+          .pSwapchains = &surface->swapchain,
+          .pImageIndices = &index,
+      };
+      const VkResult result = vkQueuePresentKHR(dev->queue, &present);
+      surface->current = UINT32_MAX;
+      if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
+        return WGPUStatus_Error;
+      }
+      return WGPUStatus_Success;
+    }
+    dev->pendingPresent = VK_NULL_HANDLE;
+    dev->presentSignaled = false;
+  }
+  CmdSlot slot = AcquireSlot(dev);
+  VkImageLayout from =
+      tex->layout == tex->home ? tex->home : VK_IMAGE_LAYOUT_UNDEFINED;
   // One view per swapchain image, never destroyed (debug only).
   static std::unordered_map<VkImage, VkImageView> debugViews;
   VkImageView debugView = VK_NULL_HANDLE;
@@ -5025,5 +5240,65 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
 // Degrees (0/90/180/270) aurora's final copy pass must rotate the picture by: the swapchain is in
 // the panel's orientation (see wgpuSurfaceConfigure). 0 when the compositor rotates.
 int aurora_vk_surface_rotation() { return g_surfaceRotation.load(std::memory_order_acquire); }
+
+void aurora_vk_flush_buffer_range(WGPUBuffer buffer, uint64_t offset, uint64_t size) {
+  if (buffer == nullptr || buffer->dev == nullptr || buffer->alloc == nullptr || size == 0) {
+    return;
+  }
+  vmaFlushAllocation(buffer->dev->vma, buffer->alloc, offset, size);
+}
+
+uint64_t aurora_vk_submitted_serial() {
+  WGPUDeviceImpl* dev = g_device;
+  return dev != nullptr ? dev->submittedSerial.load(std::memory_order_acquire) : 0;
+}
+
+uint64_t aurora_vk_poll_completed() {
+  WGPUDeviceImpl* dev = g_device;
+  return dev != nullptr ? KnownCompleted(dev) : 0;
+}
+
+void aurora_vk_wait_serial(uint64_t serial) {
+  WGPUDeviceImpl* dev = g_device;
+  if (dev == nullptr || serial == 0) {
+    return;
+  }
+  WaitSerial(dev, serial, UINT64_MAX);
+  Retire(dev, false);
+}
+
+// Adapted from Dolphin VKGfx.cpp ClearRegion (GPL-2.0-or-later): clear color and/or depth attachments
+// inside an active render pass without disturbing bound pipeline, descriptor sets, viewport, or scissor.
+void aurora_vk_clear_attachments(WGPURenderPassEncoder pass, bool clearColor, WGPUColor color, bool clearDepth,
+                                 float depth, uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
+  if (pass == nullptr || pass->cb == VK_NULL_HANDLE || width == 0 || height == 0) {
+    return;
+  }
+  std::array<VkClearAttachment, 2> attachments{};
+  uint32_t attachmentCount = 0;
+  if (clearColor) {
+    VkClearAttachment& a = attachments[attachmentCount++];
+    a.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    a.colorAttachment = 0;
+    a.clearValue.color.float32[0] = static_cast<float>(color.r);
+    a.clearValue.color.float32[1] = static_cast<float>(color.g);
+    a.clearValue.color.float32[2] = static_cast<float>(color.b);
+    a.clearValue.color.float32[3] = static_cast<float>(color.a);
+  }
+  if (clearDepth) {
+    VkClearAttachment& a = attachments[attachmentCount++];
+    a.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    a.clearValue.depthStencil.depth = depth;
+  }
+  if (attachmentCount == 0) {
+    return;
+  }
+  const VkClearRect rect{
+      .rect = {{static_cast<int32_t>(x), static_cast<int32_t>(y)}, {width, height}},
+      .baseArrayLayer = 0,
+      .layerCount = 1,
+  };
+  vkCmdClearAttachments(pass->cb, attachmentCount, attachments.data(), 1, &rect);
+}
 
 } // extern "C"

@@ -35,6 +35,7 @@ extern "C" void Android_UnlockActivityMutex(void);
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -59,6 +60,7 @@ AuroraWindowSize g_windowSize;
 std::vector<AuroraEvent> g_events;
 std::atomic_bool g_backgrounded = false;
 std::atomic_bool g_nativeResizePending = false;
+std::atomic_bool g_frameBufferResizePending = false;
 std::atomic<AuroraDisplayMode> g_displayMode{AURORA_DISPLAY_MODE_WINDOWED};
 #if defined(SDL_PLATFORM_ANDROID)
 std::atomic_bool g_surfaceReady = false;
@@ -178,12 +180,18 @@ Vec2<int> scale_frame_buffer_to_aspect(int w, int h, float scale, float aspect) 
 }
 
 void resize_swapchain() noexcept {
-#if defined(SDL_PLATFORM_ANDROID)
-  SurfaceLock surfaceLock;
-#endif
   // Consume only requests that preceded this synchronization; a native resize arriving mid-rebuild
   // stays flagged for the next ordered frame boundary.
-  g_nativeResizePending.exchange(false, std::memory_order_acq_rel);
+  const bool nativeResize = g_nativeResizePending.exchange(false, std::memory_order_acq_rel);
+  g_frameBufferResizePending.exchange(false, std::memory_order_acq_rel);
+#if defined(SDL_PLATFORM_ANDROID)
+  std::optional<SurfaceLock> surfaceLock;
+  if (nativeResize) {
+    surfaceLock.emplace();
+  }
+#else
+  (void)nativeResize;
+#endif
   const auto size = get_window_size();
   if (size == g_windowSize) {
     return;
@@ -637,6 +645,8 @@ void pump_events() noexcept {
 
 bool native_resize_pending() noexcept { return g_nativeResizePending.load(std::memory_order_acquire); }
 
+bool frame_buffer_resize_pending() noexcept { return g_frameBufferResizePending.load(std::memory_order_acquire); }
+
 bool native_window_size_matches(uint32_t width, uint32_t height) noexcept {
   if (g_window == nullptr || width == 0 || height == 0) {
     return true;
@@ -780,8 +790,8 @@ static void push_future_resize_event() {
 void request_frame_buffer_resize() {
   if (g_window != nullptr) {
     // Publish the request before waking the SDL loop: the render worker consumes it at an ordered
-    // frame boundary, and the main thread must never recreate WebGPU targets mid-frame.
-    g_nativeResizePending.store(true, std::memory_order_release);
+    // frame boundary without stalling the presenter when only the internal EFB size changes.
+    g_frameBufferResizePending.store(true, std::memory_order_release);
     push_future_resize_event();
   }
 }

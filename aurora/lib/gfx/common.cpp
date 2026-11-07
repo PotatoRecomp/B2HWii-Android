@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -132,6 +133,28 @@ constexpr size_t FrameSlotCount = 3;
 static std::array<wgpu::Buffer, FrameSlotCount> g_stagingBuffers;
 static size_t currentStagingBuffer = 0;
 static StagingMapState s_mappingState;
+// Adapted from Dolphin VKStreamBuffer.cpp (GPL-2.0-or-later) and ARMSX2 VKStreamBuffer.cpp (GPL-3.0):
+// on the direct Vulkan backend, vertex/uniform/index/storage buffers are allocated as persistently
+// mapped host-visible ring buffers (3x capacity) and written directly by the CPU without staging copies.
+static constexpr StagingSizes StreamRingCapacity{
+    3 * VertexBufferSize,
+    3 * UniformBufferSize,
+    3 * IndexBufferSize,
+    3 * StorageBufferSize,
+};
+struct StreamInFlightBatch {
+  uint64_t gpuSerial = UINT64_MAX;
+  StagingSizes begin{};
+  StagingSizes end{};
+};
+static bool g_useStreamRing = false;
+static std::array<uint8_t*, 4> g_streamMapped{};
+static StagingSizes g_streamBase{};
+static StagingSizes g_streamHead{};
+static StagingSizes g_suspendedStreamBegin{};
+static StagingSizes g_suspendedStreamEnd{};
+static std::deque<StreamInFlightBatch> g_streamInFlight;
+static std::mutex g_streamRingMutex;
 static wgpu::Limits g_cachedLimits;
 // Advanced once per logical frame in the seal prologue, under the renderer GPU mutex and with the
 // producer blocked, so every later reader sees a value that no longer moves.
@@ -274,7 +297,12 @@ static uint64_t g_stagingSplitCount = 0;
 static StagingSizes g_stagingHighWater{};
 
 StagingSizes staging_usage() noexcept {
-  return {g_verts.size(), g_uniforms.size(), g_indices.size(), g_storage.size()};
+  return {
+      g_verts.size() >= g_streamBase[0] ? g_verts.size() - g_streamBase[0] : 0,
+      g_uniforms.size() >= g_streamBase[1] ? g_uniforms.size() - g_streamBase[1] : 0,
+      g_indices.size() >= g_streamBase[2] ? g_indices.size() - g_streamBase[2] : 0,
+      g_storage.size() >= g_streamBase[3] ? g_storage.size() - g_streamBase[3] : 0,
+  };
 }
 StagingSizes staging_high_water() noexcept { return g_stagingHighWater; }
 uint64_t staging_epoch() noexcept { return g_stagingEpoch; }
@@ -538,7 +566,8 @@ void set_scissor(const ClipRect& cmd) noexcept {
 
 template <>
 void push_draw_command(clear::DrawData data) {
-  if (data.uniformRange.size == 0) {
+  const bool vkDirectClear = webgpu::vulkan_backend_active() && data.clearColor == data.clearAlpha;
+  if (!vkDirectClear && data.uniformRange.size == 0) {
     ensure_staging_space({0, staging_uniform_bytes(16), 0, 0});
     const std::array clearUniform{
         std::clamp(data.depth, 0.f, 1.f),
@@ -729,6 +758,9 @@ void resolve_pass(TextureHandle texture, ClipRect rect, bool clearColor, bool cl
         .depth = clearDepthValue,
         .useScissor = !clearFullTarget,
         .scissor = rect,
+        .clearColor = clearColor,
+        .clearAlpha = clearAlpha,
+        .clearDepth = clearDepth,
     });
   }
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
@@ -754,12 +786,6 @@ uint32_t get_sample_count() noexcept {
 
 void clear_caches() noexcept {
   g_offscreenCache.clear();
-  // Retire rather than free; see g_retiredBindGroups.
-  g_retiredBindGroups.reserve(g_retiredBindGroups.size() + g_cachedBindGroups.size());
-  for (auto& entry : g_cachedBindGroups) {
-    g_retiredBindGroups.emplace_back(std::move(entry.second));
-  }
-  g_cachedBindGroups.clear();
 }
 
 static OffscreenCacheEntry get_offscreen_textures(uint32_t width, uint32_t height) {
@@ -823,6 +849,10 @@ void begin_offscreen(uint32_t width, uint32_t height) {
     auto& currentPass = g_renderPasses[g_currentRenderPass];
     if (!currentPass.resolveTarget) {
       g_suspendedEfbBytes = staging_usage();
+      g_suspendedStreamBegin = g_streamBase;
+      for (size_t i = 0; i < 4; ++i) {
+        g_suspendedStreamEnd[i] = AURORA_ALIGN(g_streamBase[i] + g_suspendedEfbBytes[i], 256);
+      }
       g_suspendedEfbPass = std::move(currentPass);
       g_renderPasses.pop_back();
       --g_currentRenderPass;
@@ -921,25 +951,60 @@ void initialize() {
     };
     out = g_device.CreateBuffer(&descriptor);
   };
-  createBuffer(g_uniformBuffer, wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst, UniformBufferSize,
-               "Shared Uniform Buffer");
-  createBuffer(g_vertexBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst,
-               VertexBufferSize,
-               "Shared Vertex Buffer");
+  static const bool allowStreamRing = [] {
+    const char* v = std::getenv("AURORA_VK_STREAM_RING");
+    return v == nullptr || v[0] != '0';
+  }();
+  g_useStreamRing = webgpu::vulkan_backend_active() && allowStreamRing && !UseTextureBuffer;
+  const auto extraUsage = g_useStreamRing ? wgpu::BufferUsage::MapWrite : wgpu::BufferUsage::None;
+  const auto bufSize = [&](size_t idx, uint64_t baseSize) {
+    return g_useStreamRing ? StreamRingCapacity[idx] : baseSize;
+  };
+  createBuffer(g_uniformBuffer, wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst | extraUsage,
+               bufSize(1, UniformBufferSize), "Shared Uniform Buffer");
+  createBuffer(g_vertexBuffer,
+               wgpu::BufferUsage::Storage | wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst | extraUsage,
+               bufSize(0, VertexBufferSize), "Shared Vertex Buffer");
   createBuffer(g_indexBuffer,
-               wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst |
+               wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst | extraUsage |
                    (webgpu::g_indexPulling ? wgpu::BufferUsage::Storage : wgpu::BufferUsage::None),
-               IndexBufferSize, "Shared Index Buffer");
-  createBuffer(g_storageBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst, StorageBufferSize,
-               "Shared Storage Buffer");
-  for (int i = 0; i < g_stagingBuffers.size(); ++i) {
-    const auto label = fmt::format("Staging Buffer {}", i);
-    createBuffer(g_stagingBuffers[i], wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc, StagingBufferSize,
-                 label.c_str());
+               bufSize(2, IndexBufferSize), "Shared Index Buffer");
+  createBuffer(g_storageBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst | extraUsage,
+               bufSize(3, StorageBufferSize), "Shared Storage Buffer");
+  if (g_useStreamRing) {
+    g_streamMapped[0] = static_cast<uint8_t*>(g_vertexBuffer.GetMappedRange(0, StreamRingCapacity[0]));
+    g_streamMapped[1] = static_cast<uint8_t*>(g_uniformBuffer.GetMappedRange(0, StreamRingCapacity[1]));
+    g_streamMapped[2] = static_cast<uint8_t*>(g_indexBuffer.GetMappedRange(0, StreamRingCapacity[2]));
+    g_streamMapped[3] = static_cast<uint8_t*>(g_storageBuffer.GetMappedRange(0, StreamRingCapacity[3]));
+    if (g_streamMapped[0] == nullptr || g_streamMapped[1] == nullptr || g_streamMapped[2] == nullptr ||
+        g_streamMapped[3] == nullptr) {
+      Log.warn("Vulkan stream ring mapping unavailable; falling back to staging buffers");
+      g_useStreamRing = false;
+      g_streamMapped = {};
+    } else {
+      Log.info("Vulkan stream ring buffers active (vertex {} MiB, uniform {} MiB, index {} MiB, storage {} MiB)",
+               StreamRingCapacity[0] >> 20, StreamRingCapacity[1] >> 20, StreamRingCapacity[2] >> 20,
+               StreamRingCapacity[3] >> 20);
+    }
   }
-  currentStagingBuffer = 0;
-  s_mappingState.reset();
-  map_staging_buffer();
+  g_streamBase = {};
+  g_streamHead = {};
+  g_suspendedStreamBegin = {};
+  g_suspendedStreamEnd = {};
+  {
+    std::lock_guard lock(g_streamRingMutex);
+    g_streamInFlight.clear();
+  }
+  if (!g_useStreamRing) {
+    for (int i = 0; i < g_stagingBuffers.size(); ++i) {
+      const auto label = fmt::format("Staging Buffer {}", i);
+      createBuffer(g_stagingBuffers[i], wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc, StagingBufferSize,
+                   label.c_str());
+    }
+    currentStagingBuffer = 0;
+    s_mappingState.reset();
+    map_staging_buffer();
+  }
 
   {
     std::vector<wgpu::BindGroupLayoutEntry> layoutEntries{
@@ -1057,6 +1122,20 @@ void shutdown() {
   g_cachedBindGroups.clear();
   g_retiredBindGroups.clear();
   g_cachedSamplers.clear();
+  g_verts.release();
+  g_uniforms.release();
+  g_indices.release();
+  g_storage.release();
+  g_streamMapped = {};
+  g_streamBase = {};
+  g_streamHead = {};
+  g_suspendedStreamBegin = {};
+  g_suspendedStreamEnd = {};
+  {
+    std::lock_guard lock(g_streamRingMutex);
+    g_streamInFlight.clear();
+  }
+  g_useStreamRing = false;
   g_vertexBuffer = {};
   g_uniformBuffer = {};
   g_indexBuffer = {};
@@ -1084,6 +1163,9 @@ void shutdown() {
 }
 
 void map_staging_buffer() {
+  if (g_useStreamRing) {
+    return;
+  }
   const auto generation = s_mappingState.request();
   if (generation == 0) {
     return;
@@ -1106,47 +1188,102 @@ void map_staging_buffer() {
 
 static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
   ZoneScoped;
-  {
-    ZoneScopedN("Wait for buffer map");
-    map_staging_buffer();
-    while (true) {
-      const auto mappingState = s_mappingState.state();
-      if (mappingState == BufferMapState::Mapped) {
-        break;
+  if (g_useStreamRing) {
+    uint64_t waitSerial = 0;
+    {
+      std::lock_guard lock(g_streamRingMutex);
+      const uint64_t completed = webgpu::vulkan_poll_completed();
+      while (!g_streamInFlight.empty() && g_streamInFlight.front().gpuSerial != UINT64_MAX &&
+             g_streamInFlight.front().gpuSerial <= completed) {
+        g_streamInFlight.pop_front();
       }
-      if (mappingState == BufferMapState::Unmapped) {
-        // Frame begin failed because the staging map was aborted; the caller's retry loop drops the frame
-        // and any one-shot bakes recorded into it. Rate-limited.
-        static uint32_t s_beginFrameMapFailCount = 0;
-        if (s_beginFrameMapFailCount < 64 || (s_beginFrameMapFailCount & 255) == 0) {
-          Log.warn("begin_frame aborted: staging buffer unmapped (frame={} occurrences={})", g_frameIndex,
-                   s_beginFrameMapFailCount + 1);
+      for (size_t i = 0; i < g_streamHead.size(); ++i) {
+        if (g_streamHead[i] + g_stagingCapacity[i] > StreamRingCapacity[i]) {
+          g_streamHead[i] = 0;
         }
-        ++s_beginFrameMapFailCount;
-        return false;
+        if (capacityResume && g_suspendedEfbPass && g_suspendedEfbBytes[i] > 0) {
+          const uint64_t suspBegin = g_suspendedStreamBegin[i];
+          const uint64_t suspEnd = g_suspendedStreamEnd[i];
+          if (g_streamHead[i] < suspEnd && suspBegin < g_streamHead[i] + g_stagingCapacity[i]) {
+            g_streamHead[i] = suspEnd;
+            if (g_streamHead[i] + g_stagingCapacity[i] > StreamRingCapacity[i]) {
+              g_streamHead[i] = 0;
+            }
+          }
+        }
+        const uint64_t winBegin = g_streamHead[i];
+        const uint64_t winEnd = winBegin + g_stagingCapacity[i];
+        for (const auto& entry : g_streamInFlight) {
+          if (entry.gpuSerial != UINT64_MAX && winBegin < entry.end[i] && entry.begin[i] < winEnd) {
+            waitSerial = std::max(waitSerial, entry.gpuSerial);
+          }
+        }
+        g_streamBase[i] = winBegin;
       }
-      g_instance.ProcessEvents();
-      webgpu::fail_if_device_lost();
-      s_mappingState.wait_for_progress();
     }
-  }
-  ++g_stagingEpoch;
-  g_recordingSnapshotSlot = currentStagingBuffer;
-  size_t bufferOffset = 0;
-  const auto& stagingBuf = g_stagingBuffers[currentStagingBuffer];
-  const auto mapBuffer = [&](ByteBuffer& buf, uint64_t size) {
-    if (size <= 0) {
-      return;
+    if (waitSerial != 0) {
+      ZoneScopedN("Wait for stream ring serial");
+      webgpu::vulkan_wait_serial(waitSerial);
+      std::lock_guard lock(g_streamRingMutex);
+      const uint64_t completed = webgpu::vulkan_poll_completed();
+      while (!g_streamInFlight.empty() && g_streamInFlight.front().gpuSerial != UINT64_MAX &&
+             g_streamInFlight.front().gpuSerial <= completed) {
+        g_streamInFlight.pop_front();
+      }
     }
-    buf = ByteBuffer{static_cast<u8*>(stagingBuf.GetMappedRange(bufferOffset, size)), static_cast<size_t>(size)};
-    bufferOffset += size;
-  };
-  mapBuffer(g_verts, VertexBufferSize);
-  mapBuffer(g_uniforms, UniformBufferSize);
-  mapBuffer(g_indices, IndexBufferSize);
-  mapBuffer(g_storage, StorageBufferSize);
-  if constexpr (UseTextureBuffer) {
-    mapBuffer(g_textureUpload, TextureUploadSize);
+    ++g_stagingEpoch;
+    g_recordingSnapshotSlot = (g_recordingSnapshotSlot + 1) % FrameSlotCount;
+    g_verts.attach_ring(g_streamMapped[0], static_cast<size_t>(g_streamBase[0]),
+                        static_cast<size_t>(g_streamBase[0] + g_stagingCapacity[0]));
+    g_uniforms.attach_ring(g_streamMapped[1], static_cast<size_t>(g_streamBase[1]),
+                           static_cast<size_t>(g_streamBase[1] + g_stagingCapacity[1]));
+    g_indices.attach_ring(g_streamMapped[2], static_cast<size_t>(g_streamBase[2]),
+                          static_cast<size_t>(g_streamBase[2] + g_stagingCapacity[2]));
+    g_storage.attach_ring(g_streamMapped[3], static_cast<size_t>(g_streamBase[3]),
+                          static_cast<size_t>(g_streamBase[3] + g_stagingCapacity[3]));
+  } else {
+    {
+      ZoneScopedN("Wait for buffer map");
+      map_staging_buffer();
+      while (true) {
+        const auto mappingState = s_mappingState.state();
+        if (mappingState == BufferMapState::Mapped) {
+          break;
+        }
+        if (mappingState == BufferMapState::Unmapped) {
+          // Frame begin failed because the staging map was aborted; the caller's retry loop drops the frame
+          // and any one-shot bakes recorded into it. Rate-limited.
+          static uint32_t s_beginFrameMapFailCount = 0;
+          if (s_beginFrameMapFailCount < 64 || (s_beginFrameMapFailCount & 255) == 0) {
+            Log.warn("begin_frame aborted: staging buffer unmapped (frame={} occurrences={})", g_frameIndex,
+                     s_beginFrameMapFailCount + 1);
+          }
+          ++s_beginFrameMapFailCount;
+          return false;
+        }
+        g_instance.ProcessEvents();
+        webgpu::fail_if_device_lost();
+        s_mappingState.wait_for_progress();
+      }
+    }
+    ++g_stagingEpoch;
+    g_recordingSnapshotSlot = currentStagingBuffer;
+    size_t bufferOffset = 0;
+    const auto& stagingBuf = g_stagingBuffers[currentStagingBuffer];
+    const auto mapBuffer = [&](ByteBuffer& buf, uint64_t size) {
+      if (size <= 0) {
+        return;
+      }
+      buf = ByteBuffer{static_cast<u8*>(stagingBuf.GetMappedRange(bufferOffset, size)), static_cast<size_t>(size)};
+      bufferOffset += size;
+    };
+    mapBuffer(g_verts, VertexBufferSize);
+    mapBuffer(g_uniforms, UniformBufferSize);
+    mapBuffer(g_indices, IndexBufferSize);
+    mapBuffer(g_storage, StorageBufferSize);
+    if constexpr (UseTextureBuffer) {
+      mapBuffer(g_textureUpload, TextureUploadSize);
+    }
   }
 
   g_drawCallCount = 0;
@@ -1194,7 +1331,10 @@ void abort_frame() noexcept {
     g_textureUploads.clear();
     g_textureUpload.release();
   }
-  if (s_mappingState.state() == BufferMapState::Mapped) {
+  if (g_useStreamRing) {
+    gx::drop_pending_frame_interpolation_uniforms();
+    g_streamHead = g_streamBase;
+  } else if (s_mappingState.state() == BufferMapState::Mapped) {
     // Pending interpolation tasks hold raw pointers into the mapped staging
     // range; they must be dropped before the buffer is unmapped and rotated.
     gx::drop_pending_frame_interpolation_uniforms();
@@ -1218,9 +1358,10 @@ void abort_frame() noexcept {
 // last one. Before skipping anything here, count how often Basara really draws the same frame twice:
 // a frame's vertex, uniform, index and storage bytes, its draw count and texture uploads, hashed and
 // compared with the last frame's. A frame split into several batches never counts as a duplicate.
-static uint64_t hash_bytes(uint64_t h, const ByteBuffer& buf) {
-  const uint8_t* p = buf.data();
-  size_t n = buf.size();
+static uint64_t hash_bytes(uint64_t h, const ByteBuffer& buf, size_t baseOffset = 0) {
+  if (buf.size() <= baseOffset) return h;
+  const uint8_t* p = buf.data() + baseOffset;
+  size_t n = buf.size() - baseOffset;
   for (; n >= 8; p += 8, n -= 8) {
     uint64_t v;
     memcpy(&v, p, 8);
@@ -1243,10 +1384,10 @@ static void probe_duplicate_frame(bool advanceFrame) {
     return;
   }
   uint64_t h = 0xcbf29ce484222325ull;
-  h = hash_bytes(h, g_verts);
-  h = hash_bytes(h, g_uniforms);
-  h = hash_bytes(h, g_indices);
-  h = hash_bytes(h, g_storage);
+  h = hash_bytes(h, g_verts, static_cast<size_t>(g_streamBase[0]));
+  h = hash_bytes(h, g_uniforms, static_cast<size_t>(g_streamBase[1]));
+  h = hash_bytes(h, g_indices, static_cast<size_t>(g_streamBase[2]));
+  h = hash_bytes(h, g_storage, static_cast<size_t>(g_streamBase[3]));
   h = (h ^ g_drawCallCount) * 0x100000001b3ull;
   size_t uploads = 0;
   if constexpr (UseTextureBuffer) uploads = g_textureUploads.size();
@@ -1297,46 +1438,72 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
                s_logged[0] >> 10, s_logged[1] >> 10, s_logged[2] >> 10, s_logged[3] >> 10, s_loggedSplits);
     }
   }
-  uint64_t bufferOffset = 0;
-  const auto writeBuffer = [&](ByteBuffer& buf, wgpu::Buffer& out, uint64_t size, std::string_view label) {
-    const auto writeSize = buf.size(); // Only need to copy this many bytes
-    if (writeSize > 0) {
-      cmd.CopyBufferToBuffer(g_stagingBuffers[currentStagingBuffer], bufferOffset, out, 0, AURORA_ALIGN(writeSize, 4));
-      buf.release();
-    }
-    bufferOffset += size;
-    return writeSize;
-  };
-  g_stagingBuffers[currentStagingBuffer].Unmap();
-  s_mappingState.reset();
   g_stats.drawCallCount = g_drawCallCount;
   g_stats.mergedDrawCallCount = g_mergedDrawCallCount;
-  g_stats.lastVertSize = writeBuffer(g_verts, g_vertexBuffer, VertexBufferSize, "Vertex");
-  g_stats.lastUniformSize = writeBuffer(g_uniforms, g_uniformBuffer, UniformBufferSize, "Uniform");
-  g_stats.lastIndexSize = writeBuffer(g_indices, g_indexBuffer, IndexBufferSize, "Index");
-  g_stats.lastStorageSize = writeBuffer(g_storage, g_storageBuffer, StorageBufferSize, "Storage");
-  if constexpr (UseTextureBuffer) {
-    g_stats.lastTextureUploadSize = g_textureUpload.size();
-    {
-      // Perform texture copies
-      for (const auto& item : g_textureUploads) {
-        const wgpu::TexelCopyBufferInfo buf{
-            .layout =
-                wgpu::TexelCopyBufferLayout{
-                    .offset = item.layout.offset + bufferOffset,
-                    .bytesPerRow = AURORA_ALIGN(item.layout.bytesPerRow, 256),
-                    .rowsPerImage = item.layout.rowsPerImage,
-                },
-            .buffer = g_stagingBuffers[currentStagingBuffer],
-        };
-        cmd.CopyBufferToTexture(&buf, &item.tex, &item.size);
+  if (g_useStreamRing) {
+    const auto flushStream = [&](size_t idx, ByteBuffer& buf, const wgpu::Buffer& out) -> uint64_t {
+      const uint64_t begin = g_streamBase[idx];
+      const uint64_t end = buf.size();
+      const uint64_t writeSize = end >= begin ? end - begin : 0;
+      if (writeSize > 0) {
+        webgpu::vulkan_flush_buffer_range(out, begin, AURORA_ALIGN(writeSize, 4));
       }
-      g_textureUploads.clear();
-      g_textureUpload.release();
+      g_streamHead[idx] = AURORA_ALIGN(std::max(begin, end), 256);
+      buf.release();
+      return writeSize;
+    };
+    g_stats.lastVertSize = flushStream(0, g_verts, g_vertexBuffer);
+    g_stats.lastUniformSize = flushStream(1, g_uniforms, g_uniformBuffer);
+    g_stats.lastIndexSize = flushStream(2, g_indices, g_indexBuffer);
+    g_stats.lastStorageSize = flushStream(3, g_storage, g_storageBuffer);
+    {
+      std::lock_guard lock(g_streamRingMutex);
+      g_streamInFlight.push_back(StreamInFlightBatch{
+          .gpuSerial = UINT64_MAX,
+          .begin = g_streamBase,
+          .end = g_streamHead,
+      });
     }
+  } else {
+    uint64_t bufferOffset = 0;
+    const auto writeBuffer = [&](ByteBuffer& buf, wgpu::Buffer& out, uint64_t size, std::string_view label) {
+      const auto writeSize = buf.size(); // Only need to copy this many bytes
+      if (writeSize > 0) {
+        cmd.CopyBufferToBuffer(g_stagingBuffers[currentStagingBuffer], bufferOffset, out, 0, AURORA_ALIGN(writeSize, 4));
+        buf.release();
+      }
+      bufferOffset += size;
+      return writeSize;
+    };
+    g_stagingBuffers[currentStagingBuffer].Unmap();
+    s_mappingState.reset();
+    g_stats.lastVertSize = writeBuffer(g_verts, g_vertexBuffer, VertexBufferSize, "Vertex");
+    g_stats.lastUniformSize = writeBuffer(g_uniforms, g_uniformBuffer, UniformBufferSize, "Uniform");
+    g_stats.lastIndexSize = writeBuffer(g_indices, g_indexBuffer, IndexBufferSize, "Index");
+    g_stats.lastStorageSize = writeBuffer(g_storage, g_storageBuffer, StorageBufferSize, "Storage");
+    if constexpr (UseTextureBuffer) {
+      g_stats.lastTextureUploadSize = g_textureUpload.size();
+      {
+        // Perform texture copies
+        for (const auto& item : g_textureUploads) {
+          const wgpu::TexelCopyBufferInfo buf{
+              .layout =
+                  wgpu::TexelCopyBufferLayout{
+                      .offset = item.layout.offset + bufferOffset,
+                      .bytesPerRow = AURORA_ALIGN(item.layout.bytesPerRow, 256),
+                      .rowsPerImage = item.layout.rowsPerImage,
+                  },
+              .buffer = g_stagingBuffers[currentStagingBuffer],
+          };
+          cmd.CopyBufferToTexture(&buf, &item.tex, &item.size);
+        }
+        g_textureUploads.clear();
+        g_textureUpload.release();
+      }
+    }
+    currentStagingBuffer = (currentStagingBuffer + 1) % g_stagingBuffers.size();
+    map_staging_buffer();
   }
-  currentStagingBuffer = (currentStagingBuffer + 1) % g_stagingBuffers.size();
-  map_staging_buffer();
   g_currentRenderPass = UINT32_MAX;
   for (auto& array : gx::g_gxState.arrays) {
     array.cachedRange = {};
@@ -1377,7 +1544,7 @@ void split_staging_batch() {
   g_suspendedEfbPass.reset();
   std::array<std::vector<uint8_t>, 4> retained;
   std::array<ByteBuffer*, 4> buffers{&g_verts, &g_uniforms, &g_indices, &g_storage};
-  if (suspended) {
+  if (suspended && !g_useStreamRing) {
     for (unsigned i = 0; i < buffers.size(); ++i) {
       if (g_suspendedEfbBytes[i])
         retained[i].assign(buffers[i]->data(), buffers[i]->data() + g_suspendedEfbBytes[i]);
@@ -1671,6 +1838,17 @@ void render(wgpu::CommandEncoder& cmd, int32_t interpolatedFrame, bool finalize)
 }
 
 void after_submit() noexcept {
+  if (g_useStreamRing) {
+    const uint64_t serial = webgpu::vulkan_submitted_serial();
+    if (serial != 0) {
+      std::lock_guard lock(g_streamRingMutex);
+      for (auto& entry : g_streamInFlight) {
+        if (entry.gpuSerial == UINT64_MAX) {
+          entry.gpuSerial = serial;
+        }
+      }
+    }
+  }
   depth_peek::after_submit();
   efb_ram::after_submit();
   // Retire this frame's completed GPU work. Dawn only reclaims destroyed resources inside a device
@@ -1756,7 +1934,10 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
       } break;
       case ShaderType::Clear:
         clear::render(draw.clear, pass, renderPasses[idx].targetSize, encodeState.currentPipeline);
-        encodeState.uniformOffset = UINT32_MAX; // clear binds its own uniform range in slot 1
+        if (!webgpu::vulkan_backend_active() || draw.clear.clearColor != draw.clear.clearAlpha) {
+          encodeState.uniformOffset = UINT32_MAX; // clear binds its own uniform range in slot 1
+          encodeState.boundDstAlpha = UINT32_MAX;
+        }
         break;
       }
     } break;

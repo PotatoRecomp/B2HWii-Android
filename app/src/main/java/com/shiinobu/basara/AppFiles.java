@@ -367,6 +367,8 @@ final class AppFiles {
                 + "infinite_basara = " + settings.cheatInfiniteBasara() + "\n"
                 + "unlock_all = " + settings.cheatUnlockAll() + "\n"
                 + "camera_distance = " + String.format(java.util.Locale.ROOT, "%.2f", settings.cameraDistanceFactor()) + "\n"
+                + "\n[input]\n"
+                + "gamepad_map = \"" + settings.gamepadMap() + "\"\n"
                 + "\n[network]\nenabled = false\n"
                 + "\n[discord]\nenabled = false\n"
                 + "\n[paths]\n"
@@ -376,7 +378,7 @@ final class AppFiles {
 
     /** Tables of the old Config.toml the app doesn't write (the game's own: keyboard keybinds...). */
     private static final java.util.Set<String> APP_TABLES =
-            new java.util.HashSet<>(java.util.Arrays.asList("video", "cheats", "network", "discord", "paths"));
+            new java.util.HashSet<>(java.util.Arrays.asList("video", "cheats", "input", "network", "discord", "paths"));
 
     /** Whether the old Config.toml has [name]: the game's Audio settings live in [audio], so an
      *  existing one is kept (keptSections) rather than reset to the defaults. */

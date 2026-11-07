@@ -281,6 +281,9 @@ final class AppSettings {
     int touchColor() { return prefs.getInt("touch_color", TouchIcons.COLOR_BLUE); }
     void setTouchColor(int color) { prefs.edit().putInt("touch_color", color).commit(); }
     void setTouchCamera(boolean on) { prefs.edit().putBoolean("touch_camera", on).commit(); }
+    /** Settings > Controls > Gamepad Buttons (GamepadButtons): "a=b,b=a,...", "" = the default layout. */
+    String gamepadMap() { return prefs.getString("gamepad_map", ""); }
+    void setGamepadMap(String map) { prefs.edit().putString("gamepad_map", map).commit(); }
     /** Off: a drag to the right turns the view to the right. On (default): the scene follows the finger. */
     boolean invertCamera() { return prefs.getBoolean("invert_camera", true); }
     void setInvertCamera(boolean on) { prefs.edit().putBoolean("invert_camera", on).commit(); }

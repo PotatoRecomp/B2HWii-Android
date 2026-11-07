@@ -68,6 +68,7 @@ struct RuntimeUserConfig {
     std::optional<bool> cheatInfiniteHp;
     std::optional<bool> cheatInfiniteBasara;
     std::optional<bool> cheatUnlockAll;
+    std::optional<std::string> gamepadMap;  // [input] gamepad_map: VirtualRemote::SetGamepadMap
     std::optional<float> cheatCameraDistance;  // [cheats] camera_distance: 1 = the game's camera, up to 2 farther
     std::optional<bool> showFps;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
@@ -636,6 +637,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.cheatInfiniteHp = FindConfigValue<bool>(document, "cheats", "infinite_hp");
     config.cheatInfiniteBasara = FindConfigValue<bool>(document, "cheats", "infinite_basara");
     config.cheatUnlockAll = FindConfigValue<bool>(document, "cheats", "unlock_all");
+    config.gamepadMap = FindConfigValue<std::string>(document, "input", "gamepad_map");
     if (auto value = FindConfigFloat(document, "cheats", "camera_distance"); value && *value >= 1.0f && *value <= 2.0f) {
         config.cheatCameraDistance = *value;
     }
@@ -1247,6 +1249,7 @@ inline uint32_t CheatMoneyOnceSeq() { return Get().cheatMoneyOnceSeq.value_or(0u
 inline bool CheatInfiniteHp() { return Get().cheatInfiniteHp.value_or(false); }
 inline bool CheatInfiniteBasara() { return Get().cheatInfiniteBasara.value_or(false); }
 inline bool CheatUnlockAll() { return Get().cheatUnlockAll.value_or(false); }
+inline std::string GamepadMap() { return Get().gamepadMap.value_or(std::string()); }
 inline float CheatCameraDistance() { return Get().cheatCameraDistance.value_or(1.0f); }
 
 inline int HdTextures() {

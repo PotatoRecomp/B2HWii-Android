@@ -3,6 +3,7 @@
 #include "input_bindings.h"
 #include "keybinds.h"
 #include "memory.h"
+#include "runtime_config.h"
 #include "runtime_log.h"
 
 #include <dolphin/pad.h>
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 namespace VirtualRemote {
 namespace {
@@ -78,6 +80,22 @@ std::atomic<bool> g_touchShake{false};
 std::atomic<bool> g_touchShakeSinceRead{false};
 std::atomic<float> g_touchTilt{0.0f};
 std::array<std::atomic<float>, 4> g_touchSticks{};  // left x, y, right x, y
+
+// SetGamepadMap: one source per Classic button, in kMapButtons order. -1 = none, 0.. = an
+// SDL_GamepadButton, kAxisSource + n = SDL_GamepadAxis n (a trigger). Off = PadIntent's own layout.
+struct MapButton {
+    const char* name;
+    uint32_t cl;
+};
+constexpr MapButton kMapButtons[] = {
+    {"a", kClA}, {"b", kClB}, {"x", kClX}, {"y", kClY}, {"l", kClL}, {"r", kClR}, {"zl", kClZL},
+    {"zr", kClZR}, {"plus", kClPlus}, {"minus", kClMinus}, {"home", kClHome}, {"up", kClUp},
+    {"down", kClDown}, {"left", kClLeft}, {"right", kClRight},
+};
+constexpr size_t kMapCount = sizeof(kMapButtons) / sizeof(kMapButtons[0]);
+constexpr int kAxisSource = 100;
+std::array<std::atomic<int>, kMapCount> g_map{};
+std::atomic<bool> g_mapOn{false};
 
 std::mutex g_mutex;
 std::array<PADStatus, PAD_MAX_CONTROLLERS> g_pads{};
@@ -283,6 +301,37 @@ Intent AutomationIntent() {
     return file;
 }
 
+// The player's own gamepad buttons (SetGamepadMap) in place of the layout below; the sticks stay.
+// L and R carry how far their source is pulled, as the Classic triggers do.
+void ApplyGamepadMap(SDL_Gamepad* gamepad, Intent& intent) {
+    intent.cl = 0;
+    intent.triggerL = 0;
+    intent.triggerR = 0;
+    for (size_t i = 0; i < kMapCount; ++i) {
+        const int source = g_map[i].load(std::memory_order_relaxed);
+        if (source < 0) {
+            continue;
+        }
+        uint8_t level = 0;
+        if (source >= kAxisSource) {
+            const int value = SDL_GetGamepadAxis(gamepad, static_cast<SDL_GamepadAxis>(source - kAxisSource));
+            level = static_cast<uint8_t>(std::clamp(value * 255 / 32767, 0, 255));
+        } else if (SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(source))) {
+            level = 255;
+        }
+        const uint32_t cl = kMapButtons[i].cl;
+        if (cl == kClL) {
+            intent.triggerL = std::max(intent.triggerL, level);
+        } else if (cl == kClR) {
+            intent.triggerR = std::max(intent.triggerR, level);
+        } else if (level >= kTriggerThreshold) {
+            intent.cl |= cl;
+        }
+    }
+    if (intent.triggerL >= kTriggerThreshold) intent.cl |= kClL;
+    if (intent.triggerR >= kTriggerThreshold) intent.cl |= kClR;
+}
+
 // A gamepad (after the user's remapping) as the Classic Controller, by position as in Dolphin's
 // Classic layout: A east, B south, X north, Y west, the triggers as L and R, the shoulders as ZL
 // and ZR. PADStatus has no left shoulder or guide button, so those two come from SDL directly.
@@ -316,6 +365,11 @@ Intent PadIntent(uint32_t chan, const PADStatus& pad) {
     intent.lStick[1] = std::clamp(pad.stickY / 127.0f, -1.0f, 1.0f);
     intent.rStick[0] = std::clamp(pad.substickX / 127.0f, -1.0f, 1.0f);
     intent.rStick[1] = std::clamp(pad.substickY / 127.0f, -1.0f, 1.0f);
+    if (g_mapOn.load(std::memory_order_relaxed)) {
+        if (SDL_Gamepad* gamepad = index >= 0 ? PADGetSDLGamepadForIndex(static_cast<u32>(index)) : nullptr) {
+            ApplyGamepadMap(gamepad, intent);
+        }
+    }
     return intent;
 }
 
@@ -374,6 +428,64 @@ void SetTouchSticks(float leftX, float leftY, float rightX, float rightY) {
     g_touchSticks[3].store(rightY, std::memory_order_relaxed);
 }
 
+void SetGamepadMap(const char* map) {
+    std::array<int, kMapCount> sources;
+    sources.fill(-1);
+    size_t found = 0;
+    const std::string text = map != nullptr ? map : "";
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find(',', start);
+        if (end == std::string::npos) end = text.size();
+        const std::string entry = text.substr(start, end - start);
+        start = end + 1;
+        const size_t eq = entry.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        const auto trim = [](std::string s) {
+            const size_t a = s.find_first_not_of(" \t");
+            const size_t b = s.find_last_not_of(" \t");
+            return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+        };
+        const std::string key = trim(entry.substr(0, eq));
+        const std::string value = trim(entry.substr(eq + 1));
+        for (size_t i = 0; i < kMapCount; ++i) {
+            if (key != kMapButtons[i].name) {
+                continue;
+            }
+            const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(value.c_str());
+            const SDL_GamepadAxis axis = SDL_GetGamepadAxisFromString(value.c_str());
+            if (button != SDL_GAMEPAD_BUTTON_INVALID) {
+                sources[i] = static_cast<int>(button);
+            } else if (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
+                sources[i] = kAxisSource + static_cast<int>(axis);
+            } else {
+                break;
+            }
+            ++found;
+            break;
+        }
+    }
+    for (size_t i = 0; i < kMapCount; ++i) {
+        g_map[i].store(sources[i], std::memory_order_relaxed);
+    }
+    const bool on = !text.empty();
+    if (g_mapOn.exchange(on) != on || on) {
+        static std::string s_last;
+        static std::mutex s_logMutex;
+        std::lock_guard<std::mutex> lock(s_logMutex);
+        if (s_last != text) {
+            s_last = text;
+            if (on) {
+                RT_LOGF(RT_TAG_RUNTIME, "gamepad buttons: %zu set by the player (%s)\n", found, text.c_str());
+            } else {
+                RT_LOGF(RT_TAG_RUNTIME, "gamepad buttons: default layout\n");
+            }
+        }
+    }
+}
+
 bool Present(uint32_t chan) {
     if (chan >= PAD_MAX_CONTROLLERS) {
         return false;
@@ -395,6 +507,11 @@ bool Sample(uint32_t chan, WiiRemoteInput::KpadSample& sample) {
     }
     AnnounceLocked(chan, pad);
     Intent intent;
+    static const bool s_configMap = [] {
+        SetGamepadMap(RuntimeConfigFile::GamepadMap().c_str());
+        return true;
+    }();
+    (void)s_configMap;
     if (pad) {
         intent = PadIntent(chan, g_pads[chan]);
     }

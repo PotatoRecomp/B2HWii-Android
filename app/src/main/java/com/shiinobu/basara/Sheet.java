@@ -282,6 +282,34 @@ final class Sheet {
         return this;
     }
 
+    /**
+     * Gamepad input goes to `keys` first, and stick, trigger and hat moves to `motion`, before the
+     * sheet's own buttons see them; each returns true for an event it took.
+     */
+    Sheet onGamepad(android.content.DialogInterface.OnKeyListener keys,
+                    java.util.function.Predicate<android.view.MotionEvent> motion) {
+        dialog.setOnKeyListener(keys);
+        final Window window = dialog.getWindow();
+        if (window != null && motion != null) {
+            // A motion event only reaches a focused view, so it is taken at the window instead.
+            final Window.Callback inner = window.getCallback();
+            window.setCallback((Window.Callback) java.lang.reflect.Proxy.newProxyInstance(
+                    Window.Callback.class.getClassLoader(), new Class<?>[] {Window.Callback.class},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("dispatchGenericMotionEvent")
+                                && motion.test((android.view.MotionEvent) args[0])) {
+                            return true;
+                        }
+                        try {
+                            return method.invoke(inner, args);
+                        } catch (java.lang.reflect.InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    }));
+        }
+        return this;
+    }
+
     Sheet onDismiss(Runnable run) {
         dialog.setOnDismissListener(d -> run.run());
         return this;

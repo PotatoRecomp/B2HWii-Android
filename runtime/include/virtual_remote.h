@@ -40,4 +40,11 @@ void SetTouchState(uint32_t touchButtons, bool shake, float tilt);
 // The on-screen sticks, -1..1 with +y up.
 void SetTouchSticks(float leftX, float leftY, float rightX, float rightY);
 
+// The player's gamepad buttons (Android Settings > Controls > Gamepad Buttons, Config.toml [input]
+// gamepad_map): "a=b,b=a,zl=leftshoulder,l=lefttrigger,..." gives each Classic button (a b x y l r zl
+// zr plus minus home up down left right) one SDL gamepad button or trigger by its SDL name. A button
+// left out is not on the gamepad. Empty: the Dolphin layout above, through aurora's PAD remapping.
+// Applies to every gamepad; the sticks stay as they are. May be called from any thread.
+void SetGamepadMap(const char* map);
+
 } // namespace VirtualRemote

@@ -700,6 +700,8 @@ final class SettingsMenu {
     }
 
     private void showControls() {
+        actionRow(Tr.t("Gamepad Buttons"), GamepadButtons.summary(settings), Tr.t("Change"),
+                () -> new GamepadButtons(activity, settings, this::changed).show());
         toggleRow(Tr.t("Touch Controls"), Tr.t("The on-screen Classic Controller."), settings.touchControls(),
                 on -> settings.setTouchControls(on));
         final String[] opacities = {"20%", "40%", "60%", "80%", "100%"};

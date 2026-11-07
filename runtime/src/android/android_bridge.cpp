@@ -116,6 +116,16 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetCameraDist
     Cheats::SetCameraDistance(static_cast<float>(distance));
 }
 
+// GameActivity.nativeSetGamepadMap: Settings > Controls > Gamepad Buttons (virtual_remote.h).
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetGamepadMap(JNIEnv* env, jclass, jstring map)
+{
+    const char* text = map != nullptr ? env->GetStringUTFChars(map, nullptr) : nullptr;
+    VirtualRemote::SetGamepadMap(text != nullptr ? text : "");
+    if (text != nullptr) {
+        env->ReleaseStringUTFChars(map, text);
+    }
+}
+
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetBattery(JNIEnv*, jclass, jint percent,
                                                                             jfloat tempC)
 {

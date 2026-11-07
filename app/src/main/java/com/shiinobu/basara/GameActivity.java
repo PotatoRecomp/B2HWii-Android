@@ -42,6 +42,9 @@ public final class GameActivity extends SDLActivity
     /** Settings > Display > Camera Distance (1 = the game's camera). */
     static native void nativeSetCameraDistance(float distance);
 
+    /** Settings > Controls > Gamepad Buttons (GamepadButtons): "a=b,b=a,...", "" = the default layout. */
+    static native void nativeSetGamepadMap(String map);
+
     /** The in-game settings: upscaler (0 off, 1 FSR Light, 2 FSR Full, 3 SGSR), frameskip (0 off, 1 auto, 2 30 FPS lock). */
     static native void nativeApplyLiveSettings(int upscaler, int frameskip);
 
@@ -490,6 +493,11 @@ public final class GameActivity extends SDLActivity
             nativeSetCameraDistance(settings.cameraDistanceFactor());
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "camera distance bridge missing from libmain.so", e);
+        }
+        try {
+            nativeSetGamepadMap(settings.gamepadMap());
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "gamepad map bridge missing from libmain.so", e);
         }
         try {
             nativeApplyLiveSettings(settings.fsr(), settings.fpsLock30() ? 2 : settings.frameskip() ? 1 : 0);

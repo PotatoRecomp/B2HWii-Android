@@ -1746,10 +1746,12 @@ int RuntimeMain(int argc, char** argv) {
                                                 auroraConfig.reportTextureKeys;
         auroraConfig.allowTextureDumps = RuntimeConfigFile::TextureReplacements(false) &&
                                          RuntimeConfigFile::TextureDumps(false);
-        // Android: /sdcard/Basara2Heroes[-Beta]/textures (GameActivity), so a file manager can fill it.
+        // Android: /sdcard/Basara2Heroes[-Beta]/Textures (GameActivity), so a file manager can fill it.
         if (const char* textureDir = std::getenv("BASARA_TEXTURE_DIR"); textureDir && *textureDir) {
             auroraConfig.textureRoot = textureDir;
         }
+        // The packs ticked in Settings > Textures, in order (set even when none is ticked).
+        auroraConfig.texturePacks = std::getenv("BASARA_TEXTURE_PACKS");
         if (const char* hdDir = std::getenv("BASARA_HD_CACHE_DIR"); hdDir && *hdDir) {
             auroraConfig.hdCacheRoot = hdDir;
         }

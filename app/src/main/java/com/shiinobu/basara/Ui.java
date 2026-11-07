@@ -2,13 +2,16 @@ package com.shiinobu.basara;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
@@ -16,51 +19,61 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * The app's look, shared by the launcher, its settings and the in-game menu: near-black surfaces with
- * thin borders, small chips, one red accent. Every view is built in code.
+ * The app's look, shared by the start screen, the in-game menu and every dialog: Dear ImGui's default
+ * dark style (square corners, one pixel borders, blue frames and grabs), after the menu hikki
+ * (datfooldive) made for DefJam-FFNY-Android. Every view is built in code.
  */
 final class Ui {
     private Ui() {}
 
-    static final int BG = Color.rgb(10, 11, 13);
-    static final int ELEVATED = Color.rgb(14, 16, 20);
-    static final int SURFACE = Color.rgb(18, 20, 24);
-    static final int ACTIVE = Color.rgb(26, 29, 36);
-    static final int BORDER = Color.rgb(34, 38, 46);
-    static final int BORDER_STRONG = Color.rgb(46, 52, 64);
-    static final int TEXT = Color.rgb(243, 244, 246);
-    static final int SECONDARY = Color.rgb(156, 163, 175);
-    static final int MUTED = Color.rgb(107, 114, 128);
-    static final int ACCENT = Color.rgb(220, 38, 38);
-    static final int ACCENT_PRESSED = Color.rgb(225, 29, 72);
-    static final int ACCENT_SUBTLE = Color.argb(36, 220, 38, 38);
-    static final int WARNING = Color.rgb(245, 158, 11);
-    static final int SUCCESS = Color.rgb(16, 185, 129);
-    static final int DANGER_TEXT = Color.rgb(252, 165, 165);
-    static final int DANGER_FILL = Color.argb(20, 220, 38, 38);
-    static final int DANGER_BORDER = Color.argb(77, 220, 38, 38);
+    // Dear ImGui StyleColorsDark
+    static final int WINDOW = 0xF00F0F0F;   // WindowBg
+    static final int TITLE = 0xFF294A7A;    // TitleBgActive
+    static final int FRAME = 0xFF1D2F48;    // FrameBg
+    static final int BUTTON = 0xFF1F3B5E;   // Button
+    static final int BUTTON_ON = 0xFF3369AD;  // TabActive
+    static final int GRAB = 0xFF3D85E0;     // SliderGrab
+    static final int GRAB_ON = 0xFF4296FA;  // SliderGrabActive, CheckMark
+    static final int SELECTED = 0x504296FA; // Header
 
-    static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    // The older names, kept for every view that uses them
+    static final int BG = 0xFF0F0F0F;
+    static final int ELEVATED = 0xFF0F0F0F;
+    static final int SURFACE = FRAME;
+    static final int ACTIVE = BUTTON;
+    static final int BORDER = 0xFF4A4A55;
+    static final int BORDER_STRONG = 0xFF4A4A55;
+    static final int TEXT = Color.WHITE;
+    static final int SECONDARY = 0xFFC8C8C8;
+    static final int MUTED = 0xFF808080;    // TextDisabled
+    static final int ACCENT = BUTTON_ON;
+    static final int ACCENT_PRESSED = GRAB_ON;
+    static final int ACCENT_SUBTLE = BUTTON_ON;
+    static final int WARNING = 0xFFE0C070;
+    static final int SUCCESS = 0xFF6CC070;
+    static final int DANGER_TEXT = 0xFFFF8080;
+    static final int DANGER_FILL = BUTTON;
+    static final int DANGER_BORDER = BORDER;
+
+    static final Typeface MEDIUM = Typeface.DEFAULT;
     static final Typeface MONO = Typeface.MONOSPACE;
 
     static int dp(Context context, float value) {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
     }
 
-    /** A filled rounded box with a 1 dp border (none when `border` is 0). */
+    /** A filled square box with a one pixel border (none when `border` is 0). `radiusDp` is not used: ImGui's corners are square. */
     static GradientDrawable box(Context context, int fill, int border, float radiusDp) {
         final GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(context, radiusDp));
         shape.setColor(fill);
-        if (border != 0) shape.setStroke(Math.max(1, dp(context, 1)), border);
+        if (border != 0) shape.setStroke(1, border);
         return shape;
     }
 
-    /** `box`, rippling when touched. */
+    /** `box`, lighter while pressed. */
     static Drawable touchBox(Context context, int fill, int border, float radiusDp) {
-        final GradientDrawable mask = box(context, Color.WHITE, 0, radiusDp);
-        return new RippleDrawable(ColorStateList.valueOf(Color.argb(48, 255, 255, 255)),
-                box(context, fill, border, radiusDp), mask);
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(60, 66, 150, 250)),
+                box(context, fill, border, 0), box(context, Color.WHITE, 0, 0));
     }
 
     static TextView text(Context context, String value, float sp, int color) {
@@ -72,12 +85,9 @@ final class Ui {
         return view;
     }
 
-    /** Small capitals with wide spacing: a label over a group. */
+    /** A dim label over a group, ImGui's SeparatorText. */
     static TextView caption(Context context, String value) {
-        final TextView view = text(context, value.toUpperCase(java.util.Locale.ROOT), 10.5f, MUTED);
-        view.setTypeface(Typeface.DEFAULT_BOLD);
-        view.setLetterSpacing(0.08f);
-        return view;
+        return text(context, value.toUpperCase(java.util.Locale.ROOT), 11, MUTED);
     }
 
     static ImageView icon(Context context, int drawable, int tint, float sizeDp) {
@@ -88,54 +98,45 @@ final class Ui {
         return view;
     }
 
-    /** A choice chip: the chosen one has a red border on a red tint. */
+    /** An ImGui button: the chosen one in the brighter blue. */
     static TextView chip(Context context, String label, boolean active, boolean enabled, View.OnClickListener onClick) {
-        final TextView chip = text(context, label, 13, active ? TEXT : SECONDARY);
-        chip.setTypeface(active ? Typeface.DEFAULT_BOLD : MEDIUM);
+        final TextView chip = text(context, label, 13, TEXT);
         chip.setGravity(Gravity.CENTER);
-        chip.setPadding(dp(context, 12), dp(context, 7), dp(context, 12), dp(context, 7));
-        chip.setMinWidth(dp(context, 44));
-        chip.setBackground(active ? touchBox(context, ACCENT_SUBTLE, ACCENT, 8) : touchBox(context, BG, BORDER, 8));
+        chip.setSingleLine(true);
+        chip.setPadding(dp(context, 10), dp(context, 5), dp(context, 10), dp(context, 5));
+        chip.setMinWidth(dp(context, 30));
+        chip.setMinHeight(dp(context, 28));
+        chip.setBackground(touchBox(context, active ? BUTTON_ON : BUTTON, 0, 0));
         if (!enabled) chip.setAlpha(0.4f);
         if (enabled && onClick != null) chip.setOnClickListener(onClick);
         return chip;
     }
 
-    /** The on/off switch: a red track with a white knob when on. */
+    /** An ImGui checkbox: a square frame with a tick when on. */
     static View toggle(Context context, boolean on) {
-        final LinearLayout track = new LinearLayout(context);
-        track.setGravity((on ? Gravity.END : Gravity.START) | Gravity.CENTER_VERTICAL);
-        track.setPadding(dp(context, 3), 0, dp(context, 3), 0);
-        track.setBackground(on ? box(context, ACCENT, ACCENT, 11) : box(context, BG, BORDER_STRONG, 11));
-        final View knob = new View(context);
-        final GradientDrawable dot = new GradientDrawable();
-        dot.setShape(GradientDrawable.OVAL);
-        dot.setColor(on ? Color.WHITE : SECONDARY);
-        knob.setBackground(dot);
-        track.addView(knob, new LinearLayout.LayoutParams(dp(context, 15), dp(context, 15)));
-        track.setLayoutParams(new LinearLayout.LayoutParams(dp(context, 40), dp(context, 23)));
-        return track;
+        final TextView box = text(context, on ? "✓" : "", 15, GRAB_ON);
+        box.setGravity(Gravity.CENTER);
+        box.setIncludeFontPadding(false);
+        box.setBackgroundColor(FRAME);
+        box.setLayoutParams(new LinearLayout.LayoutParams(dp(context, 28), dp(context, 28)));
+        return box;
     }
 
-    /** A button with an icon and a label: primary (red), plain, or danger. */
+    /** An ImGui button with an optional icon: primary (brighter blue), plain, or danger (red text). */
     static LinearLayout button(Context context, int iconRes, String label, int style, View.OnClickListener onClick) {
         final LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10));
-        final int fill = style == PRIMARY ? ACCENT : style == DANGER ? DANGER_FILL : SURFACE;
-        final int border = style == PRIMARY ? ACCENT_PRESSED : style == DANGER ? DANGER_BORDER : BORDER;
-        final int color = style == PRIMARY ? Color.WHITE : style == DANGER ? DANGER_TEXT : TEXT;
-        row.setBackground(touchBox(context, fill, border, 8));
-        if (iconRes != 0) {
-            row.addView(icon(context, iconRes, style == PRIMARY ? Color.WHITE : style == DANGER
-                    ? Color.rgb(248, 113, 113) : SECONDARY, 16));
-        }
+        row.setGravity(Gravity.CENTER);
+        row.setPadding(dp(context, 12), dp(context, 6), dp(context, 12), dp(context, 6));
+        row.setMinimumHeight(dp(context, 30));
+        row.setBackground(touchBox(context, style == PRIMARY ? BUTTON_ON : BUTTON, 0, 0));
+        final int color = style == DANGER ? DANGER_TEXT : TEXT;
+        if (iconRes != 0) row.addView(icon(context, iconRes, color, 15));
         final TextView name = text(context, label, 13, color);
-        name.setTypeface(style == PRIMARY ? Typeface.DEFAULT_BOLD : MEDIUM);
+        name.setSingleLine(true);
         final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.leftMargin = iconRes != 0 ? dp(context, 9) : 0;
+        params.leftMargin = iconRes != 0 ? dp(context, 7) : 0;
         row.addView(name, params);
         row.setClickable(true);
         row.setOnClickListener(onClick);
@@ -144,11 +145,112 @@ final class Ui {
 
     static final int PLAIN = 0, PRIMARY = 1, DANGER = 2;
 
+    /** ImGui's separator: one pixel of the border colour across. */
+    static View line(Context context) {
+        final View rule = new View(context);
+        rule.setBackgroundColor(BORDER);
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1);
+        params.setMargins(0, dp(context, 4), 0, dp(context, 4));
+        rule.setLayoutParams(params);
+        return rule;
+    }
+
+    /** An ImGui window's title bar: the title on the left, `right` (small, dim) on the right or nothing. */
+    static LinearLayout titleBar(Context context, String title, String right) {
+        final LinearLayout bar = new LinearLayout(context);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(TITLE);
+        bar.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
+        final TextView name = text(context, title, 14, TEXT);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        bar.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (right != null) bar.addView(text(context, right, 11, Color.argb(140, 255, 255, 255)));
+        return bar;
+    }
+
     static LinearLayout.LayoutParams matchWidth(int topMarginPx) {
         final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         params.topMargin = topMarginPx;
         return params;
+    }
+
+    /**
+     * ImGui's SliderInt: a flat frame, a narrow grab at the value and the value written across the
+     * middle. A finger anywhere on it takes the grab there; `released` runs when it lets go.
+     */
+    static final class Slider extends View {
+        interface Listener {
+            void changed(int step);
+            void released(int step);
+        }
+
+        private final int steps;
+        private int step;
+        private String label = "";
+        private boolean held;
+        private Listener listener;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float grab;
+
+        Slider(Context context, int steps, int step) {
+            super(context);
+            this.steps = Math.max(steps, 1);
+            this.step = Math.max(0, Math.min(step, this.steps));
+            grab = dp(context, 10);
+            paint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 13,
+                    context.getResources().getDisplayMetrics()));
+            paint.setTextAlign(Paint.Align.CENTER);
+        }
+
+        void setListener(Listener listener) { this.listener = listener; }
+
+        void setLabel(String value) {
+            label = value;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            final float w = getWidth(), h = getHeight(), pad = 2;
+            paint.setColor(FRAME);
+            canvas.drawRect(0, 0, w, h, paint);
+            final float x = pad + (w - 2 * pad - grab) * step / steps;
+            paint.setColor(held ? GRAB_ON : GRAB);
+            canvas.drawRect(x, pad, x + grab, h - pad, paint);
+            paint.setColor(TEXT);
+            canvas.drawText(label, w / 2, h / 2 - (paint.descent() + paint.ascent()) / 2, paint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            if (!isEnabled()) return false;
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    held = true;
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                    // fall through: the press moves the grab as a drag does
+                case MotionEvent.ACTION_MOVE: {
+                    final float span = Math.max(getWidth() - grab, 1);
+                    final int at = Math.max(0, Math.min(steps, Math.round((e.getX() - grab / 2) / span * steps)));
+                    if (at != step) {
+                        step = at;
+                        if (listener != null) listener.changed(at);
+                    }
+                    invalidate();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    held = false;
+                    invalidate();
+                    if (listener != null) listener.released(step);
+                    return true;
+                default:
+                    return true;
+            }
+        }
     }
 
     /** Children left to right, starting a new line when the next one does not fit. */

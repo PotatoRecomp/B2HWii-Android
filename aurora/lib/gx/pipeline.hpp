@@ -16,9 +16,11 @@ struct DrawData {
   bool expandedPrimitive;
   GXBindGroups bindGroups;
   uint32_t dstAlpha;
+  // Native vertex stride when the draw's attributes come through vertex inputs; 0 for vertex pulling.
+  uint32_t vtxStride = 0;
 };
 
-constexpr uint32_t GXPipelineConfigVersion = 19;
+constexpr uint32_t GXPipelineConfigVersion = 20;
 
 constexpr GXFogType effective_pipeline_fog_type(GXFogType fogType, GXZTexOp zTextureOp,
                                                 bool zCompLocBeforeTex, GXBlendMode blendMode,
@@ -71,6 +73,9 @@ struct DrawEncodeState {
   WGPUBindGroup boundTextureBindGroup = nullptr;
   // The pass-wide index buffer binding is established lazily by the first indexed draw; every draw then addresses it with firstIndex instead of a per-draw SetIndexBuffer.
   bool indexBufferBound = false;
+  bool vertexBufferBound = false;
+  // Dynamic offset of the uniform bind group last set in slot 1 by a GX draw.
+  uint32_t uniformOffset = UINT32_MAX;
 };
 
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, DrawEncodeState& state,

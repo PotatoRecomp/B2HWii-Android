@@ -565,7 +565,8 @@ struct ShaderConfig {
   u8 lineMode : 2 = 0; // 1 = GX_LINES, 2 = GX_LINESTRIP, 3 = GX_POINTS
   u8 dualTexEnabled : 1 = 0;
   u8 fogRangeAdjust : 1 = 0;
-  u8 pad1 : 4 = 0;
+  u8 vtxInput : 1 = 0; // attributes arrive decoded through vertex inputs (gx/vertex_loader.hpp)
+  u8 pad1 : 3 = 0;
   u8 numTexGens = 0;
   u32 zTexture = 0; // bias[0:23], format[24:25], op[26:27]; 0 disables shader depth output.
   std::array<AttrConfig, MaxVtxAttr> attrs;

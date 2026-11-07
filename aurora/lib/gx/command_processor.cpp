@@ -11,6 +11,7 @@
 #include "gx_fmt.hpp"
 #include "pipeline.hpp"
 #include "shader_info.hpp"
+#include "vertex_loader.hpp"
 #include "../internal.hpp"
 
 #include <absl/container/flat_hash_map.h>
@@ -562,19 +563,23 @@ static inline uint64_t stat_now_ns() {
 #if defined(__aarch64__)
   // ns = ticks * (1e9 / freq) as a 32.32 fixed-point multiply: a 128-bit divide is a libgcc call
   // (__udivti3), and four of them a draw cost ~9% of the game thread in a 10,000-draw battle.
+  // Some firmware leaves cntfrq_el0 at 0 (Galaxy S9 Exynos 9810): GX times came out ~1e9 times too
+  // long, so an implausible frequency falls back to steady_clock.
   static const uint64_t mult = [] {
     uint64_t f;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
-    return static_cast<uint64_t>((static_cast<unsigned __int128>(1000000000u) << 32) / (f != 0 ? f : 1));
+    if (f < 1000000u || f > 1000000000u) return uint64_t{0};
+    return static_cast<uint64_t>((static_cast<unsigned __int128>(1000000000u) << 32) / f);
   }();
-  uint64_t ticks;
-  asm volatile("mrs %0, cntvct_el0" : "=r"(ticks));
-  return static_cast<uint64_t>((static_cast<unsigned __int128>(ticks) * mult) >> 32);
-#else
+  if (mult != 0) {
+    uint64_t ticks;
+    asm volatile("mrs %0, cntvct_el0" : "=r"(ticks));
+    return static_cast<uint64_t>((static_cast<unsigned __int128>(ticks) * mult) >> 32);
+  }
+#endif
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
-#endif
 }
 
 // Only one outermost call in kStatSampleEvery is timed, and counted that many times over: on Cortex-A76
@@ -2225,6 +2230,8 @@ struct CachedPipelineState {
   // Carried here so the draw can be recorded without keeping the PipelineConfig that produced it alive; it is the only field of the config the draw itself still needs.
   u32 dstAlpha = UINT32_MAX;
   ShaderInfo shaderInfo{};
+  // Set for vertex-input pipelines: decodes this format's stream into the native layout.
+  VertexDecoder decoder{};
 };
 
 static const CachedPipelineState& cached_pipeline_state(const PipelineConfig& config) {
@@ -2251,6 +2258,9 @@ static const CachedPipelineState& cached_pipeline_state(const PipelineConfig& co
       .dstAlpha = config.dstAlpha,
       .shaderInfo = build_shader_info(config.shaderConfig),
   };
+  if (config.shaderConfig.vtxInput) {
+    build_vertex_decoder(entry.state.decoder, config.shaderConfig, native_vertex_layout(config.shaderConfig));
+  }
   return entry.state;
 }
 
@@ -2286,15 +2296,44 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
   return state;
 }
 
-static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t vertexBytes, bool merged = false) {
+// Staging bytes a draw's vertices take: decoded vertices need their stride-aligned native size.
+static uint32_t vertex_demand(const CachedPipelineState& state, u16 vtxCount, uint32_t rawBytes) noexcept {
+  const u32 stride = state.decoder.nativeStride;
+  return stride == 0 ? rawBytes : static_cast<uint32_t>(vtxCount) * stride + stride;
+}
+
+// Pushes a draw's vertices: decoded for vertex-input pipelines, raw for vertex pulling.
+static gfx::Range push_draw_vertices(const CachedPipelineState& state, const uint8_t* vertices, u16 vtxCount,
+                                     uint32_t rawBytes) {
+  const u32 stride = state.decoder.nativeStride;
+  if (stride == 0) {
+    return gfx::push_verts(vertices, rawBytes);
+  }
+  // The decoder writes one attribute column at a time; staging is write-combine memory that wants
+  // whole sequential lines, so decode into cached memory and copy the result over in one pass.
+  static thread_local std::vector<u8> scratch;
+  const size_t bytes = static_cast<size_t>(vtxCount) * stride;
+  if (scratch.size() < bytes) {
+    scratch.resize(bytes);
+  }
+  decode_vertices(state.decoder, vertices, vtxCount, scratch.data());
+  gfx::Range range;
+  u8* dst = gfx::map_verts_strided(bytes, stride, range);
+  std::memcpy(dst, scratch.data(), bytes);
+  return range;
+}
+
+static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t rawBytes, bool merged = false) {
+  const auto& state = resolve_pipeline_state(prim, fmt);
   const auto& indexTemplate = cached_index_template(prim, count);
-  gfx::StagingSizes demand{vertexBytes, 0, indexTemplate.indices.size() * sizeof(u16), 0};
+  gfx::StagingSizes demand{vertex_demand(state, count, rawBytes), 0, indexTemplate.indices.size() * sizeof(u16), 0};
   if (merged) return gfx::staging_has_space(demand);
-  const auto& info = resolve_pipeline_state(prim, fmt).shaderInfo;
+  const auto& info = state.shaderInfo;
   demand[1] = gfx::staging_uniform_bytes(info.uniformSize);
   if (frame_interpolation_identity_needed() && frame_interpolation_replay_safe())
     demand[1] *= 1 + MaxInterpolatedFrames;
-  for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
+  // Decoded draws read their arrays on the CPU and upload none.
+  for (int i = GX_VA_POS; i <= GX_VA_TEX7 && state.decoder.nativeStride == 0; ++i) {
     if ((g_gxState.vtxDesc[i] == GX_INDEX8 || g_gxState.vtxDesc[i] == GX_INDEX16) &&
         g_gxState.arrays[i].cachedRange.size == 0)
       demand[3] += gfx::staging_storage_bytes(g_gxState.arrays[i].size);
@@ -2358,7 +2397,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
     if (!admit_draw(prim, fmt, vtxCount, vertexBytes))
       throw gfx::StagingCapacityError("Raw draw does not fit after capacity submission");
   }
-  const gfx::Range vertRange = gfx::push_verts(vertices, vertexBytes);
+  const gfx::Range vertRange = push_draw_vertices(resolve_pipeline_state(prim, fmt), vertices, vtxCount, vertexBytes);
   const bool interpolationIdentityActive = frame_interpolation_identity_needed();
   const PnMtxUsage matrixUsage = interpolationIdentityActive
                                      ? pn_mtx_usage(vertices, vtxCount, vtxSize)
@@ -2466,7 +2505,8 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     if (lastDraw != nullptr && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS &&
         !lastDraw->expandedPrimitive && lastDraw->instanceCount == 1 &&
         uint64_t(lastDraw->vtxCount) +
-            vtxCount <= 65536u) LIKELY {
+            vtxCount <= 65536u &&
+        lastDraw->vtxStride == resolve_pipeline_state(prim, fmt).decoder.nativeStride) LIKELY {
       mergeTarget = lastDraw;
     }
   }
@@ -2485,7 +2525,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   }
   if (!admit_draw(prim, fmt, vtxCount, totalVtxBytes, mergeTarget != nullptr)) throw gfx::StagingBatchFull{};
   const uint8_t* vertices = data + pos;
-  gfx::Range vertRange = gfx::push_verts(vertices, totalVtxBytes);
+  gfx::Range vertRange = push_draw_vertices(resolve_pipeline_state(prim, fmt), vertices, vtxCount, totalVtxBytes);
   pos += totalVtxBytes;
   if (auto* lastDraw = mergeTarget) {
       const auto& indexTemplate = cached_index_template(prim, vtxCount);
@@ -2538,9 +2578,13 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   const gfx::Range idxRange = gfx::push_indices(ArrayRef<u16>{
       indexTemplate.indices.data(), indexTemplate.indices.size()});
 
-  // Build pipeline, bind groups, and push draw command
+  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
+  const auto& info = pipelineState.shaderInfo;
+  const u32 nativeStride = pipelineState.decoder.nativeStride;
+
+  // Build pipeline, bind groups, and push draw command. Decoded draws already read their arrays.
   BindGroupRanges ranges{};
-  for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
+  for (int i = GX_VA_POS; i <= GX_VA_TEX7 && nativeStride == 0; ++i) {
     if (g_gxState.vtxDesc[i] != GX_INDEX8 && g_gxState.vtxDesc[i] != GX_INDEX16) {
       continue;
     }
@@ -2553,9 +2597,6 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
       array.cachedRange = range;
     }
   }
-
-  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
-  const auto& info = pipelineState.shaderInfo;
 
   resolve_sampled_textures(info);
 
@@ -2606,6 +2647,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
       .expandedPrimitive = prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS,
       .bindGroups = bindGroups,
       .dstAlpha = pipelineState.dstAlpha,
+      .vtxStride = nativeStride,
   });
   g_gxState.stateDirty = false;
 }

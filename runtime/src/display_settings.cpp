@@ -3,6 +3,7 @@
 #include "hle_stubs.h"
 
 #include "memory.h"
+#include "runtime_config.h"
 #include "runtime_log.h"
 #include "thermal.h"
 
@@ -34,7 +35,6 @@ std::mutex g_mutex;
 Settings g_current;
 Settings g_pending;
 bool g_hasPending = false;
-bool g_bootWidescreen = true;
 bool g_rendererDirty = true;
 uint32_t g_surfaceWidth = 0;
 uint32_t g_surfaceHeight = 0;
@@ -72,9 +72,10 @@ uint32_t g_dynFrames = 0;
 bool g_dynSkipWindow = true;                  // the window after a resize carries its stall
 AuroraFrameWorkerTotals g_dynLast{};
 
-// The game booted in 4:3: neither widescreen mode exists until the next start.
+// Basara's cameras are all 4:3 and widescreen is the host's (ApplyGuestCameraAspect, aurora's wide
+// projection), so every aspect applies while playing: 4:3 writes the stock camera aspect back.
 int32_t EffectiveAspect(int32_t aspect) {
-    return g_bootWidescreen ? aspect : kAspect4x3;
+    return aspect;
 }
 
 bool SurfaceWiderThan169() {
@@ -239,13 +240,17 @@ constexpr uint32_t kCameraAspectAddrs[] = {0x80667784u, 0x80668B08u};
 constexpr float kCameraAspectStock = 10.0f / 7.0f;
 constexpr float kCameraHeightScale = 0.93333334f;
 
+// Real widescreen (Hor+, 1.1) only when Config.toml real_widescreen asks (BASARA_WIDE_GUEST). Off,
+// the default: 16:9 and Fill stretch the 4:3 picture as 1.0 did, without the extra enemies the wider
+// camera wakes (the sound broke up on slower phones). Network play always uses it: the camera's width decides which enemies wake.
+bool RealWidescreen() {
+    static const bool s_on = RuntimeConfigFile::RealWidescreen();
+    return s_on || DetClock::Enabled();
+}
+
 void ApplyGuestCameraAspect(float pictureAspect) {
-    static const bool s_enabled = [] {
-        const char* v = std::getenv("BASARA_WIDE_GUEST");
-        return !(v && *v == '0');
-    }();
-    if (!s_enabled) {
-        return;
+    if (!RealWidescreen()) {
+        pictureAspect = 4.0f / 3.0f;  // writes the stock aspect back if it was changed
     }
     const float value = pictureAspect > 4.0f / 3.0f + 0.01f ? pictureAspect / kCameraHeightScale : kCameraAspectStock;
     uint32_t bits = 0;
@@ -275,8 +280,9 @@ void ApplyGameCanvas(int32_t aspect) {
     // Basara's cameras are all 4:3, so 16:9 widens them too (Hor+) instead of stretching the picture.
     const bool fitted = aspect == kAspectFill && g_surfaceWidth != 0 && g_surfaceHeight != 0;
     AuroraSetWidePerspectiveAspect(
-        fitted ? static_cast<float>(g_surfaceWidth) / static_cast<float>(g_surfaceHeight)
-               : aspect == kAspect16x9 ? kRatio16x9 : 0.0f);
+        !RealWidescreen() ? 0.0f
+        : fitted          ? static_cast<float>(g_surfaceWidth) / static_cast<float>(g_surfaceHeight)
+        : aspect == kAspect16x9 ? kRatio16x9 : 0.0f);
     // BASARA_FILL_2D=1 (test): 2D (HUD, text, menus) keeps its 16:9 shape in the middle instead of
     // stretching to the edges. Off: players found the narrowed HUD and the bars in menus worse.
     static const bool s_fill2D = [] {
@@ -307,7 +313,6 @@ void Initialize(const Settings& requested) {
     const Settings settings = Lockstep(requested);
     std::lock_guard<std::mutex> lock(g_mutex);
     g_current = settings;
-    g_bootWidescreen = settings.aspect != kAspect4x3;
     g_rendererDirty = true;
 }
 
@@ -385,7 +390,7 @@ Settings Latest() {
 
 bool GameWidescreen() {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return g_bootWidescreen;
+    return (g_hasPending ? g_pending : g_current).aspect != kAspect4x3;
 }
 
 bool SurfaceWide() {

@@ -5,6 +5,7 @@
 #include "gx.hpp"
 #include "gx_fmt.hpp"
 #include "shader_info.hpp"
+#include "vertex_loader.hpp"
 
 #include <dolphin/gx/GXEnum.h>
 
@@ -698,10 +699,73 @@ static std::string offset_plus(std::string_view offs, u32 add) {
   return fmt::format("({} + {}u)", offs, add);
 }
 
+// Vertex input names of the native layout (gx/vertex_loader.hpp), indexed by location.
+static std::string native_input_name(const NativeVertexLayout& layout, u8 location) {
+  if (layout.posLocation == location) return "a_pos";
+  if (layout.nrmLocation != NativeVertexLayout::None && location >= layout.nrmLocation &&
+      location < layout.nrmLocation + layout.nrmCount) {
+    return fmt::format("a_nrm{}", location - layout.nrmLocation);
+  }
+  for (u32 c = 0; c < layout.clrLocation.size(); ++c) {
+    if (layout.clrLocation[c] == location) return fmt::format("a_clr{}", c);
+  }
+  for (u32 t = 0; t < layout.texLocation.size(); ++t) {
+    if (layout.texLocation[t] == location) return fmt::format("a_tex{}", t);
+  }
+  return fmt::format("a_mtx{}", location); // matrix groups occupy the first locations
+}
+
+static std::string native_inputs(const NativeVertexLayout& layout) {
+  std::string out;
+  for (u8 location = 0; location < layout.locationCount; ++location) {
+    std::string_view type;
+    switch (layout.locations[location].format) {
+    case NativeVertexLayout::Uint8x4:
+      type = "vec4u"sv;
+      break;
+    case NativeVertexLayout::Unorm8x4:
+      type = "vec4f"sv;
+      break;
+    case NativeVertexLayout::Float32x2:
+      type = "vec2f"sv;
+      break;
+    case NativeVertexLayout::Float32x3:
+      type = "vec3f"sv;
+      break;
+    }
+    out += fmt::format(",\n    @location({}) {}: {}", location, native_input_name(layout, location), type);
+  }
+  return out;
+}
+
+static std::string native_attr_load(const ShaderConfig& config, GXAttr attr) {
+  const auto layout = native_vertex_layout(config);
+  if (attr <= GX_VA_TEX7MTXIDX) {
+    const u8 slot = layout.mtxSlot[attr];
+    constexpr std::array comps{"x"sv, "y"sv, "z"sv, "w"sv};
+    const auto value = fmt::format("a_mtx{}.{}", slot / 4, comps[slot % 4]);
+    return attr == GX_VA_PNMTXIDX ? fmt::format("({} / 3u)", value) : value;
+  }
+  switch (attr) {
+  case GX_VA_POS:
+    return "a_pos";
+  case GX_VA_NRM:
+    return "a_nrm0";
+  case GX_VA_CLR0:
+  case GX_VA_CLR1:
+    return fmt::format("a_clr{}", attr - GX_VA_CLR0);
+  default:
+    return fmt::format("a_tex{}", attr - GX_VA_TEX0);
+  }
+}
+
 auto normal_group_load(const ShaderConfig& config, u8 group, std::string_view vidx) -> std::string {
   const auto& mapping = config.attrs[GX_VA_NRM];
   if (mapping.attrType == GX_NONE || mapping.cnt != 9) {
     return attr_load(config, GX_VA_NRM, vidx);
+  }
+  if (config.vtxInput) {
+    return fmt::format("a_nrm{}", group);
   }
 
   auto buf = "vbuf"sv;
@@ -734,6 +798,9 @@ auto attr_load(const ShaderConfig& config, GXAttr attr, std::string_view vidx) -
   const auto& mapping = config.attrs[attr];
   if (mapping.attrType == GX_NONE) {
     return vtx_attr(config, attr);
+  }
+  if (config.vtxInput) {
+    return native_attr_load(config, attr);
   }
   auto buf = "vbuf"sv;
   auto offs = fmt::format("ubuf.vtx_start + {} * {}u + {}u", vidx, config.vtxStride, mapping.offset);
@@ -1017,6 +1084,9 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
     vidxAttr = "in_vidx"sv;
   } else if (config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE) {
     vtxXfrAttrsPre += "\n    let in_pnmtxidx = ubuf.current_pnmtx;";
+  }
+  if (config.vtxInput) {
+    vtxInAttrs += native_inputs(native_vertex_layout(config));
   }
 
   // Load vertex attributes

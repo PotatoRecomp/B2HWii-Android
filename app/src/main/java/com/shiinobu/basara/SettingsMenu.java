@@ -38,17 +38,15 @@ final class SettingsMenu {
     /** A tab shown greyed out that cannot be opened: Cheats in a build without them (-PbasaraCheats). */
     static boolean disabled(int section) { return section == CHEATS && !BuildConfig.CHEATS; }
 
-    /** The launcher: everything, System last. Cheats is listed in every build, greyed out without BuildConfig.CHEATS. */
-    static int[] launcherSections() {
-        return new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, SYSTEM};
-    }
-
-    /** The game: no save import (it would close the game) and no launcher things. */
+    /**
+     * The game's menu holds every setting, System last; Textures is a group at the end of Graphics so
+     * the tabs fit one row. Cheats is listed in every build, greyed out without BuildConfig.CHEATS.
+     */
     static int[] gameSections() {
-        return new int[] {DISPLAY, GRAPHICS, TEXTURES, PERFORMANCE, CONTROLS, CHEATS};
+        return new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, SYSTEM};
     }
 
-    /** The launcher's own rows for System (game file, updates). */
+    /** The game's own rows for System (game file, updates). */
     interface SystemRows { void fill(SettingsMenu menu); }
 
     private final Activity activity;
@@ -86,13 +84,17 @@ final class SettingsMenu {
 
     /** Draws `index` again in place (the views swap before the next frame, so nothing jumps). */
     void show(int index) {
-        if (index == TEXTURES && section != TEXTURES && !hdBusy) hdCacheBytes = -1;  // count again on entry
+        if ((index == TEXTURES || index == GRAPHICS) && section != index && !hdBusy) hdCacheBytes = -1;  // count again on entry
         section = index;
         settings = new AppSettings(activity);  // the other process may have written it
         rows.removeAllViews();
         switch (index) {
             case DISPLAY: showDisplay(); break;
-            case GRAPHICS: showGraphics(); break;
+            case GRAPHICS:
+                showGraphics();
+                group(Tr.t("Textures"));
+                showTextures();
+                break;
             case PERFORMANCE: showPerformance(); break;
             case CONTROLS: showControls(); break;
             case SAVE_DATA: showSaveData(); break;
@@ -105,44 +107,35 @@ final class SettingsMenu {
     }
 
     /**
-     * A setting read once when the game starts. In the launcher: restart a running game now, or put it
-     * back. In the game the card already says so in red: it is saved for the next start.
+     * A setting read once when the game starts: the card already says so in red. It is saved now and
+     * applies after Restart (beside Resume) or the next time the app opens.
      */
     private void confirmRestart(String name, String now, String before, Runnable revert) {
-        if (inGame || !(activity instanceof LauncherActivity) || !((LauncherActivity) activity).gameRunning()) {
-            changed();
-            return;
-        }
-        final Runnable back = () -> {
-            revert.run();
-            changed();
-        };
-        new Sheet(activity, Tr.t("Restart Required"), name + Tr.t(" takes effect when the game starts again."))
-                .action(Tr.t("Restart"), Tr.t("Restart the game now with ") + name + " " + now, true, false, () -> {
-                    changed();
-                    ((LauncherActivity) activity).restartGame();
-                })
-                .action(Tr.t("Cancel"), Tr.t("Keep ") + name + " " + before, false, false, back)
-                .onCancel(back)
-                .show();
+        changed();
     }
 
     // --- sections --------------------------------------------------------------------------------
 
     private void showDisplay() {
-        if (!inGame) {
-            choiceRow(Tr.t("Language"), Tr.t("The launcher's language. Auto follows the phone's region: Indonesian "
-                            + "in Indonesia, English elsewhere."),
-                    new String[] {Tr.t("Auto"), "English", "Bahasa Indonesia"}, settings.language(), true, which -> {
-                        settings.setLanguage(which);
-                        Tr.init(activity);
-                        activity.recreate();  // every screen is drawn again in the new language
-                    });
-        }
-        restart(Tr.t("Switching between Original 4:3 and 16:9 or Fill applies when the game starts again."));
+        choiceRow(Tr.t("Language"), Tr.t("The menus' language. Auto follows the phone's region: Indonesian "
+                        + "in Indonesia, English elsewhere."),
+                new String[] {Tr.t("Auto"), "English", "Bahasa Indonesia"}, settings.language(), true, which -> {
+                    settings.setLanguage(which);
+                    Tr.init(activity);
+                    changed();  // drawn again in the new language (the side list on the next open)
+                });
         choiceRow(Tr.t("Aspect Ratio"), Tr.t("The shape of the picture."),
                 new String[] {Tr.t("Original 4:3"), "16:9", Tr.t("Fill Screen")}, settings.aspectMode(), true,
                 which -> settings.setAspectMode(which));
+        restart(null);
+        toggleRow(Tr.t("Real Widescreen"), Tr.t("16:9 and Fill Screen show more of the field to the sides instead of "
+                        + "stretching it. It also wakes more enemies, so slower phones run heavier and the sound "
+                        + "can break up. Off: stretched, as in 1.0."),
+                settings.realWidescreen(), true, on -> {
+                    settings.setRealWidescreen(on);
+                    confirmRestart(Tr.t("Real Widescreen"), on ? "on" : "off", on ? "off" : "on",
+                            () -> settings.setRealWidescreen(!on));
+                }, false);
         resolutionRow();
         displayResolutionRow();
         choiceRow(Tr.t("Camera Distance"), Tr.t("How far the camera stays from your character in battle. Farther shows "
@@ -173,32 +166,8 @@ final class SettingsMenu {
         final String[] labels = new String[scales.length];
         final int selected = resolutionIndex(settings);
         for (int i = 0; i < scales.length; ++i) labels[i] = AppSettings.resolutionLabel(scales[i]);
-        final boolean aboveScreen = settings.resolutionScale() > 0f
-                && 480 * settings.resolutionScale() > outputLines(activity, settings) * 1.05f;
-        choiceRow(Tr.t("Render Resolution"), Tr.t("Rendered at ") + renderSize(activity, settings)
-                + (aboveScreen
-                        ? Tr.t(", more than this screen shows: several times the GPU work for little sharpness, so fps can drop. Match screen is sharp enough.")
-                        : Tr.t(". Lower is lighter on a slow phone; FSR1 keeps it sharp.")), labels, selected, true,
+        sliderRow(Tr.t("Render Resolution"), labels, selected, true,
                 which -> settings.setResolutionScale(scales[which]));
-    }
-
-    /** Display Resolution: the size of the picture the game sends to the screen (GameActivity). */
-    private void displayResolutionRow() {
-        final int[] lines = AppSettings.DISPLAY_LINES;
-        final String[] labels = new String[lines.length];
-        int selected = 0;
-        for (int i = 0; i < lines.length; ++i) {
-            labels[i] = lines[i] == 0 ? Tr.t("Screen") : lines[i] + "p";
-            if (lines[i] == settings.displayLines()) selected = i;
-        }
-        final DisplayMetrics m = screenMetrics(activity);
-        final int shortSide = Math.min(m.widthPixels, m.heightPixels);
-        restart(null);
-        choiceRow(Tr.t("Display Resolution"), held("display_lines", Tr.t("The picture the game sends to the screen, which stretches it "
-                        + "for free. Lower takes GPU work off every frame, menus too: steadier fps on a slow "
-                        + "phone, blurrier picture. This screen: ") + Math.max(m.widthPixels, m.heightPixels)
-                        + "×" + shortSide + Tr.t(" (a size at or above it changes nothing).")),
-                labels, selected, free("display_lines"), which -> settings.setDisplayLines(lines[which]));
     }
 
     /** Not held by the Low-End preset: the player may change it. */
@@ -243,7 +212,38 @@ final class SettingsMenu {
         return 3;
     }
 
+
     static final String[] UPSCALERS = {"Off", "FSR Light", "FSR Full", "SGSR"};
+
+    /** Display Resolution: the size of the picture the game sends to the screen (GameActivity). */
+    private void displayResolutionRow() {
+        final int[] lines = AppSettings.DISPLAY_LINES;
+        final String[] labels = new String[lines.length];
+        int selected = 0;
+        for (int i = 0; i < lines.length; ++i) {
+            labels[i] = lines[i] == 0 ? Tr.t("Screen") : lines[i] + "p";
+            if (lines[i] == settings.displayLines()) selected = i;
+        }
+        final DisplayMetrics m = screenMetrics(activity);
+        final int shortSide = Math.min(m.widthPixels, m.heightPixels);
+        restart(null);
+        choiceRow(Tr.t("Display Resolution"), held("display_lines", Tr.t("The picture the game sends to the screen, which stretches it "
+                        + "for free. Lower takes GPU work off every frame, menus too: steadier fps on a slow "
+                        + "phone, blurrier picture. This screen: ") + Math.max(m.widthPixels, m.heightPixels)
+                        + "×" + shortSide + Tr.t(" (a size at or above it changes nothing).")),
+                labels, selected, free("display_lines"), which -> settings.setDisplayLines(lines[which]));
+    }
+
+    /** Off / FSR Light / FSR Full / SGSR, shared with the launcher's quick settings. */
+    void upscalerRow() {
+        final String[] labels = new String[UPSCALERS.length];
+        for (int i = 0; i < labels.length; ++i) labels[i] = Tr.t(UPSCALERS[i]);
+        choiceRow(Tr.t("Upscaler"), held("fsr_on", Tr.t("Keeps a picture rendered below the screen's resolution sharp when it is "
+                        + "stretched. FSR Light sharpens it and costs almost nothing. FSR Full adds FSR1's edge-aware "
+                        + "upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware "
+                        + "upscale in one pass, lighter than FSR Full.")),
+                labels, settings.fsr(), free("fsr_on"), which -> settings.setFsr(which));
+    }
 
     private void showGraphics() {
         upscalerRow();
@@ -313,7 +313,7 @@ final class SettingsMenu {
             activity.runOnUiThread(() -> {
                 hdBusy = false;
                 hdCacheBytes = bytes;
-                if (section == TEXTURES && !activity.isFinishing()) show(TEXTURES);
+                if ((section == TEXTURES || section == GRAPHICS) && !activity.isFinishing()) show(section);
             });
         }, "hd-cache-size").start();
     }
@@ -343,16 +343,15 @@ final class SettingsMenu {
         final java.io.File hdCache = AppFiles.hdCacheDir();
         if (hdCache != null && hdCacheBytes < 0) hdCacheWork(hdCache, false);
         final long used = Math.max(0, hdCacheBytes);
-        actionRow(Tr.t("HD Texture Cache"), hdCache == null ? Tr.t("Needs \"All files access\" for this app.")
-                        : hdBusy || hdCacheBytes < 0 ? Tr.t("Counting...")
-                        : String.format(java.util.Locale.ROOT, Tr.t("%.0f MB in %s."), used / 1048576.0,
-                                folderName("hd-cache")),
+        valueRow(Tr.t("HD Texture Cache"), hdCache == null ? "–"
+                        : hdBusy || hdCacheBytes < 0 ? "…"
+                        : String.format(java.util.Locale.ROOT, "%.0f MB", used / 1048576.0),
                 used > 0 && !hdBusy && !inGame ? Tr.t("Clear") : null, this::confirmClearHdCache);
     }
 
-    /** Texture packs from the textures folder. */
+    /** Texture mods from the Textures folder: on or off, then each mod ticked and put in order. */
     private void showCustomTextures() {
-        final String folder = folderName("textures");
+        final String folder = folderName("Textures");
         final boolean files = AppFiles.hasFileAccess(activity);
         restart(null);
         toggleRow(Tr.t("Custom Textures"), files
@@ -360,11 +359,75 @@ final class SettingsMenu {
                                 + Tr.t(" in place of the game's. A very large pack uses more RAM.")
                         : Tr.t("Needs \"All files access\" for this app, to read ") + folder + ".",
                 settings.customTextures(), files, on -> settings.setCustomTextures(on));
+        if (!files) return;
+        final java.io.File root = AppFiles.textureDir();
+        final java.util.List<TexturePacks.Pack> packs = TexturePacks.load(settings, root);
+        group(Tr.t("Mods") + (inGame ? " *" : ""));
+        if (packs.isEmpty()) {
+            final TextView none = Ui.text(activity, Tr.t("No mods yet. Put each mod in its own folder in ") + folder
+                    + Tr.t(" (how: README.txt there)."), 12, Ui.SECONDARY);
+            none.setPadding(0, dp(2), 0, dp(4));
+            rows.addView(none, Ui.matchWidth(0));
+        }
+        final boolean enabled = settings.customTextures();
+        for (int i = 0; i < packs.size(); ++i) packRow(packs, i, enabled);
+        TexturePacks.countMissing(activity, root, packs, () -> {
+            if (section == TEXTURES || section == GRAPHICS) show(section);
+        });
+        valueRow(Tr.t("Mods Folder"), folder, Tr.t("Rescan"), () -> TexturePacks.recount());
+    }
+
+    /** One mod: its tick, name, valid file count, and arrows to move it up or down the order. */
+    private void packRow(java.util.List<TexturePacks.Pack> packs, int index, boolean enabled) {
+        final TexturePacks.Pack pack = packs.get(index);
+        final LinearLayout row = new LinearLayout(activity);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(3), 0, dp(3));
+        row.addView(Ui.toggle(activity, pack.on && enabled));
+        final boolean loose = pack.name.equals(TexturePacks.LOOSE);
+        final TextView name = Ui.text(activity, loose ? Tr.t("(Loose files)") : pack.name, 13, Ui.TEXT);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        final LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        nameParams.leftMargin = dp(8);
+        row.addView(name, nameParams);
+        final int count = TexturePacks.count(pack.name);
+        final TextView files = Ui.text(activity, count < 0 ? "…"
+                : count == 0 ? Tr.t("⚠ no valid names")
+                : String.format(java.util.Locale.ROOT, Tr.t("%d files"), count), 12,
+                count == 0 ? Ui.WARNING : Ui.SECONDARY);
+        files.setSingleLine(true);
+        row.addView(files);
+        for (int dir = -1; dir <= 1; dir += 2) {
+            final int to = index + dir;
+            final boolean can = enabled && to >= 0 && to < packs.size();
+            final TextView arrow = Ui.chip(activity, dir < 0 ? "▲" : "▼", false, can, v -> {
+                java.util.Collections.swap(packs, index, to);
+                TexturePacks.save(settings, packs);
+                changed();
+            });
+            arrow.setPadding(0, 0, 0, 0);
+            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(30), dp(28));
+            params.leftMargin = dp(dir < 0 ? 8 : 2);
+            row.addView(arrow, params);
+        }
+        if (enabled) {
+            row.setClickable(true);
+            row.setOnClickListener(v -> {
+                pack.on = !pack.on;
+                TexturePacks.save(settings, packs);
+                changed();
+            });
+        } else {
+            row.setAlpha(0.4f);
+        }
+        rows.addView(row, Ui.matchWidth(0));
     }
 
     /** Tools for pack makers and testers: texture dump and the texture key report. */
     private void showTextureTools() {
-        final String folder = folderName("textures");
+        final String folder = folderName("Textures");
         restart(null);
         toggleRow(Tr.t("Dump Textures"), settings.customTextures()
                         ? Tr.t("Saves each texture the game uses to ") + folder + Tr.t("/dump, named the way its "
@@ -376,17 +439,6 @@ final class SettingsMenu {
         toggleRow(Tr.t("Report Texture Keys"), Tr.t("Lists the name of every texture the game uses in the log (only "
                         + "the names, no pictures), so testers can check that texture packs match the game."),
                 settings.textureKeyReport(), on -> settings.setTextureKeyReport(on));
-    }
-
-    /** Off / FSR Light / FSR Full / SGSR, shared with the launcher's quick settings. */
-    void upscalerRow() {
-        final String[] labels = new String[UPSCALERS.length];
-        for (int i = 0; i < labels.length; ++i) labels[i] = Tr.t(UPSCALERS[i]);
-        choiceRow(Tr.t("Upscaler"), held("fsr_on", Tr.t("Keeps a picture rendered below the screen's resolution sharp when it is "
-                        + "stretched. FSR Light sharpens it and costs almost nothing. FSR Full adds FSR1's edge-aware "
-                        + "upscale: sharpest, but several ms on a small phone GPU. SGSR: Qualcomm's edge-aware "
-                        + "upscale in one pass, lighter than FSR Full.")),
-                labels, settings.fsr(), free("fsr_on"), which -> settings.setFsr(which));
     }
 
     /** Player-installed Vulkan drivers (GpuDrivers): choose one, install a .zip, remove one. */
@@ -412,7 +464,7 @@ final class SettingsMenu {
                     confirmRestart(Tr.t("GPU Driver"), options[which], beforeName,
                             () -> settings.setGpuDriver(before));
                 }, false);
-        if (inGame) return;  // installing and removing belong to the launcher
+        // 1.2 has no launcher settings: installing and removing live here too, used from the next start.
         actionRow(Tr.t("Install GPU Driver"), Tr.t("Choose a driver .zip (it has a meta.json inside), for example "
                         + "from Download."),
                 Tr.t("Install"), this::installGpuDriver);
@@ -449,8 +501,8 @@ final class SettingsMenu {
     }
 
     private void showPerformance() {
-        // A low-end phone has the preset's switch above the launcher's settings tabs instead.
-        if (inGame || !DeviceProfile.lowEnd(activity, settings)) lowEndRow();
+        // Every phone; a low or mid-low one has it on from its first start.
+        lowEndRow();
         choiceRow(Tr.t("Frameskip"), held("frameskip", Tr.t("The game moves one step per drawn frame, so a slow phone plays in slow "
                         + "motion. Auto skips drawing a frame when it falls behind: closer to full speed, "
                         + "choppier picture.")),
@@ -460,7 +512,6 @@ final class SettingsMenu {
                         + "and sound keep full speed. For phones that cannot hold 60. Replaces Frameskip "
                         + "while on."),
                 settings.fpsLock30(), on -> settings.setFpsLock30(on));
-        restart(null);
         heldToggle("vsync", Tr.t("V-Sync"), Tr.t("Frames go out in step with the display: smoother motion."), settings.vsync(),
                 on -> settings.setVSync(on));
         heldToggle("dynamic_resolution", Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
@@ -483,7 +534,6 @@ final class SettingsMenu {
                         : Tr.t("Not available: needs Android 12 or newer with a thermal sensor report."),
                 settings.thermalControl(), thermal, on -> settings.setThermalControl(on));
         final boolean sustained = AppSettings.sustainedSupported(activity);
-        restart(null);
         toggleRow(Tr.t("Sustained Performance"), sustained
                         ? Tr.t("Keeps the CPU and GPU at speeds the phone can hold for hours: a little slower at the "
                         + "start, but no sudden drop once it gets hot in a long session. The game no longer asks for "
@@ -501,74 +551,55 @@ final class SettingsMenu {
                 on -> settings.setSkipBoot(on));
     }
 
-    /** One tap to the lightest settings (DeviceProfile.lowEndValues), and back. */
+    /**
+     * The Low-End preset on any phone (DeviceProfile.lowEndValues); a low or mid-low phone has it on
+     * from its first start (DeviceProfile.applyOnce). Off puts back the settings from before it.
+     */
     private void lowEndRow() {
-        if (settings.lowEndApplied()) {
-            actionRow(Tr.t("Low-End Preset"), Tr.t("On: the lightest settings for a slow phone. Undo puts back "
-                            + "the settings from before it."), Tr.t("Undo"), () -> {
-                        settings.undoLowEnd();
-                        changed();
-                    });
-            return;
-        }
         final java.util.Map<String, Object> values = DeviceProfile.lowEndValues(settings.gpuName());
         final String render = AppSettings.resolutionLabel((Float) values.get("resolution_scale"));
-        actionRow(Tr.t("Low-End Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
-                        + "60 fps: steadier, blurrier."), Tr.t("Apply"), () ->
-                new Sheet(activity, Tr.t("Low-End Preset"), Tr.t("Steadier fps on a slow phone, blurrier picture. "
-                        + "It sets:") + "\n• " + Tr.t("Display Resolution") + " 480p\n• " + Tr.t("Render Resolution")
-                        + " " + render + "\n• " + Tr.t("Texture Detail") + " " + Tr.t("Original") + "\n• "
-                        + Tr.t("Upscaler") + " " + Tr.t("Off") + "\n• " + Tr.t("Frameskip") + " " + Tr.t("Auto")
-                        + "\n• " + Tr.t("Dynamic Resolution") + " " + Tr.t("On") + "\n• " + Tr.t("HD Textures") + " "
-                        + Tr.t("Off") + "\n• " + Tr.t("Performance Overlay") + " " + Tr.t("Off")
-                        + "\n\n" + Tr.t("Undo puts back what you have now. Applies when the game "
-                        + "starts again."))
-                        .action(Tr.t("Apply"), null, true, false, () -> {
-                            settings.applyLowEnd(values);
-                            changed();
-                        })
-                        .action(Tr.t("Cancel"), null, false, false, null)
-                        .show());
+        toggleRow(Tr.t("Low-End Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
+                        + "60 fps: steadier, blurrier.") + "\n• " + Tr.t("Display Resolution") + " 480p\n• "
+                        + Tr.t("Render Resolution") + " " + render + "\n• " + Tr.t("Texture Detail") + " "
+                        + Tr.t("Original") + "\n• " + Tr.t("Upscaler") + " " + Tr.t("Off") + "\n• "
+                        + Tr.t("Frameskip") + " " + Tr.t("Auto") + "\n• " + Tr.t("Dynamic Resolution") + " "
+                        + Tr.t("On") + "\n• " + Tr.t("HD Textures") + " " + Tr.t("Off") + "\n"
+                        + Tr.t("Off puts back the settings from "
+                        + "before it. Applies when the game starts again."),
+                settings.lowEndApplied(), on -> {
+                    if (on) settings.applyLowEnd(values);
+                    else settings.undoLowEnd();
+                    changed();
+                });
     }
 
     private void showSaveData() {
-        final String saves = AppFiles.HOME + "/Saves";
-        card(Tr.t("How it works"), Tr.t("Back up: tap Back Up, then Save Here. The file basara2heroes-save-DATE.zip "
-                        + "goes to ") + saves + Tr.t(". Copy it to a PC or Drive to keep it safe.")
-                        + "\n\n" + Tr.t("Import (move a save to this phone): 1. Copy the .zip made by Back Up into ")
-                        + saves + Tr.t(" (or Download) on this phone. 2. Tap Import and tap that .zip. 3. Start the "
-                        + "game: it plays from the imported save.")
-                        + "\n\n" + Tr.t("Before every import the save on this phone is kept in ") + saves
-                        + Tr.t("/Auto: Undo Last Import puts it back. A .zip from Back Up, a basara2w.dat, or a data.bin "
-                        + "exported from a Wii or Dolphin all work."),
-                null, false, true);
-
         final boolean has = SaveData.hasSave(activity);
-        actionRow(Tr.t("Back Up Save"), has
-                        ? Tr.t("Last saved ")
-                                + android.text.format.DateFormat.getMediumDateFormat(activity)
+        valueRow(Tr.t("Back Up Save"), has
+                        ? android.text.format.DateFormat.getMediumDateFormat(activity)
                                         .format(new java.util.Date(SaveData.lastSaved(activity)))
                                 + " " + android.text.format.DateFormat.getTimeFormat(activity)
-                                        .format(new java.util.Date(SaveData.lastSaved(activity))) + "."
-                        : Tr.t("There is no save yet: save in the game first (各種設定 > セーブ)."),
-                has ? Tr.t("Back Up") : null, this::backUp);
+                                        .format(new java.util.Date(SaveData.lastSaved(activity)))
+                        : Tr.t("No save yet"),
+                Tr.t("Back Up"), has, this::backUp);
         actionRow(Tr.t("Import Save"), Tr.t("Replaces this phone's save with a .zip made by Back Up. A running "
                         + "game is closed without saving."),
                 Tr.t("Import"), this::importSave);
         final java.io.File last = SaveData.latestBackup(activity);
-        actionRow(Tr.t("Undo Last Import"), last == null
-                        ? Tr.t("Nothing to undo: no save has been imported on this phone.")
-                        : Tr.t("Puts back the save the last import replaced (from ")
-                                + android.text.format.DateFormat.getMediumDateFormat(activity)
+        valueRow(Tr.t("Undo Last Import"), last == null ? Tr.t("Nothing to undo")
+                        : android.text.format.DateFormat.getMediumDateFormat(activity)
                                         .format(new java.util.Date(last.lastModified()))
                                 + " " + android.text.format.DateFormat.getTimeFormat(activity)
-                                        .format(new java.util.Date(last.lastModified())) + ").",
-                last == null ? null : Tr.t("Undo"), this::confirmUndoImport);
+                                        .format(new java.util.Date(last.lastModified())),
+                Tr.t("Undo"), last != null, this::confirmUndoImport);
     }
 
-    /** The launcher's endGame, so a running game cannot write over an imported save. */
-    private Runnable endGame() {
-        return activity instanceof LauncherActivity ? ((LauncherActivity) activity)::endGame : null;
+    /**
+     * A save import from the game: the game's process must end before its save is replaced, so the
+     * start screen does it (LauncherActivity ACTION_IMPORT_SAVE) and the game opens again afterwards.
+     */
+    private void importFromGame(java.io.File file) {
+        ((GameActivity) activity).toLauncher(LauncherActivity.ACTION_IMPORT_SAVE, file == null ? null : file.getPath());
     }
 
     private void backUp() {
@@ -592,15 +623,13 @@ final class SettingsMenu {
                 Tr.t("The basara2heroes-save-….zip made by Back Up, or a data.bin copied from a Wii or Dolphin. "
                         + "The save on this phone is replaced (and kept for Undo Last Import)."),
                 SaveData::isSaveFile, Tr.t("No folders, .zip or .bin files here."),
-                file -> SaveData.importFile(activity, file, endGame(), this::changed));
+                this::importFromGame);
     }
 
     private void confirmUndoImport() {
         new Sheet(activity, Tr.t("Undo the last import?"), Tr.t("The save from before that import comes back. A "
                 + "running game is closed without saving."))
-                .action(Tr.t("Undo"), null, true, false, () -> {
-                    SaveData.undoLastImport(activity, endGame(), this::changed);
-                })
+                .action(Tr.t("Undo"), null, true, false, () -> importFromGame(null))
                 .action(Tr.t("Cancel"), null, false, false, null)
                 .show();
     }
@@ -631,11 +660,10 @@ final class SettingsMenu {
 
     /** Only opened in a build with cheats (BuildConfig.CHEATS); applied at once in the game. */
     private void showCheats() {
-        rows.addView(Sheet.warningBox(activity, Tr.t("Cheats"),
-                Tr.t("They change your save: money and anything bought with it stay after the game saves. Back up "
-                        + "your save first (Save Data). Cheats can break the game's balance or progress, and they "
-                        + "are off in LAN play.")),
-                Ui.matchWidth(0));
+        final TextView warning = Ui.text(activity, Tr.t("Cheats change your save: back it up first (Save Data). Off in LAN play."),
+                12, Sheet.WARNING_TEXT);
+        warning.setPadding(0, dp(2), 0, dp(4));
+        rows.addView(warning, Ui.matchWidth(0));
 
         final int money = settings.cheatMoney();
         final String amount = String.format(java.util.Locale.ROOT, "%,d", settings.cheatMoneyAmount());
@@ -643,7 +671,7 @@ final class SettingsMenu {
                         + "to that amount one time (Set Now), then it goes down as you spend it."),
                 new String[] {Tr.t("Off"), Tr.t("Infinite"), Tr.t("Once")}, money, true,
                 which -> settings.setCheatMoney(which));
-        actionRow(Tr.t("Money Amount"), amount + Tr.t(" (up to 9,999,999, the game's limit)."),
+        valueRow(Tr.t("Money Amount"), amount,
                 money != AppSettings.MONEY_OFF ? Tr.t("Change") : null, this::askMoneyAmount);
         if (money == AppSettings.MONEY_ONCE) {
             actionRow(Tr.t("Set Money Now"), inGame
@@ -706,14 +734,8 @@ final class SettingsMenu {
                 on -> settings.setTouchControls(on));
         final String[] opacities = {"20%", "40%", "60%", "80%", "100%"};
         final int opacity = Math.max(0, Math.min(4, Math.round(settings.touchOpacity() * 5f) - 1));
-        choiceRow(Tr.t("Touch Control Opacity"), Tr.t("How solid the controls look over the game."), opacities, opacity,
+        sliderRow(Tr.t("Touch Control Opacity"), opacities, opacity,
                 settings.touchControls(), which -> settings.setTouchOpacity((which + 1) / 5f));
-        choiceRow(Tr.t("Button Style"), Tr.t("Modern: pictures for what each button does. Classic: the controller's letters."),
-                new String[] {"Modern", "Classic"}, settings.touchStyle() == TouchControlsView.STYLE_CLASSIC ? 1 : 0,
-                settings.touchControls(), which -> settings.setTouchStyle(which));
-        choiceRow(Tr.t("Button Color"), Tr.t("The sticks, D-pad and buttons. A, B, X and Y keep their own colours."),
-                new String[] {Tr.t("Gold"), Tr.t("Red"), Tr.t("Blue"), Tr.t("White")},
-                Math.max(0, Math.min(3, settings.touchColor())), settings.touchControls(), which -> settings.setTouchColor(which));
         actionRow(Tr.t("Touch Control Layout"), settings.touchLayout().isEmpty()
                         ? Tr.t("Move and resize the controls while playing: Back > Edit Controls Layout.")
                         : Tr.t("Arranged by you. Change it while playing: Back > Edit Controls Layout."),
@@ -777,105 +799,81 @@ final class SettingsMenu {
     }
 
     // --- rows ------------------------------------------------------------------------------------
+    // Dear ImGui rows, as hikki's DefJam menu: the name on the left in capitals, the control on the
+    // right (a stepper, a checkbox, a slider or a button). The lines about each setting are not shown
+    // in the game: the menu stays short and calm.
 
     interface Toggle { void set(boolean on); }
     interface Choice { void pick(int which); }
 
-    /** In the game: the next card is only read at start, and says so in red. */
+    /** The next row is only read at start: its name gets a "*" (the footer says what it means). */
     private boolean pendingRestart;
-    private String pendingRestartText;
 
-    /** Marks the next card as applying at the next start (`text`: a more exact note, or null). */
+    /** Marks the next row as applying at the next start (`text` is not shown any more). */
     private void restart(String text) {
         pendingRestart = true;
-        pendingRestartText = text;
     }
 
-    /** A card: the setting's name and a line about it, with `control` on the right or underneath. */
+    /** A dim heading and a line between groups in one section (ImGui's SeparatorText). */
+    private void group(String title) {
+        final TextView caption = Ui.caption(activity, title);
+        caption.setPadding(0, dp(10), 0, 0);
+        rows.addView(caption);
+        rows.addView(Ui.line(activity));
+    }
+
+    /** A row: the name, and `control` on the right (or under it, full width, when `underneath`). */
     LinearLayout card(String title, String about, View control, boolean underneath, boolean enabled) {
-        final LinearLayout card = new LinearLayout(activity);
-        card.setOrientation(underneath ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
-        card.setGravity(underneath ? Gravity.START : Gravity.CENTER_VERTICAL);
-        // In the game the screen is short: tighter cards, smaller text.
-        if (inGame) card.setPadding(dp(12), dp(9), dp(10), dp(9));
-        else card.setPadding(dp(14), dp(12), dp(12), dp(12));
-        card.setBackground(Ui.touchBox(activity, Ui.SURFACE, Ui.BORDER, inGame ? 10 : 12));
-        final LinearLayout words = new LinearLayout(activity);
-        words.setOrientation(LinearLayout.VERTICAL);
-        final LinearLayout nameLine = new LinearLayout(activity);
-        nameLine.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView name = Ui.text(activity, title, inGame ? 13.5f : 14, Ui.TEXT);
-        name.setTypeface(Ui.MEDIUM);
-        nameLine.addView(name);
-        if (pendingRestart && inGame) {
-            // A small red tag beside the name, not a box: several restart cards stay readable.
-            final TextView tag = Ui.text(activity, "⚠ " + Tr.t("Restart needed"), 10, Ui.DANGER_TEXT);
-            tag.setTypeface(Typeface.DEFAULT_BOLD);
-            tag.setPadding(dp(6), dp(1), dp(6), dp(1));
-            tag.setBackground(Ui.box(activity, Ui.DANGER_FILL, Ui.DANGER_BORDER, 4));
-            final LinearLayout.LayoutParams tagParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            tagParams.leftMargin = dp(8);
-            nameLine.addView(tag, tagParams);
-        }
-        words.addView(nameLine);
-        if (about != null && !about.isEmpty()) {
-            final TextView line = Ui.text(activity, about, inGame ? 11 : 12, Ui.MUTED);
-            line.setPadding(0, dp(2), 0, 0);
-            words.addView(line);
-        }
-        if (pendingRestart && inGame && pendingRestartText != null) {
-            final TextView exact = Ui.text(activity, pendingRestartText, 11, Ui.DANGER_TEXT);
-            exact.setPadding(0, dp(3), 0, 0);
-            words.addView(exact);
-        }
+        final LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(underneath ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        row.setGravity(underneath ? Gravity.START : Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(3), 0, dp(3));
+        final TextView name = Ui.text(activity, title.toUpperCase(java.util.Locale.ROOT)
+                + (pendingRestart && inGame ? " *" : ""), 13, Ui.TEXT);
         pendingRestart = false;
-        pendingRestartText = null;
         if (underneath) {
-            card.addView(words, Ui.matchWidth(0));
-            if (control != null) card.addView(control, Ui.matchWidth(dp(10)));
+            row.addView(name, Ui.matchWidth(0));
+            if (control != null) row.addView(control, Ui.matchWidth(dp(4)));
         } else {
-            card.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             if (control != null) {
-                // Keep a size the control set for itself (the switch is 40x23 dp, not its knob's size).
                 final android.view.ViewGroup.LayoutParams own = control.getLayoutParams();
-                final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                        own != null ? own.width : LinearLayout.LayoutParams.WRAP_CONTENT,
-                        own != null ? own.height : LinearLayout.LayoutParams.WRAP_CONTENT);
-                params.leftMargin = dp(12);
-                card.addView(control, params);
+                final boolean fixed = own != null && own.width > 0;  // the checkbox keeps its square
+                final LinearLayout.LayoutParams params = fixed
+                        ? new LinearLayout.LayoutParams(own.width, own.height)
+                        : new LinearLayout.LayoutParams(0, dp(28), 1.1f);
+                params.leftMargin = dp(10);
+                row.addView(control, params);
             }
         }
-        if (!enabled) {
-            for (int i = 0; i < card.getChildCount(); ++i) card.getChildAt(i).setAlpha(0.45f);
-        }
-        rows.addView(card, Ui.matchWidth(rows.getChildCount() == 0 ? 0 : dp(inGame ? 6 : 8)));
-        return card;
+        if (!enabled) row.setAlpha(0.4f);
+        rows.addView(row, Ui.matchWidth(0));
+        return row;
     }
 
-    /** The whole card toggles; the switch on the right shows On or Off. */
+    /** The whole row toggles; the checkbox on the right shows it. */
     void toggleRow(String title, String about, boolean on, Toggle toggle) {
         toggleRow(title, about, on, true, toggle);
     }
 
-    /** Disabled: dimmed, shows Off and does nothing when tapped (the phone cannot do it). */
+    /** Disabled: dimmed, unticked, and does nothing when tapped (the phone cannot do it). */
     void toggleRow(String title, String about, boolean on, boolean enabled, Toggle toggle) {
         toggleRow(title, about, on, enabled, toggle, true);
     }
 
     private void toggleRow(String title, String about, boolean on, boolean enabled, Toggle toggle, boolean redraw) {
         on = on && enabled;
-        final LinearLayout card = card(title, about, Ui.toggle(activity, on), false, enabled);
+        final LinearLayout row = card(title, about, Ui.toggle(activity, on), false, enabled);
         if (!enabled) return;
         final boolean was = on;
-        card.setClickable(true);
-        card.setOnClickListener(v -> {
+        row.setClickable(true);
+        row.setOnClickListener(v -> {
             toggle.set(!was);
             if (redraw) changed();
         });
     }
 
-    /** The choices as chips under the line about it, wrapping onto more lines; the chosen one is lit. */
+    /** ImGui's combo as DefJam draws it: the value in a frame, then < and > to step through the options. */
     void choiceRow(String title, String about, String[] options, int selected, boolean enabled, Choice choice) {
         choiceRow(title, about, options, selected, enabled, choice, true);
     }
@@ -883,22 +881,57 @@ final class SettingsMenu {
     /** `redraw` false: `choice` saves and redraws by itself (it may ask first). */
     private void choiceRow(String title, String about, String[] options, int selected, boolean enabled,
                            Choice choice, boolean redraw) {
-        final Ui.FlowLayout chips = new Ui.FlowLayout(activity, dp(6));
-        for (int i = 0; i < options.length; ++i) {
-            final int which = i;
-            chips.addView(Ui.chip(activity, options[i], i == selected, enabled, v -> {
-                if (which == selected) return;
-                choice.pick(which);
+        final LinearLayout control = new LinearLayout(activity);
+        final TextView value = Ui.text(activity, options[Math.max(0, Math.min(selected, options.length - 1))]
+                .toUpperCase(java.util.Locale.ROOT), 13, Ui.TEXT);
+        value.setGravity(Gravity.CENTER);
+        value.setSingleLine(true);
+        value.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        value.setPadding(dp(4), 0, dp(4), 0);
+        value.setBackgroundColor(Ui.FRAME);
+        control.addView(value, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+        for (int dir = -1; dir <= 1; dir += 2) {
+            final int step = dir;
+            final TextView arrow = Ui.chip(activity, dir < 0 ? "<" : ">", false, enabled, v -> {
+                final int next = ((selected + step) % options.length + options.length) % options.length;
+                if (next == selected) return;
+                choice.pick(next);
                 if (redraw) changed();
-            }));
+            });
+            arrow.setPadding(0, 0, 0, 0);
+            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(28),
+                    LinearLayout.LayoutParams.MATCH_PARENT);
+            params.leftMargin = dp(2);
+            control.addView(arrow, params);
         }
-        card(title, about, chips, true, enabled);
+        card(title, about, control, false, enabled);
     }
 
-    /** Chips that each turn on or off by themselves; the lit ones are on. */
+    /** ImGui's slider over the options: drag anywhere on it, saved when the finger lets go. */
+    private void sliderRow(String title, String[] options, int selected, boolean enabled, Choice choice) {
+        final Ui.Slider slider = new Ui.Slider(activity, options.length - 1, selected);
+        slider.setLabel(options[selected]);
+        slider.setEnabled(enabled);
+        slider.setListener(new Ui.Slider.Listener() {
+            @Override
+            public void changed(int step) {
+                slider.setLabel(options[step]);
+            }
+
+            @Override
+            public void released(int step) {
+                if (step == selected) return;
+                choice.pick(step);
+                SettingsMenu.this.changed();
+            }
+        });
+        card(title, null, slider, false, enabled);
+    }
+
+    /** Buttons under the name that each turn on or off by themselves; the lit ones are on. */
     private void multiRow(String title, String about, String[] options, boolean[] lit, boolean enabled,
                           Choice flip) {
-        final Ui.FlowLayout chips = new Ui.FlowLayout(activity, dp(6));
+        final Ui.FlowLayout chips = new Ui.FlowLayout(activity, dp(2));
         for (int i = 0; i < options.length; ++i) {
             final int which = i;
             chips.addView(Ui.chip(activity, (lit[i] ? "✓ " : "") + options[i], lit[i], enabled, v -> {
@@ -909,20 +942,40 @@ final class SettingsMenu {
         card(title, about, chips, true, enabled);
     }
 
-    /** A card with a button on the right (none when `label` is null). */
+    /** A button filling the control's place (dimmed when `label` is null: nothing to do now). */
     void actionRow(String title, String about, String label, Runnable action) {
-        TextView button = null;
-        if (label != null) {
-            button = Ui.text(activity, label, 13, Ui.TEXT);
-            button.setTypeface(Typeface.DEFAULT_BOLD);
-            button.setPadding(dp(14), dp(7), dp(14), dp(7));
-            button.setBackground(Ui.touchBox(activity, Ui.ACTIVE, Ui.BORDER_STRONG, 8));
-            button.setOnClickListener(v -> {
-                action.run();
-                changed();
-            });
+        valueRow(title, null, label, action);
+    }
+
+    /** `value` in a frame (the amount, the version, the cache size), then the button beside it. */
+    void valueRow(String title, String value, String label, Runnable action) {
+        valueRow(title, value, label, label != null, action);
+    }
+
+    /** `enabled` false: the button is shown dimmed with its name, and does nothing. */
+    void valueRow(String title, String value, String label, boolean enabled, Runnable action) {
+        final LinearLayout control = new LinearLayout(activity);
+        if (value != null) {
+            final TextView frame = Ui.text(activity, value, 13, Ui.TEXT);
+            frame.setGravity(Gravity.CENTER);
+            frame.setSingleLine(true);
+            frame.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            frame.setPadding(dp(4), 0, dp(4), 0);
+            frame.setBackgroundColor(Ui.FRAME);
+            control.addView(frame, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
         }
-        card(title, about, button, false, true);
+        final TextView button = Ui.chip(activity, label == null ? "–" : label.toUpperCase(java.util.Locale.ROOT),
+                false, enabled && label != null, v -> {
+                    action.run();
+                    changed();
+                });
+        final LinearLayout.LayoutParams params = value == null
+                ? new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                : new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.MATCH_PARENT);
+        if (value != null) params.leftMargin = dp(2);
+        control.addView(button, params);
+        card(title, null, control, false, true);
     }
 
     private int dp(int value) {

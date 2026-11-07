@@ -35,6 +35,24 @@ final class ReleaseNotes {
     }
 
     private static final Entry[] ALL = {
+        new Entry("1.2", "Straight into the game, settings while playing", "2026-11-07",
+                new String[] {
+                    "No launcher: the app opens straight into the game. Your ISO or RVZ is chosen once, the first time; after that the icon goes right to the battlefield.",
+                    "Every setting is in the game's menu (Back, or the gear): Display, Graphics, Textures, Performance, Controls, Save Data, Cheats and System.",
+                    "Restart beside Quit in the menu: the game starts again, so settings marked Restart needed apply.",
+                    "Display Resolution, V-Sync and Sustained Performance now apply at once while playing, without a restart.",
+                    "Settings > System in the game: change the game file, check for updates, Share Log, Device Info, language and Reset and Clear.",
+                    "One look for the touch buttons: clean round outlines with white icons. Button Style and Button Color are gone.",
+                    "16:9 and Fill Screen stretch the picture again, as in 1.0. The wider view of 1.1 is now Settings > Display > Real Widescreen: it wakes more enemies at the sides, and on slower phones the sound broke up.",
+                    "GX Thread is now on by default for phones whose fastest CPU core is under 3 GHz: busy battles run faster.",
+                    "Busy battles no longer lose speed on mid and low-end phones: a frame that ran a little late used to wait for the next screen refresh as well. The game now keeps full speed there, and the GX thread does less bookkeeping.",
+                    "Less work per frame: draws that share their settings reuse them instead of sending a copy, and the game thread checks its timers far less often.",
+                },
+                new String[] {
+                    "Phones with a PowerVR GPU (for example Infinix X669C) showed a black screen with sound, or nothing on Vulkan. They now start on the Vulkan renderer made for older drivers.",
+                    "Adreno 610 phones with a custom Turnip driver showed black frames and missing layers: the driver now draws without tiling there.",
+                },
+                new String[] {}),
         new Entry("1.1", "Widescreen, Camera Distance, Android 10 and PowerVR phones", "2026-11-07",
                 new String[] {
                     "Real widescreen: 16:9 and Fill Screen now show more of the battlefield to the sides instead of stretching the 4:3 picture, so characters keep their shape. Health bars and names above characters stay on them, and screen effects line up.",
@@ -275,6 +293,17 @@ final class ReleaseNotes {
         if (build.equals(settings.notesSeen())) return;
         settings.setNotesSeen(build);
         showAll(activity);
+    }
+
+    /** As above, with `after` run once it is closed. False (and `after` not run) when nothing is new. */
+    static boolean showIfNew(Activity activity, AppSettings settings, Runnable after) {
+        final String build = build(activity);
+        if (build.equals(settings.notesSeen())) return false;
+        settings.setNotesSeen(build);
+        final ReleaseNotes notes = new ReleaseNotes(activity);
+        notes.dialog.setOnDismissListener(d -> after.run());
+        notes.dialog.show();
+        return true;
     }
 
     /** The full screen, on the newest version. */

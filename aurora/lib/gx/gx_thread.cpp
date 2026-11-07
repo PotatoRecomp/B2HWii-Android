@@ -82,12 +82,23 @@ void thread_main() {
 #if defined(__linux__)
   pthread_setname_np(pthread_self(), "GxThread");
 #endif
+  // Busy time is measured per run of items, from waking up to going idle again, not per item: a
+  // battle frame is ~430 chunks, and on Cortex-A76 phones every clock read costs (erratum 1188873
+  // traps the counter read), which was 7.7% of this thread on a Redmi (Adreno 618).
+  Clock::time_point busySince{};
+  bool timing = false;
   for (;;) {
     Item item;
     {
       std::unique_lock lock(g_state.mutex);
       if (g_state.queue.empty()) {
         g_state.busy = false;
+        if (timing) {
+          timing = false;
+          g_gxBusyNanos.fetch_add(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - busySince).count(),
+              std::memory_order_relaxed);
+        }
         g_state.idleCv.notify_all();
         g_state.cv.wait(lock, [] { return g_state.stop || !g_state.queue.empty(); });
       }
@@ -100,15 +111,15 @@ void thread_main() {
       g_state.queue.pop_front();
       g_state.busy = true;
     }
-    const auto started = Clock::now();
+    if (!timing) {
+      timing = true;
+      busySince = Clock::now();
+    }
     try {
       run_item(item);
     } catch (const std::exception& e) {
       Log.error("GX thread item failed: {}", e.what());
     }
-    g_gxBusyNanos.fetch_add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started).count(),
-        std::memory_order_relaxed);
     if (item.chunk.data != nullptr) {
       item.chunk.size = 0;
       std::lock_guard lock(g_state.mutex);

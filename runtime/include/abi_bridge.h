@@ -52,13 +52,9 @@ inline void ApplyRuntimeCallOptions(uint32_t target, CpuContext* ctx) {
     if (target == 0x8022D4D8u) {
         BasaraCheats_BeforeGaugeCalc(ctx);
     }
-    // C_MTXLookAt, reached only from the camera's wrapper (802BF3AC): camera distance.
-    if (target == 0x80365D70u) {
-        BasaraCheats_BeforeLookAt(ctx);
-    }
-    // The camera's per-frame update (802BFB98..B0): puts back the game's own eye first.
-    if (target == 0x8004FE9Cu) {
-        BasaraCheats_BeforeCameraUpdate(ctx);
+    // The cameras' MTXPerspective wrapper: camera distance widens the main camera's field of view.
+    if (target == 0x802BF3F4u) {
+        BasaraCheats_BeforePerspective(ctx);
     }
 #endif
 }

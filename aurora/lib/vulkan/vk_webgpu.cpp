@@ -2505,12 +2505,15 @@ WGPUDeviceImpl* CreateDevice() {
   const bool forceTier1 = kAllowTier1 && std::getenv("AURORA_VK_FORCE_1_1") != nullptr;
   // Tier 0: a Vulkan 1.1 device without the extensions above, on Android 10 and older only (Adreno 5xx
   // and PowerVR GE8320 drivers). It renders through VkRenderPass and tracks submissions with fences,
-  // as ARMSX2 and PPSSPP do on these GPUs. Android 11 and newer never take it: their devices are
-  // chosen and run exactly as before.
+  // as ARMSX2 and PPSSPP do on these GPUs. On Android 11 and newer only PowerVR (Imagination, vendor
+  // 0x1010) takes it: Dawn refuses its proprietary driver at the core level and the compatibility
+  // level shows a black screen (Infinix X669C, Android 12). Other devices run exactly as before.
 #if defined(__ANDROID__)
   const bool allowTier0 = android_get_device_api_level() < 30;
+  constexpr bool kTier0PowerVR = true;
 #else
   constexpr bool allowTier0 = false;
+  constexpr bool kTier0PowerVR = false;
 #endif
   // AURORA_VK_FORCE_TIER0=1 runs the chosen device through tier 0 too (Android), to compare.
   const bool forceTier0 = kAllowTier1 && std::getenv("AURORA_VK_FORCE_TIER0") != nullptr;
@@ -2531,7 +2534,7 @@ WGPUDeviceImpl* CreateDevice() {
         }
       }
       if (!kAllowTier1 || props.apiVersion < VK_API_VERSION_1_1 || !missing.empty()) {
-        tier0 = allowTier0 && props.apiVersion >= VK_API_VERSION_1_1;
+        tier0 = (allowTier0 || (kTier0PowerVR && props.vendorID == 0x1010)) && props.apiVersion >= VK_API_VERSION_1_1;
         if (!tier0) {
           Log("skipping %s (Vulkan %u.%u): missing %s", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
               VK_API_VERSION_MINOR(props.apiVersion), missing.empty() ? "Vulkan 1.3" : missing.c_str());

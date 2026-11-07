@@ -860,10 +860,13 @@ bool VI_HLE_IsAdvancingRetrace() {
     return s_inAdvanceRetrace.load(std::memory_order_acquire);
 }
 
-// Advance every retrace whose interval has already elapsed. Safe to call from
-// busy loops (GX drawing, the scheduler's idle spin) to keep VBlank ticking.
+// Advance every retrace whose interval has already elapsed. Called from the game's own VI queries
+// (VIGetRetraceCount, VIGetNextFrameBuffer, VIGetNextField) in the middle of its frame, so the game
+// is busy there: an elastic retrace stays held for the idle loop. Treating these calls as idle let
+// the held retrace fire mid-frame, the grid moved there, and the frame's VIWaitForRetrace then
+// waited a whole fresh interval (Redmi battles: ~9 ms idle and 1.7 retraces a frame at 30-45 fps).
 void VI_HLE_PollRetrace(CpuContext* ctx) {
-    AdvanceDueRetraces(ctx, 8, true);
+    AdvanceDueRetraces(ctx, 8, true, false);
 }
 
 void VI_HLE_PollRetraceIdle(CpuContext* ctx) {

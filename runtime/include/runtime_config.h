@@ -40,6 +40,7 @@ struct RuntimeUserConfig {
     std::optional<uint32_t> overlayItems;   // [video] overlay_items: what the FPS overlay shows (bit mask)
     std::optional<bool> dynamicResolution;  // lower the render lines while the GPU holds the game back
     std::optional<bool> gxThread;  // run aurora GX on its own thread (BASARA_GX_THREAD)
+    std::optional<bool> realWidescreen;  // Basara: [video] real_widescreen, Hor+ instead of stretching 4:3
     std::optional<bool> thermalControl;  // lower the render lines while the phone runs hot (thermal.h)
     std::optional<bool> skipBoot;  // run the logos at full speed, undrawn, up to the save check
     std::optional<int32_t> textureFilter;  // 0 as the game asks, 1 sharp, 2 sharpest (aurora_set_texture_filter)
@@ -613,6 +614,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
     config.skipBoot = FindConfigValue<bool>(document, "video", "skip_boot");
     config.gxThread = FindConfigValue<bool>(document, "video", "gx_thread");
+    config.realWidescreen = FindConfigValue<bool>(document, "video", "real_widescreen");
     config.dynamicResolution = FindConfigValue<bool>(document, "video", "dynamic_resolution");
     config.thermalControl = FindConfigValue<bool>(document, "video", "thermal_control");
     config.overlayItems = FindConfigUint(document, "video", "overlay_items");
@@ -1066,6 +1068,14 @@ inline bool ThermalControl() {
 inline bool GxThread() {
     if (const char* env = std::getenv("BASARA_GX_THREAD"); env && *env) return *env != '0';
     return Get().gxThread.value_or(false);
+}
+
+// Hor+ widescreen widens the game's own camera, so it also wakes the enemies at the sides: more
+// work on the game thread, and players heard the sound break up. Off (the default) stretches the
+// 4:3 picture as 1.0 did. BASARA_WIDE_GUEST=1/0 forces it.
+inline bool RealWidescreen() {
+    if (const char* env = std::getenv("BASARA_WIDE_GUEST"); env && *env) return *env != '0';
+    return Get().realWidescreen.value_or(false);
 }
 
 inline bool SkipBoot() {

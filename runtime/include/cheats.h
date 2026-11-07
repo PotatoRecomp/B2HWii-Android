@@ -40,5 +40,4 @@ void BasaraCheats_BeforeShopRefresh(CpuContext* ctx);
 void BasaraCheats_BeforeHpSub(CpuContext* ctx);
 void BasaraCheats_BeforeDamage(CpuContext* ctx);
 void BasaraCheats_BeforeGaugeCalc(CpuContext* ctx);
-void BasaraCheats_BeforeLookAt(CpuContext* ctx);
-void BasaraCheats_BeforeCameraUpdate(CpuContext* ctx);
+void BasaraCheats_BeforePerspective(CpuContext* ctx);

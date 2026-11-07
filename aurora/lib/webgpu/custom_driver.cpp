@@ -134,6 +134,9 @@ bool begin() {
   }
   g_loader.store(loader, std::memory_order_release);
   Log.info("Custom Vulkan driver {} (hooks {})", path, hookDir);
+  if (const char* tu = std::getenv("TU_DEBUG"); tu != nullptr && *tu != '\0') {
+    Log.info("Custom Vulkan driver: TU_DEBUG={}", tu);
+  }
   return true;
 }
 

@@ -94,6 +94,7 @@ bool g_bcTexturesSupported;
 bool g_safeVertexFetch = false;
 uint64_t g_bufferTailSlack = 0;
 bool g_indexPulling = false;
+bool g_vertexLoader = false;
 // PowerVR: swapchain width rounded down to a multiple of 32 (see choose_gpu_compat).
 static bool g_alignSwapchainWidth32 = false;
 uint32_t g_shaderDebug = 0;
@@ -236,6 +237,17 @@ static void choose_gpu_compat() {
   if (g_indexPulling) {
     Log.info("GX draws pull their indices in the vertex shader (no indexed draws)");
   }
+  // GX vertices decoded on the CPU and fed through vertex inputs (gx/vertex_loader.hpp): off by
+  // default. Battles on a Redmi (Adreno 618, same APK, 2026-11-07) ran 48.9 fps with vertex pulling
+  // and 46-47.5 with the loader, the GX thread busier; the A610 phones are CPU-bound as well. Only
+  // for tests: AURORA_VERTEX_LOADER=1 or the gfx flag vtxload. Pulled indices keep vertex pulling.
+  {
+    const char* env = std::getenv("AURORA_VERTEX_LOADER");
+    bool want = gfx_flag("vtxload");
+    if (env != nullptr && env[0] != '\0') want = env[0] == '1';
+    g_vertexLoader = !g_indexPulling && !gfx_flag("novtxload") && want;
+  }
+  Log.info("GX vertex loader: {}", g_vertexLoader ? "CPU decode, vertex inputs" : "vertex pulling");
   // Older PowerVR Rogue drivers corrupt the output, or show nothing, unless the swapchain width is a
   // multiple of 32 (PPSSPP #11743/#15773, ARMSX2 vk-powervr-old-swapchain-width); seen as a black
   // screen with sound on a GE8320 (driver 1.11@5425693) with a 1092-wide surface. Losing up to 31
@@ -940,6 +952,12 @@ static bool initialize_once(AuroraBackend auroraBackend) {
                requiredCompatLimits.maxStorageBuffersInFragmentStage,
                requiredCompatLimits.maxStorageTexturesInVertexStage,
                requiredCompatLimits.maxStorageTexturesInFragmentStage);
+      // The compatibility vertex fetch reads vertex data from storage buffers in the vertex shader; an
+      // adapter with none there (Mali-G52 on OpenGL ES) fails to link every GX pipeline. Off instead.
+      if (g_safeVertexFetch && requiredCompatLimits.maxStorageBuffersInVertexStage == 0) {
+        g_safeVertexFetch = false;
+        Log.warn("GPU compatibility vertex fetch off: {} has no vertex storage buffers", g_adapterName);
+      }
     }
     std::vector<wgpu::FeatureName> requiredFeatures;
     // Optional native sharing for MetalFX. Devices without either feature keep
@@ -1207,7 +1225,10 @@ bool initialize(AuroraBackend auroraBackend) {
   if (vulkanFirst && vulkanTarget) order = {true, false};
   // Dawn first, then the Vulkan backend, on the system driver too: Dawn finds no adapter on some
   // drivers (Adreno 610, Redmi Pad SE), and the Null fallback after it cannot present.
-  else if (vulkanTarget) order = {false, true};
+  // Dawn once more after both: on an Adreno 610 (Android 11+, Vulkan 1.1 system driver) Dawn finds no
+  // adapter on the first try, the Vulkan backend skips the 1.1 device, and Dawn then starts (the
+  // Renderer = Vulkan order, which players found working, 2026-11-07).
+  else if (vulkanTarget) order = {false, true, false};
   else order = {false};
 #else
   const std::vector<bool> order{false};

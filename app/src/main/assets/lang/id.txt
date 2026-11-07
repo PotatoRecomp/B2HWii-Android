@@ -364,8 +364,6 @@ Before every import the save on this phone is kept in 	Sebelum tiap impor, save 
 /Auto: Undo Last Import puts it back. Only .zip files from Back Up (or a basara2w.dat) work; Dolphin's data.bin does not.	/Auto: Batalkan Impor Terakhir mengembalikannya. Hanya .zip hasil Backup (atau basara2w.dat) yang bisa; data.bin dari Dolphin tidak bisa.
 Tap Save Here to keep it in 	Ketuk Simpan di Sini untuk menyimpannya di 
 /Saves, or open another folder first.	/Saves, atau buka folder lain dulu.
-An ISO or RVZ of your own disc (RBSJ08). Tip: keep it in 	ISO atau RVZ dari disc milikmu sendiri (RBSJ08). Tips: simpan di 
-/ISO, this list opens there next time.	/ISO, daftar ini akan langsung terbuka di sana.
 Save restored	Save sudah dipulihkan
 The save from before the last import is back. Start the game to play from it.	Save sebelum impor terakhir sudah kembali. Mulai game untuk bermain dari save itu.
 A character's voice right after picking them no longer plays slow and broken, and the character select no longer pauses for a moment on each pick.	Suara karakter tepat setelah dipilih tidak lagi pelan dan patah-patah, dan layar pilih karakter tidak lagi berhenti sejenak di tiap pilihan.
@@ -738,3 +736,53 @@ Not on the gamepad	Tidak dipakai di gamepad
 Reset to Default	Kembalikan ke Bawaan
 Press a gamepad button	Tekan tombol gamepad
 Gamepad Buttons (Settings > Controls): choose which gamepad button presses each Classic Controller button. Tap one, press the gamepad button, done; Reset to Default puts back the usual layout.	Tombol Gamepad (Settings > Controls): pilih tombol gamepad untuk tiap tombol Classic Controller. Ketuk satu, tekan tombol gamepad, selesai; Kembalikan ke Bawaan memasang lagi tata letak biasa.
+Straight into the game, settings while playing	Langsung ke game, pengaturan saat bermain
+No launcher: the app opens straight into the game. Your ISO or RVZ is chosen once, the first time; after that the icon goes right to the battlefield.	Tanpa launcher: aplikasi langsung membuka game. ISO atau RVZ kamu dipilih sekali saja, pertama kali; setelah itu ikon langsung ke medan perang.
+Every setting is in the game's menu (Back, or the gear): Display, Graphics, Textures, Performance, Controls, Save Data, Cheats and System.	Semua pengaturan ada di menu game (Back, atau ikon gir): Tampilan, Grafis, Tekstur, Performa, Kontrol, Data Save, Cheat dan Sistem.
+Restart beside Quit in the menu: the game starts again, so settings marked Restart needed apply.	Restart di samping Keluar pada menu: game dimulai ulang, jadi pengaturan bertanda Perlu restart berlaku.
+Display Resolution, V-Sync and Sustained Performance now apply at once while playing, without a restart.	Resolusi Tampilan, V-Sync dan Performa Stabil kini langsung berlaku saat bermain, tanpa restart.
+Settings > System in the game: change the game file, check for updates, Share Log, Device Info, language and Reset and Clear.	Pengaturan > Sistem di dalam game: ganti file game, cek update, Bagikan Log, Info Perangkat, bahasa, serta Reset dan Hapus.
+One look for the touch buttons: clean round outlines with white icons. Button Style and Button Color are gone.	Satu tampilan untuk tombol sentuh: garis bulat bersih dengan ikon putih. Gaya Tombol dan Warna Tombol dihapus.
+Phones with a PowerVR GPU (for example Infinix X669C) showed a black screen with sound, or nothing on Vulkan. They now start on the Vulkan renderer made for older drivers.	HP dengan GPU PowerVR (misalnya Infinix X669C) dulu layar hitam tapi ada suara, atau tidak tampil apa-apa di Vulkan. Sekarang mulai dengan renderer Vulkan khusus driver lama.
+16:9 and Fill Screen stretch the picture again, as in 1.0. The wider view of 1.1 is now Settings > Display > Real Widescreen: it wakes more enemies at the sides, and on slower phones the sound broke up.	16:9 dan Fill Screen kembali menarik gambar seperti 1.0. Tampilan lebar 1.1 kini ada di Pengaturan > Tampilan > Layar Lebar Asli: musuh di samping ikut aktif, dan di HP lambat suaranya pecah.
+GX Thread is now on by default for phones whose fastest CPU core is under 3 GHz: busy battles run faster.	GX Thread kini nyala bawaan di HP yang core CPU tercepatnya di bawah 3 GHz: pertempuran ramai lebih cepat.
+Adreno 610 phones with a custom Turnip driver showed black frames and missing layers: the driver now draws without tiling there.	HP Adreno 610 dengan driver Turnip custom dulu menampilkan frame hitam dan layer hilang: di sana driver kini menggambar tanpa tiling.
+Changes apply at once. Those marked Restart needed apply after Restart.	Perubahan langsung berlaku. Yang bertanda Perlu restart berlaku setelah Restart.
+Choose another game file?	Pilih file game lain?
+The game closes without saving; it starts again from the new file.	Game ditutup tanpa menyimpan; lalu dimulai lagi dari file baru.
+What each version brought.	Isi tiap versi.
+Restarting the game…	Memulai ulang game…
+Starting…	Memulai…
+Choose Another File	Pilih File Lain
+Choose your own ISO or RVZ of the game (Japan, RBSJ08). It is unpacked once, about 4 GB; afterwards the app goes straight into the game.	Pilih ISO atau RVZ game milikmu (Jepang, RBSJ08). Diekstrak sekali, sekitar 4 GB; setelah itu aplikasi langsung masuk ke game.
+This phone now uses the Low-End preset: steadier, a bit blurrier. Undo it in the game's menu: Performance > Low-End Preset.	HP ini kini memakai preset Low-End: lebih stabil, sedikit lebih buram. Batalkan di menu game: Performa > Preset Low-End.
+The menus' language. Auto follows the phone's region: Indonesian in Indonesia, English elsewhere.	Bahasa menu. Otomatis mengikuti wilayah HP: Indonesia di Indonesia, Inggris di tempat lain.
+Restart the game?	Mulai ulang game?
+Progress since your last save will be lost, so save in the game first if you need to. Settings marked Restart needed will apply.	Progres sejak save terakhir akan hilang, jadi simpan dulu lewat menu game kalau perlu. Setting bertanda Perlu restart akan langsung dipakai.
+Changes are saved as you make them. * after Restart.	Perubahan langsung tersimpan. * setelah Restart.
+Restart the game? Progress since your last save is lost. Settings marked * apply.	Mulai ulang game? Progres sejak save terakhir hilang. Setting bertanda * akan dipakai.
+Quit the game? Progress since your last save is lost.	Keluar dari game? Progres sejak save terakhir hilang.
+Cheats change your save: back it up first (Save Data). Off in LAN play.	Cheat mengubah save: backup dulu (Save Data). Mati saat main LAN.
+RBSJ08, changed	RBSJ08, diubah
+Type	Jenis
+Name	Nama
+Resume	Lanjut
+No save yet	Belum ada save
+Nothing to undo	Tidak ada yang dibatalkan
+Mods	Mod
+No mods yet. Put each mod in its own folder in 	Belum ada mod. Taruh tiap mod di foldernya sendiri di 
+ (how: README.txt there).	 (caranya: README.txt di sana).
+(Loose files)	(File lepas)
+⚠ no valid names	⚠ nama tidak valid
+%d files	%d file
+Mods Folder	Folder Mod
+Rescan	Pindai Ulang
+Real Widescreen	Layar Lebar Asli
+16:9 and Fill Screen show more of the field to the sides instead of stretching it. It also wakes more enemies, so slower phones run heavier and the sound can break up. Off: stretched, as in 1.0.	16:9 dan Fill Screen memperlihatkan medan lebih luas ke samping, bukan gambar yang ditarik. Musuh yang aktif juga bertambah, jadi HP lambat makin berat dan suara bisa pecah. Mati: gambar ditarik seperti 1.0.
+V-Sync now applies at once while playing, without a restart.	V-Sync kini langsung berlaku saat bermain, tanpa restart.
+Faster 3D on every phone: the models' vertices are now prepared on the CPU, the way Dolphin does it, so the phone's GPU reads them through its fast vertex path (Adreno 6xx most of all).	3D lebih cepat di semua HP: vertex model kini disiapkan di CPU seperti cara Dolphin, jadi GPU HP membacanya lewat jalur vertex cepatnya (terutama Adreno 6xx).
+Less work per frame: draws that share their settings reuse them instead of sending a copy, and the game thread checks its timers far less often.	Kerja per frame lebih sedikit: gambar yang setelannya sama memakai ulang setelan itu tanpa mengirim salinan, dan thread game jauh lebih jarang memeriksa timernya.
+Performance is now automatic: Frameskip, GX Thread, Dynamic Resolution, Display Resolution, Upscaler and Texture Detail are set for each phone when the game starts. The Low-End Preset, Thermal Control and Sustained Performance are gone.	Performa kini otomatis: Frameskip, GX Thread, Dynamic Resolution, Display Resolution, Upscaler, dan Texture Detail diatur untuk tiap HP saat game dimulai. Preset Low-End, Thermal Control, dan Sustained Performance dihapus.
+Renderer, Graphics Compatibility, Upload Memory, GPU Driver, the texture tools and Recording-Friendly Audio moved to Settings > System > Developer.	Renderer, Graphics Compatibility, Upload Memory, GPU Driver, alat tekstur, dan Recording-Friendly Audio pindah ke Setelan > System > Developer.
+Off puts back the settings from before it. Applies when the game starts again.	Off mengembalikan setelan sebelumnya. Berlaku saat game dimulai lagi.
+Busy battles no longer lose speed on mid and low-end phones: a frame that ran a little late used to wait for the next screen refresh as well. The game now keeps full speed there, and the GX thread does less bookkeeping.	Pertempuran ramai tidak lagi melambat di HP menengah dan bawah: frame yang sedikit terlambat dulu ikut menunggu refresh layar berikutnya. Kini game tetap berjalan penuh, dan thread GX lebih sedikit pekerjaan tambahan.

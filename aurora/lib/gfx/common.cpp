@@ -923,7 +923,8 @@ void initialize() {
   };
   createBuffer(g_uniformBuffer, wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst, UniformBufferSize,
                "Shared Uniform Buffer");
-  createBuffer(g_vertexBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst, VertexBufferSize,
+  createBuffer(g_vertexBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst,
+               VertexBufferSize,
                "Shared Vertex Buffer");
   createBuffer(g_indexBuffer,
                wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst |
@@ -1755,6 +1756,7 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
       } break;
       case ShaderType::Clear:
         clear::render(draw.clear, pass, renderPasses[idx].targetSize, encodeState.currentPipeline);
+        encodeState.uniformOffset = UINT32_MAX; // clear binds its own uniform range in slot 1
         break;
       }
     } break;
@@ -1860,6 +1862,17 @@ Range push_texture_data(const uint8_t* data, size_t length, u32 bytesPerRow, u32
 std::pair<ByteBuffer, Range> map_verts(size_t length) {
   const auto range = map(g_verts, length, 4);
   return {ByteBuffer{g_verts.data() + range.offset, range.size}, range};
+}
+u8* map_verts_strided(size_t length, size_t stride, Range& range) {
+  // The range starts on a multiple of stride, so draws address it with baseVertex = offset / stride.
+  const size_t begin = g_verts.size();
+  const size_t padding = (stride - begin % stride) % stride;
+  if (padding != 0) {
+    g_verts.append_zeroes(padding);
+  }
+  range = {static_cast<uint32_t>(begin + padding), static_cast<uint32_t>(length)};
+  g_verts.append_uninitialized(length);
+  return g_verts.data() + range.offset;
 }
 std::pair<ByteBuffer, Range> map_indices(size_t length) {
   const auto range = map(g_indices, length, 4);

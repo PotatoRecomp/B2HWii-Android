@@ -5,10 +5,15 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <type_traits>
 #include <vector>
+#if defined(__linux__)
+#include <time.h>
+#endif
 
 #include "det_clock.h"
 #include "abi_bridge.h"
@@ -33,12 +38,71 @@ namespace OsHleInternal {
 std::mutex gSleepTimerMutex;
 std::vector<SleepTimerEntry> gSleepTimers;
 
+namespace {
+using SleepRep = std::chrono::steady_clock::rep;
+constexpr SleepRep kNoDeadline = std::numeric_limits<SleepRep>::max();
+// Earliest armed deadline (steady_clock ticks), kNoDeadline when the table is empty. Written under
+// gSleepTimerMutex; read without it by the ProcessSleepTimers fast path.
+std::atomic<SleepRep> gEarliestDeadline{kNoDeadline};
+// When the stranded-sleeper reconciler in ProcessSleepTimers next runs (steady_clock ticks).
+std::atomic<SleepRep> gStrandScanDueAt{0};
+
+void NoteDeadlineLocked(std::chrono::steady_clock::time_point deadline)
+{
+    const SleepRep ticks = deadline.time_since_epoch().count();
+    if (ticks < gEarliestDeadline.load(std::memory_order_relaxed)) {
+        gEarliestDeadline.store(ticks, std::memory_order_relaxed);
+    }
+}
+
+void RecomputeEarliestLocked()
+{
+    SleepRep earliest = kNoDeadline;
+    for (const SleepTimerEntry& entry : gSleepTimers) {
+        earliest = std::min(earliest, entry.deadline.time_since_epoch().count());
+    }
+    gEarliestDeadline.store(earliest, std::memory_order_relaxed);
+}
+
+// The scheduler pumps ProcessSleepTimers thousands of times a frame and nearly every call finds
+// nothing due, yet each one read the precise clock (clock_gettime, ~4% of the game thread on a
+// Snapdragon 730G) and took the table mutex. CLOCK_MONOTONIC_COARSE is the same timeline as
+// steady_clock at kernel-tick resolution and costs a vDSO memory read; it trails the precise clock
+// by at most one tick, so a call whose coarse time plus one tick is still before every deadline
+// can return at once without delaying any timer.
+bool NothingDueYet()
+{
+#if defined(__linux__)
+    static_assert(std::is_same_v<std::chrono::steady_clock::period, std::nano>);
+    static const SleepRep tick = [] {
+        timespec res{};
+        if (clock_getres(CLOCK_MONOTONIC_COARSE, &res) != 0 || res.tv_sec != 0) {
+            return SleepRep{-1};
+        }
+        return static_cast<SleepRep>(res.tv_nsec);
+    }();
+    if (tick < 0 || DetClock::Enabled()) {
+        return false;
+    }
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+    const SleepRep coarse = static_cast<SleepRep>(ts.tv_sec) * 1000000000 + ts.tv_nsec;
+    const SleepRep due = std::min(gEarliestDeadline.load(std::memory_order_relaxed),
+                                  gStrandScanDueAt.load(std::memory_order_relaxed));
+    return coarse + tick < due;
+#else
+    return false;
+#endif
+}
+} // namespace
+
 void CancelSleepTimer(uint32_t threadPtr)
 {
     std::lock_guard<std::mutex> lock(gSleepTimerMutex);
     std::erase_if(gSleepTimers, [threadPtr](const SleepTimerEntry& entry) {
         return entry.threadPtr == threadPtr;
     });
+    RecomputeEarliestLocked();
 }
 
 uint64_t NextSleepTimerTicks()
@@ -92,11 +156,16 @@ void ScheduleSleepTimer(uint32_t threadPtr, uint64_t ticks)
         return entry.threadPtr == threadPtr;
     });
     gSleepTimers.push_back({threadPtr, deadline});
+    RecomputeEarliestLocked();
 }
 
 bool ProcessSleepTimers(CpuContext* cpu)
 {
     using Clock = std::chrono::steady_clock;
+
+    if (NothingDueYet()) {
+        return false;
+    }
 
     // Pop and process ONE due timer at a time, straight from the shared table. Resuming a
     // sleeper re-enters the scheduler (OSResumeThread -> SelectThread) and can switch fibers
@@ -119,6 +188,7 @@ bool ProcessSleepTimers(CpuContext* cpu)
                 if (it->deadline <= now) {
                     timer = *it;
                     gSleepTimers.erase(it);
+                    RecomputeEarliestLocked();
                     found = true;
                     break;
                 }
@@ -154,6 +224,7 @@ bool ProcessSleepTimers(CpuContext* cpu)
             }
             if (!present) {
                 gSleepTimers.push_back({threadPtr, now + std::chrono::milliseconds(2)});
+                NoteDeadlineLocked(now + std::chrono::milliseconds(2));
             }
             continue;
         }
@@ -180,11 +251,10 @@ bool ProcessSleepTimers(CpuContext* cpu)
     // race) by resuming it once that shape persists for 100ms, sampled every 50ms so no strand is
     // missed. The atomic CAS below lets exactly one caller run the scan when ProcessSleepTimers
     // executes on more than one host thread; the rest skip it.
-    static std::atomic<Clock::rep> strandScanDueAt{0};
-    auto strandScanClaim = strandScanDueAt.load(std::memory_order_relaxed);
+    auto strandScanClaim = gStrandScanDueAt.load(std::memory_order_relaxed);
     const bool runStrandReconciler =
         now.time_since_epoch().count() >= strandScanClaim &&
-        strandScanDueAt.compare_exchange_strong(
+        gStrandScanDueAt.compare_exchange_strong(
             strandScanClaim,
             static_cast<Clock::rep>(
                 (now + std::chrono::milliseconds(50)).time_since_epoch().count()),

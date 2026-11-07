@@ -10,6 +10,7 @@
 #include <sched.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -302,27 +303,80 @@ bool Enabled() {
     return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
+// SetEnabled's request, taken on the game thread: -1 none, 0 off, 1 on.
+std::atomic<int> g_request{-1};
+
+// Boost off while playing (Sustained Performance turned on): every thread back on every core, and
+// the hint session closed, as if the game had started with BASARA_CPU_BOOST=0.
+void Unboost() {
+    cpu_set_t all;
+    CPU_ZERO(&all);
+    for (int cpu = 0; cpu < kMaxCpus; ++cpu) {
+        if (MaxFreqKhz(cpu) > 0) {
+            CPU_SET(cpu, &all);
+        }
+    }
+    if (CPU_COUNT(&all) > 0) {
+        sched_setaffinity(0, sizeof(all), &all);
+        ForEachThread([&](int tid, const char* name) {
+            if (IsHelperThread(name) || std::strncmp(name, "FrameWorker", 11) == 0 ||
+                std::strncmp(name, "GxThread", 8) == 0) {
+                sched_setaffinity(tid, sizeof(all), &all);
+            }
+        });
+    }
+    g_pinned = false;
+    if (g_session != nullptr && g_close != nullptr) {
+        g_close(g_session);
+    }
+    g_session = nullptr;
+    g_gxTid = 0;
+    RT_LOGF(RT_TAG_RUNTIME, "cpu boost: off (Sustained Performance)\n");
+}
+
 } // namespace
 
+void SetEnabled(bool enabled) {
+    g_request.store(enabled ? 1 : 0, std::memory_order_release);
+}
+
 void ReportFrameWork(uint64_t workNanos) {
-    static const bool enabled = [] {
+    static bool s_started = false;
+    static bool s_active = false;
+    if (!s_started) {
+        s_started = true;
         Thermal::Start();
         if (!Enabled()) {
             RT_LOGF(RT_TAG_RUNTIME, "cpu boost: off (BASARA_CPU_BOOST=0)\n");
-            return false;
+        } else {
+            PinToFastestCores();
+            CreateHintSession();
+            s_active = true;
         }
+    }
+    const int request = g_request.exchange(-1, std::memory_order_acq_rel);
+    if (request == 0 && s_active) {
+        Unboost();
+        s_active = false;
+    } else if (request == 1 && !s_active) {
         PinToFastestCores();
-        CreateHintSession();
-        return true;
-    }();
-    if (enabled) {
+        if (g_manager != nullptr) {
+            UpdateHintThreads();
+        } else {
+            CreateHintSession();
+        }
+        s_active = true;
+        RT_LOGF(RT_TAG_RUNTIME, "cpu boost: on again (Sustained Performance off)\n");
+    }
+    if (s_active) {
         KeepPinned();
     }
-    if (enabled && g_session != nullptr && workNanos > 0) {
+    if (s_active && g_session != nullptr && workNanos > 0) {
         g_report(g_session, static_cast<int64_t>(workNanos));
     }
 }
 #else
+void SetEnabled(bool) {}
 void ReportFrameWork(uint64_t) {}
 #endif
 

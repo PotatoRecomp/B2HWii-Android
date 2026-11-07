@@ -213,6 +213,14 @@ final class GpuDrivers {
             } catch (Exception e) {
                 Log.e(TAG, "could not choose the renderer", e);
             }
+        } else if (settings.gpuDriver().isEmpty() && Os.getenv("BASARA_RENDERER") == null
+                && DeviceProfile.powerVr(settings.gpuName())) {
+            // PowerVR (DeviceProfile.powerVr): aurora's Vulkan backend (tier 0) first, Dawn after it.
+            try {
+                Os.setenv("BASARA_RENDERER", "vulkan", true);
+            } catch (Exception e) {
+                Log.e(TAG, "could not choose the renderer", e);
+            }
         }
         final Driver driver = find(context, settings.gpuDriver());
         if (driver == null) {
@@ -230,6 +238,12 @@ final class GpuDrivers {
             Os.setenv("BASARA_GPU_DRIVER", driver.lib().getAbsolutePath(), true);
             Os.setenv("BASARA_GPU_HOOK_DIR", hooks.getAbsolutePath(), true);
             Os.setenv("BASARA_GPU_DRIVER_MARKER", marker.getAbsolutePath(), true);
+            // Turnip on Adreno 610 (2026-11-07, Snapdragon 680 + MrPurple T30): in tiled (GMEM) rendering
+            // whole layers drop out, frames go black or flat, shapes stretch; the same driver is clean on
+            // Adreno 618. Its GMEM is small, so a frame is many tiles: direct rendering avoids both.
+            if (DeviceProfile.adreno610(settings.gpuName()) && Os.getenv("TU_DEBUG") == null) {
+                Os.setenv("TU_DEBUG", "sysmem", true);
+            }
         } catch (Exception e) {
             Log.e(TAG, "could not pass the GPU driver to the game", e);
         }

@@ -10,11 +10,8 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
@@ -22,36 +19,42 @@ import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import android.widget.Button;
-import android.widget.HorizontalScrollView;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Start screen, one portrait page: the game and its state at the top, the settings in use, then
- * every setting by section, and Play at the bottom within the thumb's reach. The game
- * comes from the player's own ISO or RVZ, which is unpacked once when chosen.
+ * The app's entry: no launcher page. On a tap of the icon it checks what must come first (file
+ * access, a required update, the Beta's state, What's New, the game file on the first start) and then
+ * opens the game, which holds every setting in its own menu. The player's ISO or RVZ is chosen once,
+ * on the first start, and unpacked; afterwards the icon goes straight into the game.
+ *
+ * The game asks for this screen again for what its own process cannot do: a new game file
+ * (ACTION_DISC), an update check (ACTION_UPDATE), or a restart (EXTRA_RESTART_GAME).
  */
 public final class LauncherActivity extends Activity {
     private static final int REQUEST_DISC = 1;
     /** Set by GameActivity.restartForSession: open the game again once its old process is gone. */
     static final String EXTRA_RESTART_GAME = "restartGame";
-    /** Set by the game's "Start Menu": no automatic update check on the way back. */
-    static final String EXTRA_SHOW_START_MENU = "showStartMenu";
+    /** Set by the game's menu: what to do here before going back to it (ACTION_*). */
+    static final String EXTRA_ACTION = "action";
+    /** Choose another game file: the running game is ended first. */
+    static final String ACTION_DISC = "disc";
+    /** Check for updates by hand; the game waits in the background. */
+    static final String ACTION_UPDATE = "update";
+    /** Replace the save with EXTRA_FILE (a backup), or undo the last import when there is none. */
+    static final String ACTION_IMPORT_SAVE = "importSave";
+    static final String EXTRA_FILE = "file";
 
     static final String PROJECT_URL = "https://github.com/PotatoRecomp/B2HWii-Android";
+    /** How long the start waits for the update check before opening the game anyway (no network). */
+    private static final int UPDATE_WAIT_MS = 5000;
 
     private AppSettings settings;
     private boolean updating;
@@ -61,457 +64,298 @@ public final class LauncherActivity extends Activity {
     /** Gone to allow "All files access" for the file browser: open it on the way back. */
     private boolean waitingFileAccess;
     private static final String STATE_WAITING_FILE_ACCESS = "waiting_file_access";
-    /** Gone to allow "All files access" before playing (the log goes to /sdcard): play on the way back. */
+    /** Gone to allow "All files access" before playing (the log goes to /sdcard): carry on on the way back. */
     private boolean waitingPlayAccess;
+    private static final String STATE_WAITING_PLAY_ACCESS = "waiting_play_access";
     /** The required "All files access" sheet is on screen. */
     private Sheet accessSheet;
-    private static final String STATE_WAITING_PLAY_ACCESS = "waiting_play_access";
-    private static final String STATE_SECTION = "section";
+
+    // The steps before the game (next()).
+    private boolean checked;     // the update check is done (or skipped)
+    private boolean notesDone;   // What's New was shown, or had nothing new
+    private boolean warned;      // the disc and GPU notices were given for this start
+    private boolean launched;    // the game was opened: this screen is on its way out
+    private boolean importing;   // a game file is being unpacked
+    /** What follows the update check: the next step at start, or back to the game. */
+    private Runnable afterCheck;
 
     private int endedGame;  // the pid endGame just ended
     private TextView status;
-    private View statusDot;
-    private LinearLayout configStrip;
-    private LinearLayout tabs;
-    // The same strip again, pinned above the settings once the one in the page scrolls past the top.
-    private LinearLayout stickyTabs;
-    private HorizontalScrollView tabScroll, stickyScroll;
-    private View tabAnchor, stickyBar;
-    private LinearLayout lowEndBox;
-    private boolean lowEndDevice;
-    private LinearLayout panel;
-    private ScrollView scroll;
-    private SettingsMenu menu;
-    private int[] sections;
-    private TextView sessionLine;
-    private LinearLayout play;
-    private TextView playLabel;
-    private LinearLayout stop;
+    private LinearLayout primary;
+    private TextView primaryLabel;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Portrait for the first start and a game file import (the manifest's); landscape when the
+        // game only passes through here (Restart, update check, save import), so the screen does not turn.
+        final Intent start = getIntent();
+        if (start != null && (start.getBooleanExtra(EXTRA_RESTART_GAME, false)
+                || ACTION_UPDATE.equals(start.getStringExtra(EXTRA_ACTION))
+                || ACTION_IMPORT_SAVE.equals(start.getStringExtra(EXTRA_ACTION)))) {
+            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        }
         CrashReport.installLauncherHandler(this);
         settings = new AppSettings(this);
         Tr.init(this);
         if (DeviceProfile.applyOnce(this, settings)) {
             Toast.makeText(this, Tr.t("This phone now uses the Low-End preset: steadier, a bit blurrier. "
-                    + "Turn it off with the switch above All settings."), Toast.LENGTH_LONG).show();
+                    + "Undo it in the game's menu: Performance > Low-End Preset."), Toast.LENGTH_LONG).show();
         }
-        // Updates are checked on a fresh start, not when the game sent the player here or is
-        // restarting itself into a LAN session.
-        final Intent launch = getIntent();
-        final boolean asked = launch != null && (launch.getBooleanExtra(EXTRA_SHOW_START_MENU, false)
-                || launch.getBooleanExtra(EXTRA_RESTART_GAME, false));
-        final boolean opened = savedInstanceState == null && !asked;
+        setContentView(page());
 
-        final LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        page.setBackgroundColor(Ui.BG);
-        // Everything above the settings scrolls away with them; only the one-line section strip stays,
-        // pinned at the top once it reaches it, so the settings get most of the screen.
-        final LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.addView(header(), Ui.matchWidth(0));
-        body.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
-        body.addView(configStripView(), Ui.matchWidth(0));
-        body.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
-
-        sections = SettingsMenu.launcherSections();
-        lowEndDevice = DeviceProfile.lowEnd(this, settings);
-        lowEndBox = new LinearLayout(this);
-        lowEndBox.setOrientation(LinearLayout.VERTICAL);
-        lowEndBox.setPadding(dp(14), 0, dp(14), 0);
-        body.addView(lowEndBox, Ui.matchWidth(0));
-
-        tabs = new LinearLayout(this);
-        tabScroll = tabStrip(tabs);
-        tabAnchor = tabScroll;
-        body.addView(tabScroll, Ui.matchWidth(0));
-
-        panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        final LinearLayout.LayoutParams panelParams = Ui.matchWidth(dp(4));
-        panelParams.leftMargin = dp(14);
-        panelParams.rightMargin = dp(14);
-        panelParams.bottomMargin = dp(20);
-        body.addView(panel, panelParams);
-
-        scroll = new ScrollView(this);
-        scroll.setVerticalScrollBarEnabled(false);
-        scroll.addView(body);
-
-        stickyTabs = new LinearLayout(this);
-        stickyScroll = tabStrip(stickyTabs);
-        final LinearLayout sticky = new LinearLayout(this);
-        sticky.setOrientation(LinearLayout.VERTICAL);
-        sticky.setBackgroundColor(Ui.BG);
-        sticky.addView(stickyScroll, Ui.matchWidth(0));
-        sticky.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
-        sticky.setVisibility(View.GONE);
-        stickyBar = sticky;
-        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> updateSticky());
-
-        final android.widget.FrameLayout stage = new android.widget.FrameLayout(this);
-        stage.addView(scroll, new android.widget.FrameLayout.LayoutParams(
-                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
-        stage.addView(sticky, new android.widget.FrameLayout.LayoutParams(
-                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP));
-        page.addView(stage, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        page.addView(line(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
-        page.addView(actionBar(), Ui.matchWidth(0));
-
-        // Room for the status and navigation bars: the page is drawn edge to edge.
-        page.setOnApplyWindowInsetsListener((v, insets) -> {
-            final android.graphics.Insets bars = SystemBars.bars(insets, true);
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            return SystemBars.consumed(insets);
-        });
-        setContentView(page);
-
-        menu = new SettingsMenu(this, panel, false, this::showSummary);
-        menu.systemRows = this::systemRows;
-        int section = savedInstanceState != null
-                ? savedInstanceState.getInt(STATE_SECTION, SettingsMenu.DISPLAY) : SettingsMenu.DISPLAY;
-        final int saved = section;
-        if (java.util.Arrays.stream(sections).noneMatch(id -> id == saved)) section = SettingsMenu.DISPLAY;
-        selectSection(section, false);
-
-        restartGameIfAsked(getIntent());
         if (savedInstanceState != null) {
             // Android 11 ends this process when "Allow from this source" changes.
             waitingUpdate = Updater.Release.from(savedInstanceState.getBundle(STATE_WAITING_UPDATE));
             waitingFileAccess = savedInstanceState.getBoolean(STATE_WAITING_FILE_ACCESS, false);
             waitingPlayAccess = savedInstanceState.getBoolean(STATE_WAITING_PLAY_ACCESS, false);
         }
-        if (opened) {
-            // Quiet unless there is something to do: a required update, Auto Update, or one offer
-            // per new version.
-            checkForUpdates(true);
-        }
-        // After an install or update: what this version brings, once.
-        if (savedInstanceState == null) main.post(() -> ReleaseNotes.showIfNew(this, settings));
-    }
-
-    /** Title, version, the game's state, and What's New / Help / language on the right. */
-    private View header() {
-        final LinearLayout header = new LinearLayout(this);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(14), dp(12), dp(12));
-
-        final LinearLayout brand = new LinearLayout(this);
-        brand.setOrientation(LinearLayout.VERTICAL);
-        final LinearLayout titleRow = new LinearLayout(this);
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView title = Ui.text(this, Tr.t("Basara 2 Heroes"), 18, Ui.TEXT);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setLetterSpacing(-0.02f);
-        titleRow.addView(title);
-        final TextView badge = Ui.text(this, versionText(), 10, Ui.SECONDARY);
-        badge.setTypeface(Ui.MONO);
-        badge.setPadding(dp(6), dp(2), dp(6), dp(2));
-        badge.setBackground(Ui.box(this, Ui.SURFACE, Ui.BORDER, 5));
-        badge.setSingleLine(true);
-        final LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        badgeParams.leftMargin = dp(8);
-        titleRow.addView(badge, badgeParams);
-        brand.addView(titleRow);
-
-        final LinearLayout statusRow = new LinearLayout(this);
-        statusRow.setGravity(Gravity.CENTER_VERTICAL);
-        statusDot = new View(this);
-        statusRow.addView(statusDot, new LinearLayout.LayoutParams(dp(7), dp(7)));
-        status = Ui.text(this, "", 11.5f, Ui.SECONDARY);
-        status.setTypeface(Ui.MONO);
-        final LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        statusParams.leftMargin = dp(7);
-        statusRow.addView(status, statusParams);
-        brand.addView(statusRow, Ui.matchWidth(dp(5)));
-        final TextView credit = Ui.text(this, "Port made by Xu", 10.5f, Ui.SECONDARY);
-        credit.setTypeface(Ui.MONO);
-        brand.addView(credit, Ui.matchWidth(dp(3)));
-        header.addView(brand, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        header.addView(iconButton(R.drawable.ic_whatsnew, null, v -> ReleaseNotes.showAll(this)));
-        header.addView(iconButton(R.drawable.ic_help, null, v -> showHelp()));
-        final boolean indonesian = Tr.resolve(settings.language()) == Tr.INDONESIAN;
-        header.addView(iconButton(0, indonesian ? "ID" : "EN", v -> {
-            settings.setLanguage(indonesian ? Tr.ENGLISH : Tr.INDONESIAN);
-            Tr.init(this);
-            recreate();
-        }));
-        return header;
-    }
-
-    private View iconButton(int icon, String label, View.OnClickListener onClick) {
-        final LinearLayout button = new LinearLayout(this);
-        button.setGravity(Gravity.CENTER);
-        button.setMinimumWidth(dp(36));
-        button.setPadding(dp(8), 0, dp(8), 0);
-        button.setBackground(Ui.touchBox(this, Ui.SURFACE, Ui.BORDER, 8));
-        if (icon != 0) button.addView(Ui.icon(this, icon, Ui.SECONDARY, 17));
-        if (label != null) {
-            final TextView text = Ui.text(this, label, 12, Ui.SECONDARY);
-            text.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
-            button.addView(text);
-        }
-        button.setClickable(true);
-        button.setOnClickListener(onClick);
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, dp(36));
-        params.leftMargin = dp(6);
-        button.setLayoutParams(params);
-        return button;
-    }
-
-    /** "Active configuration": one chip per setting in use; a tap opens its section. */
-    private View configStripView() {
-        final LinearLayout wrap = new LinearLayout(this);
-        wrap.setOrientation(LinearLayout.VERTICAL);
-        wrap.setBackgroundColor(Ui.ELEVATED);
-        wrap.setPadding(dp(16), dp(8), dp(16), dp(9));
-        final LinearLayout labels = new LinearLayout(this);
-        labels.addView(Ui.caption(this, Tr.t("In use")),
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        final TextView hint = Ui.text(this, Tr.t("TAP TO OPEN"), 10, Ui.MUTED);
-        hint.setTypeface(Ui.MONO);
-        labels.addView(hint);
-        wrap.addView(labels, Ui.matchWidth(0));
-        configStrip = new LinearLayout(this);
-        final HorizontalScrollView strip = new HorizontalScrollView(this);
-        strip.setHorizontalScrollBarEnabled(false);
-        strip.addView(configStrip);
-        wrap.addView(strip, Ui.matchWidth(dp(6)));
-        return wrap;
-    }
-
-    /** Play (or Continue), and Stop while a game waits in the background. */
-    private View actionBar() {
-        final LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.VERTICAL);
-        bar.setBackgroundColor(Ui.SURFACE);
-        bar.setPadding(dp(16), dp(9), dp(16), dp(14));
-        sessionLine = Ui.text(this, "", 11, Ui.MUTED);
-        bar.addView(sessionLine, Ui.matchWidth(0));
-
-        final LinearLayout buttons = new LinearLayout(this);
-        play = new LinearLayout(this);
-        play.setGravity(Gravity.CENTER);
-        play.setBackground(Ui.touchBox(this, Ui.ACCENT, Ui.ACCENT_PRESSED, 12));
-        play.addView(Ui.icon(this, R.drawable.ic_play, Color.WHITE, 17));
-        playLabel = Ui.text(this, Tr.t("Play"), 15, Color.WHITE);
-        playLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        final LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        labelParams.leftMargin = dp(8);
-        play.addView(playLabel, labelParams);
-        play.setClickable(true);
-        play.setOnClickListener(v -> onPlay());
-        buttons.addView(play, new LinearLayout.LayoutParams(0, dp(48), 1f));
-
-        stop = new LinearLayout(this);
-        stop.setGravity(Gravity.CENTER);
-        stop.setPadding(dp(14), 0, dp(14), 0);
-        stop.setBackground(Ui.touchBox(this, Ui.ACTIVE, Ui.BORDER_STRONG, 12));
-        stop.addView(Ui.icon(this, R.drawable.ic_stop, Ui.TEXT, 15));
-        final TextView stopLabel = Ui.text(this, Tr.t("Stop"), 13, Ui.TEXT);
-        stopLabel.setTypeface(Ui.MEDIUM);
-        final LinearLayout.LayoutParams stopLabelParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        stopLabelParams.leftMargin = dp(6);
-        stop.addView(stopLabel, stopLabelParams);
-        stop.setClickable(true);
-        stop.setOnClickListener(v -> new Sheet(this, Tr.t("Stop the game?"),
-                Tr.t("The game waiting in the background is closed without saving. Play starts it fresh."))
-                .action(Tr.t("Stop"), null, true, true, this::endGame)
-                .action(Tr.t("Cancel"), null, false, false, null)
-                .show());
-        final LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
-        stopParams.leftMargin = dp(8);
-        buttons.addView(stop, stopParams);
-        bar.addView(buttons, Ui.matchWidth(dp(8)));
-        return bar;
-    }
-
-    private void onPlay() {
-        if (settings.betaEnded() != null) {
-            showBetaEnded();
-        } else if (requiredUpdate != null) {
-            requireUpdate(requiredUpdate);
-        } else if (AppFiles.gameReady(this)) {
-            if (!requirePlayAccess()) return;
-            if (gameRunning()) {
-                startGame();
-            } else {
-                final Runnable gpuThenPlay = () -> {
-                    if (!warnOldGpu(this::startGame)) startGame();
-                };
-                if (!warnChangedDisc(gpuThenPlay)) gpuThenPlay.run();
-            }
-        } else {
-            pickDisc();
-        }
-    }
-
-    private void startGame() {
-        // A game left for the Start Menu is still running: Continue brings it back.
-        startActivity(new Intent(this, GameActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-    }
-
-    /**
-     * When the game file's archives aren't the original disc's sizes, says so once for those sizes,
-     * with Play Anyway running `play`. True when the warning is showing (so the caller waits for it).
-     */
-    private boolean warnChangedDisc(Runnable play) {
-        final File game = AppFiles.gameDir(this);
-        final String differences = AppFiles.discDifferences(game);
-        if (differences == null) return false;
-        final SharedPreferences prefs = getSharedPreferences("disc_check", MODE_PRIVATE);
-        final String signature = AppFiles.discSignature(game);
-        if (play != null && signature.equals(prefs.getString("warned", null))) return false;
-        prefs.edit().putString("warned", signature).apply();
-        final Sheet sheet = new Sheet(this, Tr.t("This isn't the original disc"),
-                Tr.t("The game file's archives differ from the original RBSJ08 disc, so the game may stop "
-                        + "after the first screen or crash later. A dump of your own disc avoids this.")
-                        + "\n\n" + differences);
-        if (play != null) {
-            sheet.action(Tr.t("Play Anyway"), null, true, false, play);
-            sheet.action(Tr.t("Cancel"), null, false, false, null);
-        } else {
-            sheet.action(Tr.t("OK"), null, true, false, null);
-        }
-        sheet.show();
-        return true;
-    }
-
-    /**
-     * Adreno 5xx on Android 10 (DeviceProfile.oldAdreno5): not supported, said once, with Play Anyway
-     * running `play` on OpenGL ES. True when the notice is showing.
-     */
-    private boolean warnOldGpu(Runnable play) {
-        final String gpu = settings.gpuName();
-        if (!DeviceProfile.oldAdreno5(gpu)) return false;
-        final SharedPreferences prefs = getSharedPreferences("gpu_check", MODE_PRIVATE);
-        if (gpu.equals(prefs.getString("warned", null))) return false;
-        prefs.edit().putString("warned", gpu).apply();
-        final Sheet sheet = new Sheet(this, Tr.t("This GPU isn't supported"),
-                gpu + Tr.t(" on Android 10 has a Vulkan driver that stops the game on its first screens. "
-                        + "The game tries OpenGL ES instead, which may be slower or still close."));
-        sheet.action(Tr.t("Play Anyway"), null, true, false, play);
-        sheet.action(Tr.t("Cancel"), null, false, false, null);
-        sheet.show();
-        return true;
-    }
-
-    /** A one-line strip of section tabs that scrolls sideways. */
-    private HorizontalScrollView tabStrip(LinearLayout row) {
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(dp(14), dp(10), dp(14), dp(10));
-        final HorizontalScrollView strip = new HorizontalScrollView(this);
-        strip.setHorizontalScrollBarEnabled(false);
-        strip.addView(row);
-        return strip;
-    }
-
-    /** The section tabs with the open one lit, in the page's strip and in the pinned copy. */
-    private void showTabs() {
-        fillTabs(tabs, tabScroll);
-        fillTabs(stickyTabs, stickyScroll);
-    }
-
-    private void fillTabs(LinearLayout row, HorizontalScrollView strip) {
-        row.removeAllViews();
-        View openTab = null;
-        for (int i = 0; i < sections.length; ++i) {
-            final int id = sections[i];
-            final boolean open = id == menu.section();
-            final int color = open ? Ui.TEXT : SettingsMenu.risky(id) ? Sheet.WARNING_TEXT : Ui.SECONDARY;
-            final LinearLayout tab = new LinearLayout(this);
-            tab.setOrientation(LinearLayout.HORIZONTAL);
-            tab.setGravity(Gravity.CENTER);
-            tab.setPadding(dp(16), dp(13), dp(18), dp(13));
-            tab.setMinimumHeight(dp(48));
-            tab.setBackground(Ui.touchBox(this, open ? Ui.ACTIVE : Ui.SURFACE, open ? Ui.DANGER_BORDER : Ui.BORDER, 8));
-            tab.addView(Ui.icon(this, SettingsMenu.icon(id), color, 19));
-            final TextView name = Ui.text(this, SettingsMenu.name(id), 14, color);
-            name.setTypeface(open ? Typeface.DEFAULT_BOLD : Ui.MEDIUM);
-            name.setSingleLine(true);
-            final LinearLayout.LayoutParams beside = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            beside.leftMargin = dp(8);
-            tab.addView(name, beside);
-            if (SettingsMenu.disabled(id)) {
-                tab.setAlpha(0.35f);
-                tab.setEnabled(false);
-            } else {
-                tab.setClickable(true);
-                tab.setOnClickListener(v -> selectSection(id, false));
-            }
-            final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            params.leftMargin = i == 0 ? 0 : dp(8);
-            row.addView(tab, params);
-            if (open) openTab = tab;
-        }
-        // The open tab is brought to the middle of the strip.
-        final View target = openTab;
-        if (target != null) {
-            strip.post(() -> strip.smoothScrollTo(
-                    Math.max(0, target.getLeft() + row.getPaddingLeft() - (strip.getWidth() - target.getWidth()) / 2), 0));
-        }
-    }
-
-    /** The pinned strip shows once the page's own strip has scrolled under the top. */
-    private void updateSticky() {
-        if (stickyBar == null || tabAnchor == null) return;
-        final boolean pinned = scroll.getScrollY() > tabAnchor.getTop();
-        stickyBar.setVisibility(pinned ? View.VISIBLE : View.GONE);
-    }
-
-    /**
-     * Opens a section from its top. Scrolled down, the page stops with the strip pinned at the top; from
-     * a chip at the top (`reveal`) it scrolls there too, so the section opened is in view.
-     */
-    private void selectSection(int section, boolean reveal) {
-        menu.show(section);
-        showTabs();
-        scroll.post(() -> {
-            final int top = tabAnchor.getTop();
-            if (reveal || scroll.getScrollY() > top) scroll.scrollTo(0, top);
-            updateSticky();
-        });
-    }
-
-    /** The launcher's own System rows: the game file, updates, network play, the project. */
-    private void systemRows(SettingsMenu rows) {
-        final boolean ready = AppFiles.gameReady(this);
-        final boolean changed = ready && AppFiles.discDifferences(AppFiles.gameDir(this)) != null;
-        rows.actionRow(Tr.t("Game File"), changed ? Tr.t("Loaded (RBSJ08), not the original disc")
-                        : ready ? Tr.t("Loaded (RBSJ08)") : Tr.t("Your ISO or RVZ (RBSJ08)"),
-                ready ? Tr.t("Change") : Tr.t("Choose"), this::pickDisc);
-        rows.actionRow(updating ? Tr.t("Checking…") : Tr.t("Check for Updates"),
-                Tr.t("Installed: ") + Updater.displayVersion(this), updating ? null : Tr.t("Check"),
-                () -> checkForUpdates(false));
-        rows.toggleRow(Tr.t("Auto Update"), BuildConfig.ONLINE_UPDATES ? Tr.t("Update on launch")
-                        : Tr.t("Updates are sent by hand for now."),
-                settings.autoUpdate(), BuildConfig.ONLINE_UPDATES, on -> settings.setAutoUpdate(on));
-        rows.reportRows(gameRunning());
-        final LinearLayout lan = rows.card(Tr.t("Tailscale & LAN Devices"), Tr.t("Coming soon"), null, false, false);
-        lan.setClickable(false);
-        rows.actionRow(Tr.t("Project page on GitHub"), PROJECT_URL.replace("https://", ""), Tr.t("Open"),
-                () -> openWeb(PROJECT_URL));
+        if (!handleIntent(getIntent())) main.post(this::next);
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        restartGameIfAsked(intent);
+        setIntent(intent);
+        handleIntent(intent);
     }
+
+    /** What the game asked for (restart, new game file, update check). False: an ordinary start. */
+    private boolean handleIntent(Intent intent) {
+        if (intent == null) return false;
+        if (intent.getBooleanExtra(EXTRA_RESTART_GAME, false)) {
+            intent.removeExtra(EXTRA_RESTART_GAME);
+            checked = notesDone = warned = true;
+            launched = true;
+            showState(Tr.t("Restarting the game…"));
+            // The old game process ends as its activity finishes: open the new one once it is gone.
+            main.postDelayed(this::openGame, 700);
+            return true;
+        }
+        final String action = intent.getStringExtra(EXTRA_ACTION);
+        if (action == null) return false;
+        intent.removeExtra(EXTRA_ACTION);
+        checked = notesDone = true;
+        launched = false;
+        if (ACTION_DISC.equals(action)) {
+            warned = false;
+            endGame();
+            refresh();
+            pickDisc();
+        } else if (ACTION_IMPORT_SAVE.equals(action)) {
+            // The game's process ends first, so it cannot write over the save being put in.
+            warned = true;
+            final String path = intent.getStringExtra(EXTRA_FILE);
+            final Runnable done = () -> {
+                launched = false;
+                refresh();  // Play, under the outcome
+            };
+            launched = true;  // no button while it works
+            refresh();
+            if (path != null) SaveData.importFile(this, new File(path), this::endGame, done);
+            else SaveData.undoLastImport(this, this::endGame, done);
+        } else if (ACTION_UPDATE.equals(action)) {
+            warned = true;
+            refresh();
+            afterCheck = this::launch;
+            checkForUpdates(false);
+        }
+        return true;
+    }
+
+    /**
+     * The next thing before the game: each step that has to wait (a sheet, the network, the file
+     * browser) calls this again when it is done. Opens the game once nothing is left.
+     */
+    private void next() {
+        if (launched || isFinishing()) return;
+        refresh();
+        if (settings.betaEnded() != null) {
+            showBetaEnded();
+            return;
+        }
+        if (requiredUpdate != null) {
+            requireUpdate(requiredUpdate);
+            return;
+        }
+        if (!AppFiles.hasFileAccess(this)) {
+            if (accessSheet == null && !waitingPlayAccess) requireAccess();
+            return;
+        }
+        if (!checked) {
+            if (!updating) {
+                afterCheck = () -> {
+                    checked = true;
+                    next();
+                };
+                checkForUpdates(true);
+                // No answer in time (no network): play now, the next start checks again.
+                main.postDelayed(() -> {
+                    if (!checked && updating) finishCheck();
+                }, UPDATE_WAIT_MS);
+            }
+            return;
+        }
+        if (!notesDone) {
+            notesDone = true;
+            if (ReleaseNotes.showIfNew(this, settings, this::next)) return;
+        }
+        if (importing) return;
+        if (!AppFiles.gameReady(this)) {
+            // The first start: the game file, once.
+            pickDisc();
+            return;
+        }
+        if (!warned) {
+            warned = true;
+            final Runnable gpuThenPlay = () -> {
+                if (!warnOldGpu(this::launch)) launch();
+            };
+            if (!warnChangedDisc(gpuThenPlay)) gpuThenPlay.run();
+            return;
+        }
+        launch();
+    }
+
+    /** Into the game; this screen goes. */
+    private void launch() {
+        if (launched) return;
+        launched = true;
+        showState(Tr.t("Starting…"));
+        openGame();
+    }
+
+    private void openGame() {
+        // A game waiting in the background comes back; otherwise a new one starts.
+        startActivity(new Intent(this, GameActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        finish();
+        overridePendingTransition(0, 0);
+    }
+
+    // --- the page: the title, one line of state, and one button for when the player must act -------
+
+    private View page() {
+        final LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER);
+        page.setBackgroundColor(Ui.BG);
+        page.setPadding(dp(24), dp(24), dp(24), dp(24));
+        final TextView title = text("Sengoku BASARA 2 Heroes", 22);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        page.addView(title, matchWidth(0));
+        final TextView version = text(Tr.t("Basara ") + versionText(), 13);
+        version.setTextColor(FAINT);
+        page.addView(version, matchWidth(dp(4)));
+        status = text("", 14);
+        status.setTextColor(MUTED);
+        page.addView(status, matchWidth(dp(22)));
+        primary = Ui.button(this, R.drawable.ic_folder, Tr.t("Choose Game File"), Ui.PRIMARY, v -> onPrimary());
+        final LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(260),
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        buttonParams.topMargin = dp(16);
+        page.addView(primary, buttonParams);
+        primaryLabel = findLabel(primary);
+        primary.setVisibility(View.GONE);
+        page.setOnApplyWindowInsetsListener((v, insets) -> {
+            final android.graphics.Insets bars = SystemBars.bars(insets, true);
+            v.setPadding(bars.left + dp(24), bars.top + dp(24), bars.right + dp(24), bars.bottom + dp(24));
+            return SystemBars.consumed(insets);
+        });
+        return page;
+    }
+
+    private static TextView findLabel(LinearLayout button) {
+        for (int i = button.getChildCount() - 1; i >= 0; --i) {
+            if (button.getChildAt(i) instanceof TextView) return (TextView) button.getChildAt(i);
+        }
+        return null;
+    }
+
+    /** The button under the state line: choose the game file, or play once one is there. */
+    private void onPrimary() {
+        if (importing) return;
+        if (AppFiles.gameReady(this)) {
+            warned = true;  // the notices were given; the player chose to go on
+            launched = false;
+            next();
+        } else {
+            pickDisc();
+        }
+    }
+
+    private void showState(String text) {
+        if (status != null) status.setText(text);
+    }
+
+    private void refresh() {
+        if (status == null) return;
+        final boolean present = AppFiles.hasGameData(this);
+        final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
+        final boolean ready = present && problem == null;
+        if (importing) {
+            showState(Tr.t("Loading your game…"));
+        } else if (!present) {
+            showState(Tr.t("Choose your own ISO or RVZ of the game (Japan, RBSJ08). It is unpacked once, "
+                    + "about 4 GB; afterwards the app goes straight into the game."));
+        } else if (problem != null) {
+            showState(Tr.t("The game can't be played. ") + problem);
+        } else if (updating) {
+            showState(Tr.t("Checking for updates…"));
+        } else {
+            showState("RBSJ08 • " + Tr.t("Ready to play"));
+        }
+        // Shown only when the player has to act: no game yet, or a notice was put away.
+        final boolean act = !importing && !updating && !launched && (!ready || warned);
+        primary.setVisibility(act ? View.VISIBLE : View.GONE);
+        if (primaryLabel != null) primaryLabel.setText(ready ? Tr.t("Play") : Tr.t("Choose Game File"));
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (waitingUpdate != null) {
+            outState.putBundle(STATE_WAITING_UPDATE, waitingUpdate.toBundle());
+        }
+        outState.putBoolean(STATE_WAITING_FILE_ACCESS, waitingFileAccess);
+        outState.putBoolean(STATE_WAITING_PLAY_ACCESS, waitingPlayAccess);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        showBetaEnded();
+        DevTools.checkExpired(this);
+        // The game died (maybe before its own log opened): say why and where the report is.
+        final String crash = CrashReport.checkLastGameExit(this);
+        if (crash != null) {
+            Toast.makeText(this, "The game closed unexpectedly: " + crash, Toast.LENGTH_LONG).show();
+        }
+        // A custom GPU driver that failed or crashed the last start is switched back to the system one.
+        if (gameProcess() == 0) {
+            final String driver = GpuDrivers.checkLastStart(this, new AppSettings(this));
+            if (driver != null) Toast.makeText(this, driver, Toast.LENGTH_LONG).show();
+        }
+        // Back from "Allow from this source": carry on with the update that was waiting for it.
+        if (waitingUpdate != null && Updater.canInstall(this)) {
+            final Updater.Release release = waitingUpdate;
+            waitingUpdate = null;
+            startUpdate(release);
+        }
+        // Back from "All files access".
+        if (waitingFileAccess) {
+            waitingFileAccess = false;
+            if (AppFiles.hasFileAccess(this)) {
+                browseDisc();
+            }
+        }
+        if (waitingPlayAccess) {
+            waitingPlayAccess = false;
+            next();
+        }
+    }
+
+    // --- the game's process ------------------------------------------------------------------------
 
     /** The pid of the game's process (":game") while it runs, else 0. */
     private int gameProcess() {
@@ -526,7 +370,7 @@ public final class LauncherActivity extends Activity {
                 if (gameTaskAlive(am)) return info.pid;
                 // Swiped from the recent apps: the task is gone, but some systems (MIUI) leave the
                 // process behind with no game in it. Its runtime has already started once, so it must
-                // not be reused; end it and offer a fresh Play.
+                // not be reused; end it and start fresh.
                 CrashReport.endedOnPurpose(this, info.pid);
                 android.os.Process.killProcess(info.pid);
                 endedGame = info.pid;
@@ -536,7 +380,7 @@ public final class LauncherActivity extends Activity {
         return 0;
     }
 
-    /** A task of this app still holds the game (paused behind the launcher, or in a task of its own). */
+    /** A task of this app still holds the game (paused behind this screen, or in a task of its own). */
     private boolean gameTaskAlive(ActivityManager am) {
         final String game = GameActivity.class.getName();
         for (ActivityManager.AppTask task : am.getAppTasks()) {
@@ -563,114 +407,71 @@ public final class LauncherActivity extends Activity {
             CrashReport.endedOnPurpose(this, pid);
             android.os.Process.killProcess(pid);
             endedGame = pid;
-            refresh();
         }
     }
 
-    /** Ends a running game (if any) and restarts the app into the launcher, so settings read once at start apply. */
-    boolean restartGame() {
-        endGame();
-        status.setText(Tr.t("Restarting..."));
-        final Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
-        if (launch == null) return false;
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        main.postDelayed(() -> {
-            startActivity(launch);
-            android.os.Process.killProcess(android.os.Process.myPid());
-        }, 500);
+    // --- notices before playing --------------------------------------------------------------------
+
+    /**
+     * When the game file's archives aren't the original disc's sizes, says so once for those sizes,
+     * with Play Anyway running `play`. True when the warning is showing (so the caller waits for it).
+     */
+    private boolean warnChangedDisc(Runnable play) {
+        final File game = AppFiles.gameDir(this);
+        final String differences = AppFiles.discDifferences(game);
+        if (differences == null) return false;
+        final SharedPreferences prefs = getSharedPreferences("disc_check", MODE_PRIVATE);
+        final String signature = AppFiles.discSignature(game);
+        if (signature.equals(prefs.getString("warned", null))) return false;
+        prefs.edit().putString("warned", signature).apply();
+        new Sheet(this, Tr.t("This isn't the original disc"),
+                Tr.t("The game file's archives differ from the original RBSJ08 disc, so the game may stop "
+                        + "after the first screen or crash later. A dump of your own disc avoids this.")
+                        + "\n\n" + differences)
+                .action(Tr.t("Play Anyway"), null, true, false, play)
+                .action(Tr.t("Choose Another File"), null, false, false, this::pickDisc)
+                .onCancel(this::refresh)
+                .show();
+        refresh();
         return true;
     }
 
-    /** Network play: the game asked to be started again into a LAN session. */
-    private void restartGameIfAsked(Intent intent) {
-        if (intent == null || !intent.getBooleanExtra(EXTRA_RESTART_GAME, false)) {
-            return;
-        }
-        intent.removeExtra(EXTRA_RESTART_GAME);
-        status.setText(Tr.t("Starting the LAN game..."));
-        main.postDelayed(() -> startActivity(new Intent(this, GameActivity.class)), 700);
-    }
-
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
-        if (waitingUpdate != null) {
-            outState.putBundle(STATE_WAITING_UPDATE, waitingUpdate.toBundle());
-        }
-        outState.putBoolean(STATE_WAITING_FILE_ACCESS, waitingFileAccess);
-        outState.putBoolean(STATE_WAITING_PLAY_ACCESS, waitingPlayAccess);
-        if (menu != null) outState.putInt(STATE_SECTION, menu.section());
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refresh();
-        showBetaEnded();
-        DevTools.checkExpired(this);
-        // The game died (maybe before its own log opened): say why and where the report is.
-        final String crash = CrashReport.checkLastGameExit(this);
-        if (crash != null) {
-            Toast.makeText(this, "The game closed unexpectedly: " + crash, Toast.LENGTH_LONG).show();
-        }
-        // A custom GPU driver that failed or crashed the last start is switched back to the system one.
-        if (gameProcess() == 0) {
-            final String driver = GpuDrivers.checkLastStart(this, new AppSettings(this));
-            if (driver != null) Toast.makeText(this, driver, Toast.LENGTH_LONG).show();
-        }
-        // Back from "Allow from this source": carry on with the update that was waiting for it.
-        if (waitingUpdate != null && Updater.canInstall(this)) {
-            final Updater.Release release = waitingUpdate;
-            waitingUpdate = null;
-            startUpdate(release);
-        }
-        // Back from "All files access".
-        if (waitingFileAccess) {
-            waitingFileAccess = false;
-            if (AppFiles.hasFileAccess(this)) {
-                browseDisc();
-            }
-        }
-        // Right after install (and until it is given): "All files access" is required, the logs,
-        // saves and textures live in /sdcard/Basara2Heroes[-Beta].
-        if (!AppFiles.hasFileAccess(this) && !waitingFileAccess && !waitingPlayAccess && accessSheet == null) {
-            requireAccess(false);
-        }
-        if (waitingPlayAccess) {
-            waitingPlayAccess = false;
-            if (AppFiles.hasFileAccess(this) && AppFiles.gameReady(this)) {
-                startActivity(new Intent(this, GameActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-            }
-        }
+    /**
+     * Adreno 5xx on Android 10 (DeviceProfile.oldAdreno5): not supported, said once, with Play Anyway
+     * running `play` on OpenGL ES. True when the notice is showing.
+     */
+    private boolean warnOldGpu(Runnable play) {
+        final String gpu = settings.gpuName();
+        if (!DeviceProfile.oldAdreno5(gpu)) return false;
+        final SharedPreferences prefs = getSharedPreferences("gpu_check", MODE_PRIVATE);
+        if (gpu.equals(prefs.getString("warned", null))) return false;
+        prefs.edit().putString("warned", gpu).apply();
+        new Sheet(this, Tr.t("This GPU isn't supported"),
+                gpu + Tr.t(" on Android 10 has a Vulkan driver that stops the game on its first screens. "
+                        + "The game tries OpenGL ES instead, which may be slower or still close."))
+                .action(Tr.t("Play Anyway"), null, true, false, play)
+                .action(Tr.t("Cancel"), null, false, false, this::refresh)
+                .onCancel(this::refresh)
+                .show();
+        return true;
     }
 
     /**
-     * The log always goes to /sdcard/Basara2Heroes[-Beta] (AppFiles.newRunLogDir), which needs "All files
-     * access": without it the game does not start, and this asks for it first.
+     * Asks for "All files access" and cannot be dismissed: the log, saves and textures live in
+     * /sdcard/Basara2Heroes[-Beta]. The start carries on once it is given.
      */
-    private boolean requirePlayAccess() {
-        if (AppFiles.hasFileAccess(this)) return true;
-        requireAccess(true);
-        return false;
-    }
-
-    /**
-     * Asks for "All files access" and cannot be dismissed. forPlay: Play asked, and the game starts
-     * once it is given; otherwise the launcher asks at start (after install).
-     */
-    private void requireAccess(boolean forPlay) {
+    private void requireAccess() {
         if (accessSheet != null) accessSheet.dismiss();
         final Sheet sheet = new Sheet(this, Tr.t("Allow file access first"), Tr.t("The game writes its log to the ")
                 + AppFiles.HOME
                 + Tr.t(" folder on your phone's storage, so problems can be reported."))
                 .step("1", Tr.t("Open Settings"), AppFiles.fileAccessStep())
-                .step("2", Tr.t("Come back"), forPlay ? Tr.t("The game starts by itself.") : Tr.t("Then return to this app."))
+                .step("2", Tr.t("Come back"), Tr.t("The game starts by itself."))
                 .cancelable(false);
         accessSheet = sheet;
         sheet.action(Tr.t("Open Settings"), null, true, false, () -> {
                     accessSheet = null;
-                    waitingPlayAccess = forPlay;
+                    waitingPlayAccess = true;
                     if (android.os.Build.VERSION.SDK_INT < 30) {
                         AppFiles.requestLegacyFileAccess(this);
                         return;
@@ -691,17 +492,32 @@ public final class LauncherActivity extends Activity {
         sheet.show();
     }
 
-    /** A short message in the Sheet look, with one button. */
-    private void message(String title, String body) {
-        new Sheet(this, title, body).action(Tr.t("OK"), null, true, false, null).show();
+    /** Legacy storage permission (Android 10): carry on once answered. */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (waitingPlayAccess) {
+            waitingPlayAccess = false;
+            next();
+        } else if (waitingFileAccess && AppFiles.hasFileAccess(this)) {
+            waitingFileAccess = false;
+            browseDisc();
+        }
+    }
+
+    /** A short message in the Sheet look, with one button; `then` runs when it goes (may be null). */
+    private void message(String title, String body, Runnable then) {
+        final Sheet sheet = new Sheet(this, title, body).action(Tr.t("OK"), null, true, false, null);
+        if (then != null) sheet.onDismiss(then);
+        sheet.show();
     }
 
     /** A determinate progress bar in the accent colour. */
     private ProgressBar progressBar() {
         final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setProgressTintList(ColorStateList.valueOf(ACCENT));
-        bar.setProgressBackgroundTintList(ColorStateList.valueOf(RAISED));
-        bar.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        bar.setProgressTintList(ColorStateList.valueOf(Ui.GRAB));  // ImGui: the grab's blue on a frame
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(Ui.FRAME));
+        bar.setIndeterminateTintList(ColorStateList.valueOf(Ui.GRAB));
         bar.setMax(1000);
         return bar;
     }
@@ -720,24 +536,21 @@ public final class LauncherActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            hideSystemBars();
-        }
-    }
-
-    /** The page is drawn edge to edge under visible system bars (a dialog may have hidden them). */
-    private void hideSystemBars() {
-        SystemBars.show(getWindow());
-    }
-
-    /** While an update check runs, System says so. */
-    private void showChecking() {
-        if (menu != null && menu.section() == SettingsMenu.SYSTEM) menu.show(SettingsMenu.SYSTEM);
+        if (hasFocus) SystemBars.show(getWindow());
     }
 
     // --- updates -------------------------------------------------------------------------------
 
-    /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
+    /** Runs what follows the update check, once. */
+    private void finishCheck() {
+        final Runnable after = afterCheck;
+        afterCheck = null;
+        updating = false;
+        refresh();
+        if (after != null) after.run();
+    }
+
+    /** The latest GitHub release: installs it when newer. `automatic`: at app start, quiet unless there is news. */
     private void checkForUpdates(boolean automatic) {
         if (BuildConfig.BETA) {
             checkBeta(automatic);  // the lock is checked even while updates are sent by hand
@@ -747,19 +560,17 @@ public final class LauncherActivity extends Activity {
             if (!automatic) {
                 message(Tr.t("Updates are sent by hand for now"),
                         Tr.t("New versions come straight from the developer. Install the new APK over this one; "
-                                + "your settings and saves stay."));
+                                + "your settings and saves stay."), this::finishCheck);
+            } else {
+                finishCheck();
             }
-            return;
-        }
-        if (BuildConfig.BETA) {
-            checkBeta(automatic);  // the Beta isn't updated: it ends, and testers move to the release
             return;
         }
         if (updating) {
             return;
         }
         updating = true;
-        showChecking();
+        refresh();
         new Thread(() -> {
             Updater.Release found = null;
             String failure = null;
@@ -771,11 +582,16 @@ public final class LauncherActivity extends Activity {
             final Updater.Release release = found;
             final String error = failure;
             main.post(() -> {
+                if (isFinishing()) return;
+                if (automatic && afterCheck == null && release != null && !release.required(Updater.installedVersion(this))) {
+                    return;  // answered after the start went on without it
+                }
                 updating = false;
-                showChecking();
+                refresh();
                 final String installed = Updater.installedVersion(this);
                 if (release != null && release.apkUrl != null && Updater.isNewer(release.version, installed)) {
                     if (release.required(installed)) {
+                        afterCheck = null;
                         requireUpdate(release);
                     } else if (!automatic || settings.autoUpdate()) {
                         startUpdate(release);
@@ -784,26 +600,32 @@ public final class LauncherActivity extends Activity {
                         new Sheet(this, Tr.t("Basara ") + release.version + Tr.t(" is available"),
                                 Tr.t("Your saves and settings stay."))
                                 .action(Tr.t("Update"), null, true, false, () -> startUpdate(release))
-                                .action(Tr.t("Not Now"), null, false, false, null)
+                                .action(Tr.t("Not Now"), null, false, false, this::finishCheck)
+                                .onCancel(this::finishCheck)
                                 .show();
+                    } else {
+                        finishCheck();
                     }
                 } else if (!automatic) {
                     if (error != null) {
-                        message(Tr.t("Couldn't check for updates"), error);
+                        message(Tr.t("Couldn't check for updates"), error, this::finishCheck);
                     } else if (release == null || release.apkUrl == null) {
-                        message(Tr.t("No Android download"), Tr.t("The latest release has no Android download."));
+                        message(Tr.t("No Android download"), Tr.t("The latest release has no Android download."),
+                                this::finishCheck);
                     } else {
                         new Sheet(this, Tr.t("You're up to date"), Tr.t("Basara ") + installed + Tr.t(" is the latest version."))
                                 .action(Tr.t("OK"), null, true, false, null)
-                                .action(Tr.t("What's New"), null, false, false, () -> ReleaseNotes.showAll(this))
+                                .onDismiss(this::finishCheck)
                                 .show();
                     }
+                } else {
+                    finishCheck();
                 }
             });
         }, "update-check").start();
     }
 
-    /** An update this version must take: Play waits for it, and its sheet can't be put away. */
+    /** An update this version must take: the game waits for it, and its sheet can't be put away. */
     private Updater.Release requiredUpdate;
 
     private void requireUpdate(Updater.Release release) {
@@ -829,7 +651,7 @@ public final class LauncherActivity extends Activity {
                                 Uri.parse("package:" + getPackageName())));
                     });
             if (required) allow.cancelable(false);
-            else allow.action(Tr.t("Not Now"), null, false, false, null);
+            else allow.action(Tr.t("Not Now"), null, false, false, this::finishCheck).onCancel(this::finishCheck);
             allow.show();
             return;
         }
@@ -859,8 +681,8 @@ public final class LauncherActivity extends Activity {
             main.post(() -> {
                 if (error != null) {
                     sheet.dismiss();
-                    message(Tr.t("The update failed"), error);
-                    if (requiredUpdate != null) requireUpdate(requiredUpdate);
+                    message(Tr.t("The update failed"), error,
+                            requiredUpdate != null ? () -> requireUpdate(requiredUpdate) : this::finishCheck);
                     return;
                 }
                 // The sheet stays up while Android installs: on success it ends this app; if the
@@ -868,16 +690,16 @@ public final class LauncherActivity extends Activity {
                 bar.setIndeterminate(false);
                 bar.setProgress(1000);
                 label.setText(Tr.t("Installing… Basara closes when the update is in."));
-                status.setText(Tr.t("Installing Basara ") + release.version + "…");
+                showState(Tr.t("Installing Basara ") + release.version + "…");
                 installing = sheet;
-                afterInstall = requiredUpdate != null ? () -> requireUpdate(requiredUpdate) : null;
+                afterInstall = requiredUpdate != null ? () -> requireUpdate(requiredUpdate) : this::finishCheck;
             });
         }, "update-download").start();
     }
 
     /** The update sheet while Android installs, so a failed or cancelled install can close it. */
     private static Sheet installing;
-    /** What follows a failed or cancelled install: the required update's sheet again. */
+    /** What follows a failed or cancelled install: the required update's sheet again, or the game. */
     private static Runnable afterInstall;
 
     /** UpdateReceiver: the install failed or was cancelled. Main thread. */
@@ -886,7 +708,7 @@ public final class LauncherActivity extends Activity {
             try {
                 installing.dismiss();
             } catch (RuntimeException ignored) {
-                // the launcher went away meanwhile
+                // the screen went away meanwhile
             }
             installing = null;
         }
@@ -896,12 +718,12 @@ public final class LauncherActivity extends Activity {
             try {
                 after.run();
             } catch (RuntimeException ignored) {
-                // the launcher went away meanwhile
+                // the screen went away meanwhile
             }
         }
     }
 
-        // --- Beta ----------------------------------------------------------------------------------
+    // --- Beta ----------------------------------------------------------------------------------
 
     /** Beta: may it still run (BetaGate)? `automatic`: at app start, quiet unless it has ended. */
     private void checkBeta(boolean automatic) {
@@ -909,7 +731,7 @@ public final class LauncherActivity extends Activity {
             return;
         }
         updating = true;
-        showChecking();
+        refresh();
         new Thread(() -> {
             String ended = null;
             String failure = null;
@@ -924,28 +746,34 @@ public final class LauncherActivity extends Activity {
             final String error = failure;
             final Updater.Release beta = found;
             main.post(() -> {
+                if (isFinishing()) return;
                 updating = false;
-                showChecking();
+                refresh();
                 if (reason != null) {
+                    afterCheck = null;
                     settings.setBetaEnded(reason);
                     showBetaEnded();
+                } else if (automatic && afterCheck == null) {
+                    // answered after the start went on without it
                 } else if (beta != null && beta.beta > Updater.installedBeta(this)) {
                     // Every Beta updates itself, at start and from Check for Updates.
                     startUpdate(beta);
                 } else if (!automatic) {
                     if (error != null) {
-                        message(Tr.t("Couldn't check for updates"), error);
+                        message(Tr.t("Couldn't check for updates"), error, this::finishCheck);
                     } else if (!BuildConfig.ONLINE_UPDATES) {
                         message(Tr.t("Updates are sent by hand for now"),
                                 Tr.t("New versions come straight from the developer. Install the new APK over this one; "
-                                        + "your settings and saves stay."));
+                                        + "your settings and saves stay."), this::finishCheck);
                     } else {
                         new Sheet(this, Tr.t("You're up to date"), "Basara " + Updater.displayVersion(this)
                                 + Tr.t(" is the latest Beta. Thanks for testing!"))
                                 .action(Tr.t("OK"), null, true, false, null)
-                                .action(Tr.t("What's New"), null, false, false, () -> ReleaseNotes.showAll(this))
+                                .onDismiss(this::finishCheck)
                                 .show();
                     }
+                } else {
+                    finishCheck();
                 }
             });
         }, "beta-check").start();
@@ -960,6 +788,7 @@ public final class LauncherActivity extends Activity {
             return;
         }
         betaEndedShowing = true;
+        endGame();
         new Sheet(this, Tr.t("The Beta has ended"), reason)
                 .paragraph(Tr.t("Thanks for testing! Download Basara ") + BetaGate.RELEASE_VERSION
                         + Tr.t(" or later from the project's Releases page. It installs as its own app: load your "
@@ -973,191 +802,11 @@ public final class LauncherActivity extends Activity {
                 .show();
     }
 
-    /** A game waits in the background (left for the Start Menu). */
-    boolean gameRunning() { return gameProcess() != 0; }
-
-    private void refresh() {
-        final boolean present = AppFiles.hasGameData(this);
-        final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
-        final boolean ready = present && problem == null;
-        final boolean running = ready && gameRunning();
-        if (!present) {
-            showStatus(Tr.t("No game loaded yet"), AMBER);
-        } else if (problem != null) {
-            showStatus(Tr.t("The game can't be played. ") + problem, ACCENT);
-        } else {
-            showStatus(running ? "RBSJ08 • " + Tr.t("Paused in background") : "RBSJ08 • " + Tr.t("Ready to play"),
-                    running ? AMBER : GREEN);
-        }
-        playLabel.setText(ready ? (running ? Tr.t("Continue") : Tr.t("Play")) : Tr.t("Choose Game File"));
-        stop.setVisibility(running ? View.VISIBLE : View.GONE);
-        sessionLine.setText(running ? Tr.t("The game is paused in the background: Continue goes back to it.")
-                : ready ? Tr.t("Settings are saved as you change them.")
-                : Tr.t("Choose your own ISO or RVZ of the game first."));
-        showSummary();
-        if (menu != null) {
-            menu.show(menu.section());
-            showTabs();
-        }
-    }
-
-    /** The "In use" chips, drawn again after any change. */
-    private void showSummary() {
-        settings = new AppSettings(this);  // the settings panel and the game write the same file
-        showConfigStrip();
-        showLowEndCard();
-    }
-
-    /**
-     * On a low-end phone: the Low-End preset's switch and why, above the section tabs. While it is on, the settings it set are held (SettingsMenu dims them); Render
-     * Resolution stays free.
-     */
-    private void showLowEndCard() {
-        if (lowEndBox == null) return;
-        lowEndBox.removeAllViews();
-        if (!lowEndDevice) return;
-        final boolean on = settings.lowEndApplied();
-        // The words on the left, the switch beside them in the middle of the card.
-        final LinearLayout card = new LinearLayout(this);
-        card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setPadding(dp(12), dp(9), dp(10), dp(10));
-        card.setBackground(Ui.touchBox(this, Sheet.WARNING_FILL, Ui.DANGER_BORDER, 8));
-
-        final LinearLayout words = new LinearLayout(this);
-        words.setOrientation(LinearLayout.VERTICAL);
-        final TextView name = Ui.text(this, "⚠ " + Tr.t("Low-End Preset"), 13, Sheet.WARNING_TEXT);
-        name.setTypeface(Typeface.DEFAULT_BOLD);
-        name.setSingleLine(true);
-        words.addView(name, Ui.matchWidth(0));
-        words.addView(Ui.text(this, Tr.t("This phone's GPU or RAM is below what the game needs for a steady "
-                + "60 fps. The Low-End Preset trades sharpness for speed."), 11.5f, Ui.SECONDARY), Ui.matchWidth(dp(2)));
-        card.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        final View toggle = Ui.toggle(this, on);
-        final android.view.ViewGroup.LayoutParams own = toggle.getLayoutParams();
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                own != null ? own.width : LinearLayout.LayoutParams.WRAP_CONTENT,
-                own != null ? own.height : LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.leftMargin = dp(12);
-        params.gravity = Gravity.CENTER_VERTICAL;
-        card.addView(toggle, params);
-        card.setClickable(true);
-        card.setOnClickListener(v -> setLowEnd(!on));
-        lowEndBox.addView(card, Ui.matchWidth(dp(10)));
-    }
-
-    private void setLowEnd(boolean on) {
-        final AppSettings now = new AppSettings(this);
-        if (on) now.applyLowEnd(DeviceProfile.lowEndValues(now.gpuName()));
-        else now.undoLowEnd();
-        try {
-            AppFiles.writeConfig(this, now);
-        } catch (Exception e) {
-            android.util.Log.e("Basara", "could not save the settings", e);
-        }
-        if (gameRunning()) {
-            Toast.makeText(this, Tr.t("Applies when the game starts again."), Toast.LENGTH_SHORT).show();
-        }
-        showSummary();
-        if (menu != null) menu.show(menu.section());
-    }
-
-    private void showConfigStrip() {
-        configStrip.removeAllViews();
-        final String[] aspects = {"4:3", "16:9", Tr.t("Fill")};
-        final String[] detail = {Tr.t("Textures Original"), Tr.t("Textures Sharp"), Tr.t("Textures Sharpest")};
-        stripChip(AppSettings.resolutionLabel(settings.resolutionScale()), SettingsMenu.DISPLAY, false);
-        stripChip(aspects[Math.max(0, Math.min(2, settings.aspectMode()))], SettingsMenu.DISPLAY, false);
-        stripChip(Tr.t(SettingsMenu.UPSCALERS[settings.fsr()]).equals(Tr.t("Off")) ? Tr.t("Upscaler Off")
-                : Tr.t(SettingsMenu.UPSCALERS[settings.fsr()]), SettingsMenu.GRAPHICS, false);
-        stripChip(detail[settings.textureFilter()], SettingsMenu.GRAPHICS, false);
-        if (!settings.gpuDriver().isEmpty()) stripChip(Tr.t("Custom GPU driver"), SettingsMenu.GRAPHICS, false);
-        stripChip(settings.fpsLock30() ? Tr.t("30 FPS Lock")
-                : Tr.t("Frameskip ") + (settings.frameskip() ? Tr.t("Auto") : Tr.t("Off")), SettingsMenu.PERFORMANCE, false);
-        if (settings.showFps()) stripChip(Tr.t("Overlay"), SettingsMenu.DISPLAY, false);
-        stripChip(Tr.t("Touch ") + (settings.touchControls() ? Tr.t("On") : Tr.t("Off")), SettingsMenu.CONTROLS, false);
-        if (settings.anyCheat()) stripChip(Tr.t("Cheats on"), SettingsMenu.CHEATS, true);
-        // Each chip opens the section its setting is in.
-        if (settings.renderer() != 0) stripChip(AppSettings.rendererName(settings.renderer()), SettingsMenu.GRAPHICS, false);
-        if (settings.hdTextures() != 0) stripChip(Tr.t("HD Textures"), SettingsMenu.TEXTURES, false);
-        if (settings.customTextures()) stripChip(settings.dumpTextures() ? Tr.t("Custom + Dump Textures")
-                : Tr.t("Custom Textures"), SettingsMenu.TEXTURES, false);
-        if (settings.gxThread()) stripChip(Tr.t("GX Thread"), SettingsMenu.PERFORMANCE, false);
-        if (settings.dynamicResolution()) stripChip(Tr.t("Dynamic Resolution"), SettingsMenu.PERFORMANCE, false);
-        if (settings.thermalControl()) stripChip(Tr.t("Thermal Control"), SettingsMenu.PERFORMANCE, false);
-        if (settings.lowEndApplied()) stripChip(Tr.t("Low-End Preset"), SettingsMenu.PERFORMANCE, false);
-        if (settings.displayLines() > 0) stripChip(settings.displayLines() + "p", SettingsMenu.DISPLAY, false);
-        if (settings.textureKeyReport()) stripChip(Tr.t("Texture Keys"), SettingsMenu.TEXTURES, false);
-        final int testing = DevTools.activeEnvCount();
-        if (testing > 0) {
-            stripChip(String.format(java.util.Locale.ROOT, Tr.t("Testing options (%d)"), testing), SettingsMenu.SYSTEM, true);
-        }
-    }
-
-    private void stripChip(String label, int section, boolean warning) {
-        final LinearLayout chip = new LinearLayout(this);
-        chip.setGravity(Gravity.CENTER_VERTICAL);
-        chip.setPadding(dp(8), dp(4), dp(9), dp(4));
-        chip.setBackground(Ui.touchBox(this, Ui.SURFACE, warning ? Sheet.WARNING_TEXT : Ui.BORDER, 6));
-        final View dot = new View(this);
-        final GradientDrawable round = new GradientDrawable();
-        round.setShape(GradientDrawable.OVAL);
-        round.setColor(warning ? Ui.WARNING : Ui.ACCENT);
-        dot.setBackground(round);
-        chip.addView(dot, new LinearLayout.LayoutParams(dp(5), dp(5)));
-        final TextView text = Ui.text(this, (warning ? "⚠ " : "") + label, 11.5f, warning ? Sheet.WARNING_TEXT : Ui.TEXT);
-        text.setSingleLine(true);
-        final LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        textParams.leftMargin = dp(5);
-        chip.addView(text, textParams);
-        chip.setClickable(true);
-        chip.setOnClickListener(v -> selectSection(section, true));
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.rightMargin = dp(6);
-        configStrip.addView(chip, params);
-    }
-
-    /** Getting Started. */
-    private void showHelp() {
-        new Sheet(this, Tr.t("Getting Started"), Tr.t("Three steps from your disc to the battlefield."))
-                .step("1", Tr.t("Copy your game to the phone"),
-                        Tr.t("An ISO or RVZ of your own Sengoku Basara 2 Heroes disc (Japan, RBSJ08), e.g. in Download."))
-                .step("2", Tr.t("Tap Game File and choose it"),
-                        Tr.t("It is unpacked once (about 4 GB free needed). Afterwards you can delete the ISO or RVZ."))
-                .step("3", Tr.t("Tap Play"),
-                        Tr.t("Swipe Back while playing for the menu: Start Menu, Edit Controls Layout or Quit Game."))
-                .heading(Tr.t("Tips"))
-                .step("?", Tr.t("Slow or choppy?"),
-                        Tr.t("Settings > Display: a lower Render Resolution. Settings > Performance: Frameskip Auto."))
-                .step("?", Tr.t("Turning the camera"),
-                        Tr.t("Drag on the empty right side of the screen, or use the right stick."))
-                .step("?", Tr.t("Saving"),
-                        Tr.t("Save from the game's own menu (各種設定 > セーブ). Your saves stay when the app updates."))
-                .note(Tr.t("Basara ") + versionText())
-                .action(Tr.t("Got it"), null, true, false, null)
-                .action(Tr.t("Project page on GitHub"), null, false, false, () -> openWeb(PROJECT_URL))
-                .show();
-    }
-
-    private void section(LinearLayout column, String title, String body) {
-        final TextView heading = text(title, 20);
-        heading.setGravity(Gravity.START);
-        heading.setTypeface(Typeface.DEFAULT_BOLD);
-        column.addView(heading);
-        final TextView text = text(body, 15);
-        text.setGravity(Gravity.START);
-        text.setTextColor(Color.rgb(200, 206, 212));
-        text.setPadding(0, dp(6), 0, dp(18));
-        column.addView(text);
-    }
-
     private void openWeb(String url) {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
         } catch (ActivityNotFoundException e) {
-            message(Tr.t("Open this page in a browser"), url);
+            message(Tr.t("Open this page in a browser"), url, null);
         }
     }
 
@@ -1178,7 +827,7 @@ public final class LauncherActivity extends Activity {
      * without it the player can allow it, or use the system's picker instead.
      */
     private void pickDisc() {
-        endGame();  // a game still running from the old file must not carry on with the new one
+        refresh();
         if (AppFiles.hasFileAccess(this)) {
             browseDisc();
             return;
@@ -1207,11 +856,8 @@ public final class LauncherActivity extends Activity {
     }
 
     private void browseDisc() {
-        // Basara2Heroes/ISO when the game file is kept there, else Download (where a downloaded one lands).
-        final java.io.File iso = AppFiles.homeSub("ISO");
-        final java.io.File[] games = iso == null ? null : iso.listFiles(f -> f.isFile() && FileBrowser.isGameFile(f));
-        FileBrowser.show(this, games != null && games.length > 0 ? iso : FileBrowser.downloads(),
-                file -> loadGame(Uri.fromFile(file)));
+        // Download, where a downloaded dump lands.
+        FileBrowser.show(this, FileBrowser.downloads(), file -> loadGame(Uri.fromFile(file)));
     }
 
     /**
@@ -1231,13 +877,13 @@ public final class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (SaveData.onResult(this, requestCode, resultCode, data, this::endGame)) return;
         if (requestCode == REQUEST_DISC && resultCode == RESULT_OK && data != null && data.getData() != null) {
             loadGame(data.getData());
         }
     }
 
     private void loadGame(Uri disc) {
+        endGame();  // a game still running from the old file must not carry on with the new one
         final ProgressBar bar = progressBar();
         bar.setIndeterminate(true);
         final TextView label = text(Tr.t("Looking at the game file…"), 14);
@@ -1252,6 +898,8 @@ public final class LauncherActivity extends Activity {
             label.setText(Tr.t("Stopping…"));
         });
         dialog.show();
+        importing = true;
+        refresh();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         new Thread(() -> {
@@ -1275,13 +923,17 @@ public final class LauncherActivity extends Activity {
             }
             final String failure = result;
             main.post(() -> {
+                importing = false;
                 dialog.dismiss();
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 refresh();
                 if (failure != null && !failure.equals(DiscImport.CANCELLED)) {
-                    message(Tr.t("Couldn't load the game"), failure + Tr.t("\n\nNothing was changed."));
+                    message(Tr.t("Couldn't load the game"), failure + Tr.t("\n\nNothing was changed."), null);
                 } else if (failure == null) {
-                    warnChangedDisc(null);
+                    // A new game file: its notices again, then the game.
+                    warned = false;
+                    launched = false;
+                    next();
                 }
             });
         }, "game-import").start();
@@ -1327,13 +979,6 @@ public final class LauncherActivity extends Activity {
         return view;
     }
 
-    /** A 1 px border line between the page's bands. */
-    private View line() {
-        final View view = new View(this);
-        view.setBackgroundColor(Ui.BORDER);
-        return view;
-    }
-
     // The app's colors (Ui), under the names the other screens use.
     static final int ACCENT = Ui.ACCENT;
     static final int SURFACE = Ui.SURFACE;
@@ -1344,14 +989,6 @@ public final class LauncherActivity extends Activity {
     static final int GREEN = Ui.SUCCESS;
     static final int AMBER = Ui.WARNING;
     static final Typeface MEDIUM = Ui.MEDIUM;
-
-    private void showStatus(String text, int color) {
-        status.setText(text);
-        final GradientDrawable dot = new GradientDrawable();
-        dot.setShape(GradientDrawable.OVAL);
-        dot.setColor(color);
-        statusDot.setBackground(dot);
-    }
 
     private LinearLayout.LayoutParams matchWidth(int topMargin) {
         return Ui.matchWidth(topMargin);

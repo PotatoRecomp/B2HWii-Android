@@ -1,18 +1,20 @@
 package com.shiinobu.basara;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.Context;
 import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Environment;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
@@ -22,15 +24,14 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * A plain file explorer for choosing the game file, in the launcher's card style: folders first, then
- * the ISO and RVZ files with their sizes. It reads the storage directly, so it needs "All files access"
- * (Environment.isExternalStorageManager); LauncherActivity asks for it first.
+ * The app's own file explorer, as an ImGui file dialog (the look of the in-game menu): the folder's
+ * path, then a table of its folders ([DIR]) and the files it lists with their sizes, and CANCEL and
+ * OPEN (SAVE HERE when choosing a folder). A tap opens a folder or selects a file; a second tap on the
+ * selected file opens it. It reads the storage directly, so it needs "All files access"
+ * (Environment.isExternalStorageManager); its callers ask for it first.
  */
 final class FileBrowser {
     interface Listener { void onChosen(File file); }
-
-    private static final int FOLDER = LauncherActivity.AMBER;
-    private static final int GAME = LauncherActivity.GREEN;
 
     private final Activity activity;
     private final Listener listener;
@@ -39,10 +40,14 @@ final class FileBrowser {
     private final boolean folderMode;
     private final String emptyText;
     private File current;
+    private File selected;
     private final List<File> roots = new ArrayList<>();
     private final LinearLayout list;
+    private final ScrollView scroll;
     private final TextView path;
-    private final Sheet sheet;
+    private final TextView picked;
+    private final TextView go;
+    private Dialog dialog;  // not final: the Cancel button's lambda is made before it
 
     private FileBrowser(Activity activity, File start, String title, String about,
                         java.util.function.Predicate<File> accept, String emptyText, Listener listener) {
@@ -70,40 +75,68 @@ final class FileBrowser {
         }
         if (roots.isEmpty()) roots.add(Environment.getExternalStorageDirectory());
 
-        final LinearLayout column = new LinearLayout(activity);
-        column.setOrientation(LinearLayout.VERTICAL);
-        path = text("", 13, LauncherActivity.MUTED);
+        final LinearLayout window = new LinearLayout(activity);
+        window.setOrientation(LinearLayout.VERTICAL);
+        window.setBackground(Ui.box(activity, Ui.BG, Ui.BORDER, 0));
+        window.setPadding(1, 1, 1, 1);
+        window.addView(Ui.titleBar(activity, title, null), Ui.matchWidth(0));
+        final LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(10), dp(6), dp(10), dp(8));
+        window.addView(root, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        path = Ui.text(activity, "", 13, Ui.TEXT);
         path.setSingleLine(true);
         path.setEllipsize(TextUtils.TruncateAt.START);
-        path.setPadding(dp(14), dp(8), dp(14), dp(8));
-        path.setBackground(rounded(LauncherActivity.BACKGROUND, dp(14)));
-        column.addView(path);
+        path.setPadding(dp(8), dp(4), dp(8), dp(4));
+        path.setBackgroundColor(Ui.FRAME);
+        root.addView(path, Ui.matchWidth(0));
+        root.addView(columns(Tr.t("Type"), Tr.t("Name").toUpperCase(Locale.ROOT), Tr.t("Size"), Ui.MUTED, 11), Ui.matchWidth(dp(4)));
+        root.addView(Ui.line(activity));
         list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
-        final LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        listParams.topMargin = dp(4);
-        column.addView(list, listParams);
+        scroll = new ScrollView(activity);
+        scroll.setScrollbarFadingEnabled(false);
+        scroll.addView(list);
+        root.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(Ui.line(activity));
 
-        sheet = new Sheet(activity, title, about).view(column);
-        if (folderMode) {
-            // The folder on screen; on the storage list, Download.
-            sheet.action(Tr.t("Save Here"), null, true, false,
-                    () -> listener.onChosen(current != null ? current : downloads()));
+        final LinearLayout footer = new LinearLayout(activity);
+        footer.setGravity(Gravity.CENTER_VERTICAL);
+        picked = Ui.text(activity, "", 11, Ui.MUTED);
+        picked.setSingleLine(true);
+        picked.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        footer.addView(picked, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        footer.addView(button(Tr.t("Cancel"), false, v -> this.dialog.dismiss()), buttonParams());
+        go = button(folderMode ? Tr.t("Save Here") : Tr.t("Open"), true, v -> choose());
+        footer.addView(go, buttonParams());
+        root.addView(footer, Ui.matchWidth(dp(2)));
+
+        dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setContentView(window);
+        final Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            w.setDimAmount(0.65f);
+            final android.util.DisplayMetrics m = activity.getResources().getDisplayMetrics();
+            final boolean landscape = m.widthPixels > m.heightPixels;
+            w.setLayout(landscape ? Math.min(dp(680), Math.round(m.widthPixels * 0.74f)) : Math.round(m.widthPixels * 0.94f),
+                    Math.round(m.heightPixels * (landscape ? 0.9f : 0.8f)));
         }
-        sheet.action(Tr.t("Cancel"), null, false, false, null);
+        dialog.setOnShowListener(d -> SystemBars.hide(w));
         open(start != null && start.isDirectory() ? start : null);
-        sheet.show();
+        dialog.show();
     }
 
     /** Opens on `start` (a folder), or the storage list when it is null. */
     static void show(Activity activity, File start, Listener listener) {
-        new FileBrowser(activity, start, Tr.t("Choose your game file"), Tr.t("An ISO or RVZ of your own disc (RBSJ08). "
-                        + "Tip: keep it in ") + AppFiles.HOME + Tr.t("/ISO, this list opens there next time."),
+        new FileBrowser(activity, start, Tr.t("Choose your game file"), null,
                 FileBrowser::isGameFile, Tr.t("No folders or ISO / RVZ files here."), listener);
     }
 
-    /** Choose a file that `accept` lists (marked green, like game files). */
+    /** Choose a file that `accept` lists. */
     static void showFiles(Activity activity, File start, String title, String about,
                           java.util.function.Predicate<File> accept, String emptyText, Listener listener) {
         new FileBrowser(activity, start, title, about, accept, emptyText, listener);
@@ -118,44 +151,64 @@ final class FileBrowser {
         return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
     }
 
+    private void choose() {
+        final File chosen = folderMode ? current : selected;
+        if (chosen == null) return;
+        dialog.dismiss();
+        listener.onChosen(chosen);
+    }
+
     private void open(File dir) {
         list.removeAllViews();
         current = dir;
-        if (sheet != null) sheet.scrollToTop();
+        select(null);
+        scroll.scrollTo(0, 0);
         if (dir == null) {
             path.setText(Tr.t("Storage"));
-            for (File root : roots) {
-                row("▸", volumeName(root), null, FOLDER, () -> open(root));
-            }
-        } else {
-            path.setText(dir.getPath());
-            row("‹", Tr.t("Up"), null, LauncherActivity.MUTED, () -> open(isRoot(dir) ? null : dir.getParentFile()));
-            final File[] children = dir.listFiles();
-            final List<File> folders = new ArrayList<>(), games = new ArrayList<>();
-            if (children != null) {
-                Arrays.sort(children, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
-                for (File child : children) {
-                    if (child.getName().startsWith(".")) continue;
-                    if (child.isDirectory()) folders.add(child);
-                    else if (!folderMode && accept.test(child)) games.add(child);
-                }
-            }
-            // Game files first: they are what the player came for.
-            for (File game : games) {
-                row("●", game.getName(), size(game.length()), GAME, () -> {
-                    sheet.dismiss();
-                    listener.onChosen(game);
-                });
-            }
-            for (File folder : folders) {
-                row("▸", folder.getName(), null, FOLDER, () -> open(folder));
-            }
-            if (folders.isEmpty() && games.isEmpty()) {
-                final TextView empty = text(emptyText, 14, LauncherActivity.MUTED);
-                empty.setPadding(dp(14), dp(16), dp(14), dp(8));
-                list.addView(empty);
+            for (File root : roots) row("[DIR]", volumeName(root), "", false, v -> open(root));
+            return;
+        }
+        path.setText(dir.getPath());
+        row("[DIR]", "..", "", false, v -> open(isRoot(dir) ? null : dir.getParentFile()));
+        final File[] children = dir.listFiles();
+        final List<File> folders = new ArrayList<>(), files = new ArrayList<>();
+        if (children != null) {
+            Arrays.sort(children, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+            for (File child : children) {
+                if (child.getName().startsWith(".")) continue;
+                if (child.isDirectory()) folders.add(child);
+                else if (!folderMode && accept.test(child)) files.add(child);
             }
         }
+        for (File folder : folders) row("[DIR]", folder.getName(), "", false, v -> open(folder));
+        for (File file : files) {
+            row("", file.getName(), size(file.length()), true, v -> {
+                if (file.equals(selected)) {
+                    choose();  // a second tap opens it
+                    return;
+                }
+                select(file);
+                for (int i = 0; i < list.getChildCount(); ++i) {
+                    final View r = list.getChildAt(i);
+                    r.setBackground(file.equals(r.getTag()) ? Ui.box(activity, Ui.SELECTED, 0, 0)
+                            : Ui.touchBox(activity, Color.TRANSPARENT, 0, 0));
+                }
+            }).setTag(file);
+        }
+        if (folders.isEmpty() && files.isEmpty()) {
+            final TextView empty = Ui.text(activity, emptyText, 13, Ui.MUTED);
+            empty.setPadding(dp(4), dp(8), dp(4), dp(8));
+            list.addView(empty);
+        }
+    }
+
+    /** The file OPEN takes (null: none yet, OPEN dimmed); in folder mode SAVE HERE needs a folder. */
+    private void select(File file) {
+        selected = file;
+        picked.setText(file == null ? "" : file.getName());
+        final boolean ready = folderMode ? current != null : file != null;
+        go.setEnabled(ready);
+        go.setAlpha(ready ? 1f : 0.4f);
     }
 
     private boolean isRoot(File dir) {
@@ -174,64 +227,46 @@ final class FileBrowser {
         return name.endsWith(".iso") || name.endsWith(".rvz");
     }
 
-    /** A rounded row: a coloured mark, the name, and on the right the size of a game file. */
-    private void row(String mark, String title, String detail, int color, Runnable action) {
-        final LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(14), dp(10), dp(14), dp(10));
-        row.setMinimumHeight(dp(52));
-        row.setBackground(rounded(LauncherActivity.RAISED, dp(16)));
+    /** A table row: [DIR] (amber) or nothing, the name, the size on the right. */
+    private View row(String type, String name, String size, boolean file, View.OnClickListener onClick) {
+        final LinearLayout row = columns(type, name, size, Ui.TEXT, 13);
+        ((TextView) row.getChildAt(0)).setTextColor(Ui.WARNING);
+        ((TextView) row.getChildAt(2)).setTextColor(Ui.MUTED);
+        row.setPadding(dp(4), dp(7), dp(4), dp(7));
+        row.setBackground(Ui.touchBox(activity, Color.TRANSPARENT, 0, 0));
         row.setClickable(true);
-        row.setOnClickListener(v -> action.run());
-        final TextView badge = text(mark, 15, color == GAME ? Color.WHITE : color);
-        badge.setGravity(Gravity.CENTER);
-        badge.setTypeface(Typeface.DEFAULT_BOLD);
-        if (color == GAME) {
-            final GradientDrawable circle = new GradientDrawable();
-            circle.setShape(GradientDrawable.OVAL);
-            circle.setColor(GAME);
-            badge.setBackground(circle);
-            badge.setText("");
-        }
-        row.addView(badge, new LinearLayout.LayoutParams(dp(color == GAME ? 12 : 20), dp(color == GAME ? 12 : 24)));
-        final TextView name = text(title, 15, color == LauncherActivity.MUTED ? LauncherActivity.MUTED : Color.WHITE);
-        name.setSingleLine(true);
-        name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        name.setTypeface(color == GAME ? Typeface.DEFAULT_BOLD : LauncherActivity.MEDIUM);
-        final LinearLayout.LayoutParams nameParams =
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        nameParams.leftMargin = dp(12);
-        row.addView(name, nameParams);
-        if (detail != null) {
-            final TextView size = text(detail, 13, Color.WHITE);
-            size.setTypeface(Typeface.DEFAULT_BOLD);
-            size.setPadding(dp(12), dp(4), dp(12), dp(4));
-            size.setBackground(rounded(Color.argb(60, 102, 187, 106), dp(12)));
-            final LinearLayout.LayoutParams sizeParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            sizeParams.leftMargin = dp(10);
-            row.addView(size, sizeParams);
-        }
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(8);
-        list.addView(row, params);
+        row.setOnClickListener(onClick);
+        list.addView(row, Ui.matchWidth(0));
+        return row;
     }
 
-    private TextView text(String value, int sp, int color) {
-        final TextView view = new TextView(activity);
-        view.setText(value);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
-        view.setTextColor(color);
-        return view;
+    /** Type, name and size in the table's three columns. */
+    private LinearLayout columns(String type, String name, String size, int color, float sp) {
+        final LinearLayout row = new LinearLayout(activity);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(4), 0, dp(4), 0);
+        final TextView t = Ui.text(activity, type.toUpperCase(Locale.ROOT), sp, color);
+        row.addView(t, new LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT));
+        final TextView n = Ui.text(activity, name, sp, color);
+        n.setSingleLine(true);
+        n.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        row.addView(n, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        final TextView s = Ui.text(activity, size.toUpperCase(Locale.ROOT), sp, color);
+        s.setGravity(Gravity.END);
+        row.addView(s, new LinearLayout.LayoutParams(dp(80), LinearLayout.LayoutParams.WRAP_CONTENT));
+        return row;
     }
 
-    private static GradientDrawable rounded(int color, int radius) {
-        final GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(radius);
-        shape.setColor(color);
-        return shape;
+    private TextView button(String label, boolean primary, View.OnClickListener onClick) {
+        final TextView button = Ui.chip(activity, label.toUpperCase(Locale.ROOT), primary, true, onClick);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        return button;
+    }
+
+    private LinearLayout.LayoutParams buttonParams() {
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(90), dp(30));
+        params.leftMargin = dp(4);
+        return params;
     }
 
     private static String size(long bytes) {

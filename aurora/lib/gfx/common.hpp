@@ -227,7 +227,8 @@ private:
 namespace aurora::gfx {
 inline constexpr bool UseTextureBuffer = false;
 inline constexpr uint64_t UniformBufferSize = 25165824;  // 24mb
-inline constexpr uint64_t VertexBufferSize = 3145728;    // 3mb
+// GX vertices arrive decoded to floats (gx/vertex_loader.hpp), several times their stream size.
+inline constexpr uint64_t VertexBufferSize = 8388608;    // 8mb
 inline constexpr uint64_t IndexBufferSize = 2097152;     // 2mb
 inline constexpr uint64_t StorageBufferSize = 8388608;   // 8mb
 inline constexpr uint64_t TextureUploadSize = 25165824;  // 24mb
@@ -349,6 +350,8 @@ struct ConvRequest;
 void queue_palette_conv(tex_palette_conv::ConvRequest req);
 
 Range push_verts(const uint8_t* data, size_t length);
+// Reserves length bytes starting at a multiple of stride; the caller writes them before the batch ends.
+uint8_t* map_verts_strided(size_t length, size_t stride, Range& range);
 template <typename T>
 static Range push_verts(ArrayRef<T> data) {
   return push_verts(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T));

@@ -43,7 +43,7 @@ final class AppFiles {
     /**
      * /sdcard/Basara2Heroes (Beta: Basara2Heroes-Beta): everything of the game a player handles, which
      * every file manager can open, unlike Android/data on many phones. Logs/<start time>/log and
-     * /crash per game start, ISO/ for the game file, Saves/ for save backups, textures/ and hd-cache/. Needs "All files
+     * /crash per game start, Saves/ for save backups, Textures/ and HD-Cache/, README.txt. Needs "All files
      * access"; without it, null (the log stays in dataDir/Logs).
      */
     static File homeDir() {
@@ -54,20 +54,110 @@ final class AppFiles {
         fixCase(storage, dir);
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
-        return dir.isDirectory() && dir.canWrite() ? dir : null;
+        // 1.1 and older kept an ISO/ folder for the game file; gone when empty (a dump in it stays).
+        //noinspection ResultOfMethodCallIgnored
+        new File(dir, "ISO").delete();
+        if (!dir.isDirectory() || !dir.canWrite()) return null;
+        if (!readmeWritten) {
+            readmeWritten = true;
+            writeIfChanged(new File(dir, "README.txt"), HOME_README);
+        }
+        return dir;
     }
 
+    private static volatile boolean readmeWritten;
+
+    /** Writes `text` (CRLF, so Windows Notepad shows the lines) unless the file already holds as much. */
+    private static void writeIfChanged(File file, String text) {
+        final byte[] bytes = text.replace("\n", "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (file.length() == bytes.length) return;
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+            out.write(bytes);
+        } catch (java.io.IOException ignored) {
+            // Only a help file.
+        }
+    }
+
+    /** Keeps the phone's gallery out of a folder of textures. */
+    private static void noMedia(File dir) {
+        final File marker = new File(dir, ".nomedia");
+        if (marker.exists()) return;
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            marker.createNewFile();
+        } catch (java.io.IOException ignored) {
+            // The gallery shows them; nothing breaks.
+        }
+    }
+
+    private static final String HOME_README =
+            "Basara2Heroes: what each folder is for\n"
+            + "\n"
+            + "Textures/  Texture mods, one folder per mod. How: Textures/README.txt.\n"
+            + "HD-Cache/  Textures made sharper by HD Textures. Safe to delete: made again while playing.\n"
+            + "Saves/     Save backups (game menu > Save Data).\n"
+            + "Logs/      A log of each game run, for bug reports (game menu > System > Share Log).\n"
+            + "\n"
+            + "Your ISO or RVZ can stay anywhere (Download is fine). It is read once, the first time,\n"
+            + "and can be deleted afterwards.\n"
+            + "\n"
+            + "--- Bahasa Indonesia ---\n"
+            + "\n"
+            + "Textures/  Mod tekstur, satu folder per mod. Caranya: Textures/README.txt.\n"
+            + "HD-Cache/  Tekstur yang dipertajam HD Textures. Aman dihapus: dibuat lagi saat bermain.\n"
+            + "Saves/     Cadangan save (menu game > Save Data).\n"
+            + "Logs/      Log tiap kali game dijalankan, untuk lapor bug (menu game > System > Share Log).\n"
+            + "\n"
+            + "ISO atau RVZ milikmu boleh disimpan di mana saja (misalnya Download). File itu hanya dibaca\n"
+            + "sekali, saat pertama kali, dan boleh dihapus sesudahnya.\n";
+
+    private static final String TEXTURES_README =
+            "Texture mods\n"
+            + "\n"
+            + "1. Put each mod in its own folder here, for example Textures/My Mod/ (folders inside it are fine).\n"
+            + "2. Files are named the Dolphin way:\n"
+            + "     tex1_<width>x<height>_<hash>_<format>.png  (or .dds)\n"
+            + "     tex1_<width>x<height>_<hash>_<palette hash>_<format>.png  for palette textures;\n"
+            + "     $ in place of the palette hash matches every palette.\n"
+            + "   More mip levels: the same name with _mip1, _mip2 ... at the end.\n"
+            + "   Dolphin packs made for RBSJ08 (Sengoku Basara 2 Heroes, Japan) work as they are.\n"
+            + "3. Game menu > Graphics: turn on Custom Textures, tick the mods to use and order them with\n"
+            + "   the arrows (the higher one wins when two mods change the same texture), then restart.\n"
+            + "   Each mod shows how many of its files have a valid name: 0 means the names are wrong.\n"
+            + "\n"
+            + "Making a mod: turn on Dump Textures and play. Every texture shown is saved to Textures/Dump\n"
+            + "under the name its replacement needs. Edit a copy, put it in your mod's folder, and turn\n"
+            + "Dump Textures off when done. Files left directly in Textures/ show as \"Loose files\".\n"
+            + "\n"
+            + "--- Bahasa Indonesia ---\n"
+            + "\n"
+            + "1. Taruh tiap mod di foldernya sendiri di sini, misalnya Textures/Mod Saya/ (boleh ada subfolder).\n"
+            + "2. Nama file mengikuti Dolphin:\n"
+            + "     tex1_<lebar>x<tinggi>_<hash>_<format>.png  (atau .dds)\n"
+            + "     tex1_<lebar>x<tinggi>_<hash>_<hash palette>_<format>.png  untuk tekstur palette;\n"
+            + "     $ di posisi hash palette cocok untuk semua palette.\n"
+            + "   Level mip tambahan: nama yang sama diakhiri _mip1, _mip2 ...\n"
+            + "   Paket Dolphin untuk RBSJ08 (Sengoku Basara 2 Heroes, Jepang) bisa langsung dipakai.\n"
+            + "3. Menu game > Graphics: nyalakan Custom Textures, centang mod yang dipakai dan urutkan dengan\n"
+            + "   panah (yang di atas menang bila dua mod mengganti tekstur yang sama), lalu restart.\n"
+            + "   Tiap mod menampilkan jumlah file yang namanya benar: 0 berarti namanya salah.\n"
+            + "\n"
+            + "Membuat mod: nyalakan Dump Textures lalu main. Tiap tekstur yang tampil disimpan ke Textures/Dump\n"
+            + "dengan nama yang dibutuhkan penggantinya. Edit salinannya, taruh di folder mod-mu, lalu matikan\n"
+            + "Dump Textures. File yang ditaruh langsung di Textures/ tampil sebagai \"Loose files\".\n";
+
     /**
-     * Shared storage ignores case, so an older "basara2heroes" would be used as is and keep its spelling:
-     * rename it (through a temporary name, a case-only rename does nothing) to HOME.
+     * Shared storage ignores case, so an older "basara2heroes" (or "hd-cache") would be used as is and
+     * keep its spelling: rename it (through a temporary name, a case-only rename does nothing) to `dir`.
      */
     private static void fixCase(File storage, File dir) {
         final String[] names = storage.list();
         if (names == null) return;
+        final String want = dir.getName();
         for (String name : names) {
-            if (!name.equalsIgnoreCase(HOME) || name.equals(HOME)) continue;
+            if (!name.equalsIgnoreCase(want) || name.equals(want)) continue;
             final File old = new File(storage, name);
-            final File temp = new File(storage, HOME + ".renaming");
+            final File temp = new File(storage, want + ".renaming");
             if (old.renameTo(temp) && !temp.renameTo(dir)) {
                 //noinspection ResultOfMethodCallIgnored
                 temp.renameTo(old);
@@ -152,19 +242,27 @@ final class AppFiles {
         final File home = homeDir();
         if (home == null) return null;
         final File dir = new File(home, name);
+        fixCase(home, dir);
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
         return dir.isDirectory() ? dir : null;
     }
 
-    /** Custom textures: <homeDir>/textures (dumps in its dump/ folder), or null without "All files access". */
+    /** Texture mods: <homeDir>/Textures (1.1: textures; dumps in its Dump/ folder), or null without "All files access". */
     static File textureDir() {
-        return homeSub("textures");
+        final File dir = homeSub("Textures");
+        if (dir == null) return null;
+        fixCase(dir, new File(dir, "Dump"));  // 1.1: textures/dump
+        noMedia(dir);
+        writeIfChanged(new File(dir, "README.txt"), TEXTURES_README);
+        return dir;
     }
 
-    /** HD Textures' upscaled textures: <homeDir>/hd-cache, or null without "All files access". */
+    /** HD Textures' upscaled textures: <homeDir>/HD-Cache (1.1: hd-cache, renamed), or null without "All files access". */
     static File hdCacheDir() {
-        return homeSub("hd-cache");
+        final File dir = homeSub("HD-Cache");
+        if (dir != null) noMedia(dir);
+        return dir;
     }
 
     /** Bytes in a folder and everything under it. */
@@ -344,6 +442,7 @@ final class AppFiles {
                 + "spinning_coins = " + settings.spinningCoins() + "\n"
                 + "skip_boot = " + settings.skipBoot() + "\n"
                 + "gx_thread = " + settings.gxThread() + "\n"
+                + "real_widescreen = " + settings.realWidescreen() + "\n"
                 + "dynamic_resolution = " + settings.dynamicResolution() + "\n"
                 + "thermal_control = " + settings.thermalControl() + "\n"
                 + "frame_graph = " + settings.frameGraph() + "\n"

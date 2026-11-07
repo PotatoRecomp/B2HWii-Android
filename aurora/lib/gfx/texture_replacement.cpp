@@ -765,7 +765,8 @@ void evict_replacement_cache_if_needed() noexcept {
   }
 }
 
-void index_folder(const std::filesystem::path& root) noexcept {
+// `recursive` false: only the files directly in `root` (the loose files beside the pack folders).
+void index_folder(const std::filesystem::path& root, bool recursive = true) noexcept {
   std::error_code ec;
   for (std::filesystem::recursive_directory_iterator it(
            root,
@@ -775,6 +776,10 @@ void index_folder(const std::filesystem::path& root) noexcept {
        it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
     if (ec) {
       break;
+    }
+    if (!recursive && it->is_directory()) {
+      it.disable_recursion_pending();
+      continue;
     }
 
     if (!it->is_regular_file()) {
@@ -814,7 +819,7 @@ void build_index() noexcept {
 
   if (g_config.textureRoot != nullptr && *g_config.textureRoot != '\0') {
     s_replacementRoot = fs_path_from_string(g_config.textureRoot);
-    s_dumpRoot = s_replacementRoot / "dump";  // skipped by the index below
+    s_dumpRoot = s_replacementRoot / "Dump";  // skipped by the index below
   } else {
     s_replacementRoot = userPath / "texture_replacements";
     s_dumpRoot = cachePath / "texture_dumps";
@@ -822,7 +827,7 @@ void build_index() noexcept {
   if (g_config.hdTextureMode != 0) {
     s_hdRoot = g_config.hdCacheRoot != nullptr && *g_config.hdCacheRoot != '\0'
                    ? fs_path_from_string(g_config.hdCacheRoot)
-                   : s_replacementRoot / "hd-cache";
+                   : s_replacementRoot / "HD-Cache";
   }
 
   if (!ensure_directory(s_replacementRoot)) {
@@ -832,7 +837,27 @@ void build_index() noexcept {
     return;
   }
 
-  index_folder(s_replacementRoot);
+  if (g_config.texturePacks == nullptr) {
+    index_folder(s_replacementRoot);
+  } else {
+    // One pack per line, in the player's order: the first indexed keeps a key (try_emplace).
+    std::string_view packs = g_config.texturePacks;
+    while (!packs.empty()) {
+      const size_t end = packs.find('\n');
+      const std::string_view line = packs.substr(0, end);
+      packs = end == std::string_view::npos ? std::string_view{} : packs.substr(end + 1);
+      if (line.empty()) {
+        continue;
+      }
+      const size_t before = s_replacementIndex.size();
+      if (line == "*") {
+        index_folder(s_replacementRoot, false);
+      } else {
+        index_folder(fs_path_from_string(line));
+      }
+      Log.info("Texture pack {}: {} textures", line, s_replacementIndex.size() - before);
+    }
+  }
   // The HD cache, when it is not already inside the folder just indexed. Own packs come first.
   if (!s_hdRoot.empty() && !is_relative_to(s_hdRoot, s_replacementRoot) && ensure_directory(s_hdRoot)) {
     index_folder(s_hdRoot);

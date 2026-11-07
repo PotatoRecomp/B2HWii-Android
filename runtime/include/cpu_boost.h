@@ -11,4 +11,8 @@ namespace CpuBoost {
 // The first call sets up the thread (affinity, hint session); BASARA_CPU_BOOST=0 turns both off.
 void ReportFrameWork(uint64_t workNanos);
 
+// Sustained Performance while playing: false lets every thread run anywhere and closes the hint
+// session; true pins and hints again. Applied on the game thread at its next frame.
+void SetEnabled(bool enabled);
+
 } // namespace CpuBoost

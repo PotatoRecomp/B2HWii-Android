@@ -102,16 +102,19 @@ typedef struct {
   bool pauseOnFocusLost;
   bool allowTextureReplacements;
   bool allowTextureDumps;
-  // Folder of the replacement textures (dumps go to its "dump" subfolder). Null: <userPath>/texture_replacements
+  // Folder of the replacement textures (dumps go to its "Dump" subfolder). Null: <userPath>/texture_replacements
   // and <cachePath>/texture_dumps.
   const char* textureRoot;
+  // Null: all of textureRoot is indexed. Otherwise the texture packs to use, one folder per line, the
+  // first winning when two replace the same texture; "*" is the files directly in textureRoot.
+  const char* texturePacks;
   // HD Textures (experimental): 0 off, 1 live (each texture the game uses is upscaled 2x on a
-  // background thread and saved to <textureRoot>/hd-cache, used from then on). Needs
+  // background thread and saved to <textureRoot>/HD-Cache, used from then on). Needs
   // allowTextureReplacements.
   uint8_t hdTextureMode;
-  // Folder of the HD cache (null: <textureRoot>/hd-cache). Indexed with the replacements.
+  // Folder of the HD cache (null: <textureRoot>/HD-Cache). Indexed with the replacements.
   const char* hdCacheRoot;
-  // Disk budget of hd-cache in MB (0: 1024); no new textures are made once it is full.
+  // Disk budget of HD-Cache in MB (0: 1024); no new textures are made once it is full.
   uint32_t hdCacheMegabytes;
   // Log the replacement name of each texture the game uses, once (for matching packs to the game).
   bool reportTextureKeys;

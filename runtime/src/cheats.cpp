@@ -238,121 +238,39 @@ void BasaraCheats_BeforeShopRefresh(CpuContext* ctx) {
     }
 }
 
-// Camera distance. The camera (heap object, pointer at SDA 806626A0; view matrix +0xA7C, eye +0xAEC,
-// target +0xACC, up +0xBF0) builds its view through 802BF3AC, which negates the up vector into its
-// 0x20-byte frame (+0x08..+0x13) and calls C_MTXLookAt(m r3, eye r4, up r5, target r6). The eye moved
-// away from the target, along the line between them, is written into the unused rest of that frame
-// (+0x14..+0x1F) and passed instead.
-namespace {
-float ReadF32(uint32_t addr, bool& ok) {
-    uint32_t bits = 0;
-    ok = ok && Memory::TryRead32(addr, bits);
-    float value;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-void WriteF32(uint32_t addr, float value) {
-    uint32_t bits;
-    std::memcpy(&bits, &value, sizeof(bits));
-    Memory::TryWrite32(addr, bits);
-}
-} // namespace
-
-// The farther eye also stands in the camera's own eye (+0xAEC) for the rest of the frame, so whatever
-// culls or picks a level of detail from it sees what the view shows; the game's eye goes back before
-// the next camera update (8004FE9C), which builds on it. One slot per camera (two in split screen).
-namespace {
-struct SavedEye {
-    uint32_t cam = 0;
-    uint32_t bits[3] = {};
-};
-SavedEye g_savedEyes[2];
-} // namespace
-
-void BasaraCheats_BeforeCameraUpdate(CpuContext* ctx) {
-    for (SavedEye& saved : g_savedEyes) {
-        if (saved.cam != 0 && saved.cam == ctx->gpr[3]) {
-            for (int i = 0; i < 3; ++i) {
-                Memory::TryWrite32(saved.cam + 0xAECu + 4u * i, saved.bits[i]);
-            }
-            saved.cam = 0;
-        }
-    }
-}
-
-void BasaraCheats_BeforeLookAt(CpuContext* ctx) {
-    const uint32_t sp = ctx->gpr[1];
-    const uint32_t eye = ctx->gpr[4];
-    const uint32_t target = ctx->gpr[6];
-    uint32_t caller = 0;
-    if (ctx->gpr[5] != sp + 8u || !Memory::TryRead32(sp + 0x24u, caller)) {
-        return;  // not the wrapper's frame
-    }
+// Camera distance. The main camera's update (8004FE9C; camera on the heap, pointer at SDA 806626A0)
+// builds its projection through the MTXPerspective wrapper 802BF3F4 (f1 = fovY in degrees from
+// +0xC30, r3 = cam + 0xA2C, r31 = cam). The field of view is widened as if the eye stood k times
+// farther back: tan(fov'/2) = k * tan(fov/2). The eye itself stays where the game's camera collision
+// put it: moving it back (1.1) went into rising ground or walls, and the field vanished (Mali-G57 tester).
+// Culling follows the game's projection matrix, so the wider view culls correctly.
+void BasaraCheats_BeforePerspective(CpuContext* ctx) {
     const float k = Cheats::CameraDistance();
     if (k == 1.0f) {
         return;
     }
-    // Only the battle view: the main camera's final LookAt (8004FE9C, return 8004FF1C) in battle mode
-    // (+0xC3C 0) with no scripted event (+0x24 0). The stage intro runs in mode 5 (about 570 frames on
-    // a Windows test) and cutscenes through the event cameras, which keep the game's framing.
-    {
-        const uint32_t cam = ctx->gpr[3] - 0xA7Cu;
-        uint32_t mode = ~0u, event = ~0u;
-        if (caller != 0x8004FF1Cu || !Memory::TryRead32(cam + 0xC3Cu, mode) ||
-            !Memory::TryRead32(cam + 0x24u, event) || mode != 0u || event != 0u) {
-            return;
-        }
+    const uint32_t cam = ctx->gpr[31];
+    if (ctx->gpr[3] != cam + 0xA2Cu) {
+        return;  // not the main camera update's call (8004FF48)
     }
-    bool ok = true;
-    float e[3], t[3];
-    for (int i = 0; i < 3; ++i) {
-        e[i] = ReadF32(eye + 4u * i, ok);
-        t[i] = ReadF32(target + 4u * i, ok);
-    }
-    if (!ok) {
+    // Only the battle view: battle mode (+0xC3C 0) with no scripted event (+0x24 0). The stage intro
+    // runs in mode 5 and cutscenes through the event cameras, which keep the game's framing.
+    uint32_t mode = ~0u, event = ~0u, fovBits = 0;
+    if (!Memory::TryRead32(cam + 0xC3Cu, mode) || !Memory::TryRead32(cam + 0x24u, event) ||
+        !Memory::TryRead32(cam + 0xC30u, fovBits) || mode != 0u || event != 0u) {
         return;
     }
-    float moved[3];
-    for (int i = 0; i < 3; ++i) {
-        moved[i] = t[i] + (e[i] - t[i]) * k;
+    float fov;
+    std::memcpy(&fov, &fovBits, sizeof(fov));
+    if (!(fov > 1.0f && fov < 170.0f) || static_cast<float>(ctx->fpr[1].d) != fov) {
+        return;
     }
-    // Never lower than the game's eye: a camera that looks up at its target would back down into the
-    // ground. The up vector is the one handed to C_MTXLookAt (the wrapper's frame, +0x08).
-    float up[3];
-    for (int i = 0; i < 3; ++i) {
-        up[i] = ReadF32(sp + 8u + 4u * i, ok);
-    }
-    const float upLen = std::sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
-    if (ok && upLen > 1e-6f) {
-        float drop = 0.0f;
-        for (int i = 0; i < 3; ++i) {
-            drop += (moved[i] - e[i]) * up[i] / upLen;
-        }
-        if (drop < 0.0f) {
-            for (int i = 0; i < 3; ++i) {
-                moved[i] -= drop * up[i] / upLen;
-            }
-        }
-    }
-    const uint32_t out = sp + 0x14u;
-    for (int i = 0; i < 3; ++i) {
-        WriteF32(out + 4u * i, moved[i]);
-    }
-    ctx->gpr[4] = out;
-    const uint32_t cam = ctx->gpr[3] - 0xA7Cu;
-    if (eye == cam + 0xAECu) {
-        SavedEye* slot = nullptr;
-        for (SavedEye& saved : g_savedEyes) {
-            if (saved.cam == cam || (slot == nullptr && saved.cam == 0)) slot = &saved;
-        }
-        if (slot != nullptr && slot->cam == 0) {
-            slot->cam = cam;
-            for (int i = 0; i < 3; ++i) {
-                Memory::TryRead32(eye + 4u * i, slot->bits[i]);
-            }
-            for (int i = 0; i < 3; ++i) {
-                WriteF32(eye + 4u * i, moved[i]);
-            }
-        }
+    constexpr float kDegToRad = 3.14159265f / 180.0f;
+    const float wide = 2.0f * std::atan(std::tan(fov * 0.5f * kDegToRad) * k) / kDegToRad;
+    ctx->fpr[1].d = static_cast<double>(std::min(wide, 120.0f));
+    static std::atomic<bool> s_logged{false};
+    if (!s_logged.exchange(true)) {
+        RT_LOGF(RT_TAG_OS, "cheats: camera distance %.2fx widens the battle view %.1f -> %.1f degrees\n", k, fov,
+                std::min(wide, 120.0f));
     }
 }

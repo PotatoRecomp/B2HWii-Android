@@ -71,6 +71,8 @@ extern uint64_t g_bufferTailSlack;
 // GX draws read their u16 indices from the shared index buffer in the vertex shader and draw
 // non-indexed: drivers that scan index buffers on the CPU while recording (Adreno 5xx) never see one.
 extern bool g_indexPulling;
+// GX vertices decoded on the CPU into vertex inputs instead of pulled from storage (gx/vertex_loader.hpp).
+extern bool g_vertexLoader;
 // Shader diagnostics from AURORA_GFX_FLAGS (gx/shader.cpp apply_shader_debug).
 enum ShaderDebug : uint32_t {
   ShaderDebugNoTextures = 1u << 0,

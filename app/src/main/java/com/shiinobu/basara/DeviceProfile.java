@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
  * <p>Tiers come from tester logs: Mali-G52 MC2 / G57 MP1 hold 60 fps only at 0.5-0.75x, G57 MC2 /
  * G615 MC2 hold 1-1.5x (then the CPU limits), Mali-G720 MC7 at 4x was GPU-bound but has room for 2x.
  * Frameskip goes on unless the fastest core reaches 3 GHz: every phone below that was CPU-bound in
- * crowded battles.
+ * crowded battles, and GX Thread goes on for them too.
  */
 final class DeviceProfile {
     private static final String TAG = "Basara";
@@ -36,28 +36,31 @@ final class DeviceProfile {
     static boolean applyOnce(Context context, AppSettings settings) {
         settings.upgradeLowEnd();
         final boolean first = settings.needsDeviceProfile();
+        final int maxMhz = maxCpuMhz();
+        final boolean cpuBound = maxMhz <= 0 || maxMhz < 3000;
         if (!first && !settings.needsLowEndProfile()) {
             settings.resetGxThreadOnce();
+            settings.gxThreadOnOnce(cpuBound);
             settings.resetThermalOnce();
             return false;
         }
         final String gpu = gpuName();
         settings.setGpuName(gpu);
-        final int maxMhz = maxCpuMhz();
         final long ramMb = ramMb(context);
         float scale = scaleFor(gpu);
         if (ramMb > 0 && ramMb < 4608) scale = Math.min(scale, 0.75f);
-        final boolean frameskip = maxMhz <= 0 || maxMhz < 3000;
+        final boolean frameskip = cpuBound;
         if (first) {
-            // The same phones are CPU-bound: the GX thread takes the GX work off the game thread.
-            // GX Thread stays off: it flickers in battles, and syncing it enough to stop that is slower
-            // than running without it (G81, 2026-11-01).
-            final boolean gxThread = false;
+            // The same phones are CPU-bound: the GX thread takes the GX work off the game thread
+            // (S9 Exynos 9810: game thread 30-40 ms a battle frame, GPU half idle). Its battle flicker is
+            // fixed (BP registers through the FIFO, 2026-11-04). The GL backend turns it off by itself.
+            final boolean gxThread = cpuBound;
             settings.applyDeviceProfile(scale, frameskip, gxThread);
             Log.i(TAG, "device profile: gpu '" + gpu + "', cpu max " + maxMhz + " MHz, ram " + ramMb
                     + " MB -> resolution " + scale + "x, frameskip " + frameskip + ", gx thread " + gxThread);
         } else {
             settings.resetGxThreadOnce();
+            settings.gxThreadOnOnce(cpuBound);
             settings.resetThermalOnce();
         }
         settings.markLowEndProfile();
@@ -147,6 +150,20 @@ final class DeviceProfile {
     static boolean oldAdreno5(String gpu) {
         if (android.os.Build.VERSION.SDK_INT >= 30 || gpu == null) return false;
         return Pattern.compile("adreno[^0-9]*5\\d\\d").matcher(gpu.toLowerCase(Locale.ROOT)).find();
+    }
+
+    /**
+     * PowerVR (any Android version): Dawn refuses its proprietary Vulkan driver at the core level and
+     * shows a black screen at the compatibility level, so the game starts aurora's own Vulkan backend
+     * (tier 0: render passes and fences) first, with Dawn after it.
+     */
+    /** Adreno 610 (Snapdragon 662/665/680): Turnip draws it broken in tiles (GpuDrivers.applyToGame). */
+    static boolean adreno610(String gpu) {
+        return gpu != null && gpu.contains("Adreno (TM) 610");
+    }
+
+    static boolean powerVr(String gpu) {
+        return gpu != null && gpu.toLowerCase(Locale.ROOT).contains("powervr");
     }
 
     /** Render scale for a GL_RENDERER string; 1x when the GPU is unknown. */

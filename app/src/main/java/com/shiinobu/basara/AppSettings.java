@@ -73,10 +73,19 @@ final class AppSettings {
         prefs.edit().putBoolean("gx_thread_off_1", true).putBoolean("gx_thread", false).commit();
     }
 
+    /** The flicker is fixed (BP registers through the FIFO): GX Thread goes back on once on CPU-bound phones. */
+    void gxThreadOnOnce(boolean cpuBound) {
+        if (prefs.getBoolean("gx_thread_on_1", false)) return;
+        final SharedPreferences.Editor e = prefs.edit().putBoolean("gx_thread_on_1", true);
+        if (cpuBound) e.putBoolean("gx_thread", true);
+        e.commit();
+    }
+
     /** The device profile's picks, for the settings the player never set; runs once. */
     void applyDeviceProfile(float scale, boolean frameskip, boolean gxThread) {
         final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true)
-                .putBoolean("gx_thread_off_1", true).putBoolean("thermal_off_1", true);
+                .putBoolean("gx_thread_off_1", true).putBoolean("gx_thread_on_1", true)
+                .putBoolean("thermal_off_1", true);
         if (!prefs.contains("resolution_scale")) e.putFloat("resolution_scale", scale);
         if (!prefs.contains("frameskip")) e.putBoolean("frameskip", frameskip);
         if (!prefs.contains("gx_thread")) e.putBoolean("gx_thread", gxThread);
@@ -307,6 +316,9 @@ final class AppSettings {
 
     /** GX Thread: GX work on its own thread; read when the game starts. */
     boolean gxThread() { return prefs.getBoolean("gx_thread", false); }
+    /** Real (Hor+) widescreen; off stretches the 4:3 picture, lighter on the CPU. */
+    boolean realWidescreen() { return prefs.getBoolean("real_widescreen", false); }
+    void setRealWidescreen(boolean on) { prefs.edit().putBoolean("real_widescreen", on).commit(); }
     void setGxThread(boolean on) { prefs.edit().putBoolean("gx_thread", on).commit(); }
     /** Thermal Control (off by default). */
     boolean thermalControl() { return prefs.getBoolean("thermal_control", false); }
@@ -345,14 +357,17 @@ final class AppSettings {
     }
     private static Boolean thermalSupported;
 
-    /** Replacement textures (Dolphin-style tex1_*.png) from /sdcard/Basara2Heroes[-Beta]/textures. */
+    /** Replacement textures (Dolphin-style tex1_*.png) from /sdcard/Basara2Heroes[-Beta]/Textures. */
     boolean customTextures() { return prefs.getBoolean("custom_textures", false); }
     void setCustomTextures(boolean on) { prefs.edit().putBoolean("custom_textures", on).commit(); }
-    /** With custom textures: every texture the game uses goes to textures/dump, named for its replacement. */
+    /** The texture mods in order with their ticks (TexturePacks: "1|name" or "0|name" per line). */
+    String texturePacks() { return prefs.getString("texture_packs", ""); }
+    void setTexturePacks(String value) { prefs.edit().putString("texture_packs", value).commit(); }
+    /** With custom textures: every texture the game uses goes to Textures/Dump, named for its replacement. */
     boolean dumpTextures() { return prefs.getBoolean("dump_textures", false); }
     void setDumpTextures(boolean on) { prefs.edit().putBoolean("dump_textures", on).commit(); }
 
-    /** HD Textures: 0 off, 1 live (upscaled 2x while playing, kept in hd-cache). */
+    /** HD Textures: 0 off, 1 live (upscaled 2x while playing, kept in HD-Cache). */
     int hdTextures() { return Math.max(0, Math.min(1, prefs.getInt("hd_textures", 0))); }
     void setHdTextures(int mode) { prefs.edit().putInt("hd_textures", mode).commit(); }
     /** Disk budget of the HD texture cache, in MB. */

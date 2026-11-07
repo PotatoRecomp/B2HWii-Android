@@ -583,7 +583,28 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
                             uint16_t usedPnMtxMask) noexcept {
   ZoneScoped;
 
-  auto [buf, range] = gfx::map_uniform(info.uniformSize);
+  // Without frame interpolation the block is built in CPU memory first: a draw whose uniforms equal
+  // the previous draw's (same batch) reuses that range instead of uploading a copy, as Dolphin only
+  // uploads constants that changed. The interpolation recorder reads the mapped block, so it keeps
+  // writing in place.
+  const bool dedupe = !perspective || frame_interpolation_fps() == 0;
+  struct LastBlock {
+    uint64_t epoch = UINT64_MAX;
+    gfx::Range range{};
+    size_t size = 0;
+  };
+  alignas(16) static thread_local std::array<std::array<uint8_t, MaxUniformSize>, 2> blocks;
+  static thread_local LastBlock last;
+  static thread_local u32 current = 0;
+  ByteBuffer buf;
+  gfx::Range range{};
+  if (dedupe) {
+    buf = ByteBuffer{blocks[current].data(), MaxUniformSize};
+  } else {
+    auto mapped = gfx::map_uniform(info.uniformSize);
+    buf = std::move(mapped.first);
+    range = mapped.second;
+  }
 
   const auto& layout = info.matrixLayout;
   // `postex_mtx[current_pnmtx]` indexes raw matrix memory, so a current-matrix index of 10 or more selects a texture matrix; the normal array only covers the position rows and clamps.
@@ -724,10 +745,19 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
     buf.append(texture_size_bias(tex));
   }
 
-  if (!perspective || frame_interpolation_fps() == 0) {
+  if (dedupe) {
     g_gxState.stateDirty = false;
+    const uint64_t epoch = gfx::staging_epoch();
+    const size_t size = buf.size();
+    if (last.epoch == epoch && last.size == size && std::memcmp(blocks[current ^ 1].data(), buf.data(), size) == 0) {
+      return {.current = last.range, .interpolated = {}};
+    }
+    auto [dst, mappedRange] = gfx::map_uniform(info.uniformSize);
+    dst.append(buf.data(), size);
+    last = LastBlock{.epoch = epoch, .range = mappedRange, .size = size};
+    current ^= 1;
     return {
-        .current = range,
+        .current = mappedRange,
         .interpolated = {},
     };
   }

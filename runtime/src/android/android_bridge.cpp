@@ -4,6 +4,7 @@
 #include <aurora/aurora.h>
 
 #include "cheats.h"
+#include "cpu_boost.h"
 #include "display_settings.h"
 #include "hle_stubs.h"
 #include "host_suspend.h"
@@ -98,6 +99,19 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyLiveSett
         RuntimeConfigFile::SetFsr(aurora_get_fsr());
     }
     BasaraFrameskip_SetMode(static_cast<int>(frameskip));
+}
+
+// GameActivity.nativeSetSustained: Settings > Performance > Sustained Performance while playing. On
+// the CPU boost lets go (cpu_boost.cpp); the window's own mode is set by the activity.
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetSustained(JNIEnv*, jclass, jboolean on)
+{
+    CpuBoost::SetEnabled(on != JNI_TRUE);
+}
+
+// GameActivity.nativeSetVSync: Settings > Performance > VSync while playing (the next present).
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetVSync(JNIEnv*, jclass, jboolean on)
+{
+    if (settings_overlay::VSync() != (on == JNI_TRUE)) settings_overlay::SetVSync(on == JNI_TRUE);
 }
 
 // GameActivity.nativeApplyCheats: Settings > Cheats (cheats.h). A Once request applies at the next frame.

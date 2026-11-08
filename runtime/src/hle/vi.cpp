@@ -585,6 +585,11 @@ void StartStallWatchdogOnce() {
                 if (frames > 2 && !black) {  // Basara: also dump when stalled after the first frame
                     continue;
                 }
+                // A pause (app in the background) stops frames on purpose: not a stall.
+                if (HostSuspend::Paused() || HostSuspend::PausedNanoseconds() != 0) {
+                    RT_LOGF(RT_TAG_VI, "[watchdog] game was paused; no stall dump\n");
+                    continue;
+                }
                 RT_LOGF(RT_TAG_VI, "[watchdog] stalled; guest threads:\n");
                 std::ostringstream dump;
                 Fiber::GuestFiberManager::DumpGuestThreads(dump);

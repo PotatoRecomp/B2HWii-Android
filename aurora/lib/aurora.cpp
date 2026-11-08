@@ -1011,6 +1011,12 @@ bool present_presentation_job(const PresentationJob& job) {
           webgpu::g_graphicsConfig.surfaceConfiguration.height);
     }
     if (!surfaceSizeChanged && window::is_presentable()) {
+      // The previous frame's present may still be on the Vulkan submit thread; its wait is present
+      // time, kept out of the acquire that measures backlog.
+      const auto presentWaitStarted = PresentClock::now();
+      webgpu::vulkan_wait_submit_idle();
+      const auto presentWaitDuration =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(PresentClock::now() - presentWaitStarted);
       const auto acquireStarted = PresentClock::now();
       auto acquired = acquire_surface_texture();
       acquireDuration =
@@ -1087,8 +1093,8 @@ bool present_presentation_job(const PresentationJob& job) {
             std::lock_guard submitLock(g_queueSubmitMutex);
             presentStatus = g_surface.Present();
           }
-          presentDuration = std::chrono::duration_cast<std::chrono::nanoseconds>(
-              PresentClock::now() - presentStarted);
+          presentDuration = presentWaitDuration + std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                      PresentClock::now() - presentStarted);
           // Only the acquire counts as backlog (as in 1.0). Counting a slow Present() too dropped
           // every other frame on GPU-bound phones (Mali-G57 MP1, gpu ~20 ms): the GPU still drew the
           // dropped frames, so the picture judders at half rate while the game never slows down.

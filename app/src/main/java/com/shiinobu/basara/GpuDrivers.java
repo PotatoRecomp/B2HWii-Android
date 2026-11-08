@@ -197,11 +197,38 @@ final class GpuDrivers {
         marker(context).delete();
     }
 
+    /**
+     * Renderer WebGPU 1.0 runs the 1.0 renderer (aurora10/, built into libmain10.so). 1.0 had no
+     * support for PowerVR, Adreno 5xx on Android 10 or Android 10 drivers (1.1 added it), so those
+     * phones keep libmain.so and Auto.
+     */
+    static boolean renderer10Usable(AppSettings settings) {
+        return Build.VERSION.SDK_INT >= 30 && !DeviceProfile.powerVr(settings.gpuName())
+                && !DeviceProfile.oldAdreno5(settings.gpuName());
+    }
+
+    /** The Renderer setting; testing over adb: setprop debug.basara.renderer 0-4 overrides it. */
+    static int renderer(AppSettings settings) {
+        try {
+            return Integer.parseInt(Updater.debugProperty("debug.basara.renderer", ""));
+        } catch (NumberFormatException e) {
+            return settings.renderer();
+        }
+    }
+
+    /** True when the game should load libmain10.so (Renderer WebGPU 1.0, and the APK has it). */
+    static boolean useRenderer10(Context context, AppSettings settings) {
+        return renderer(settings) == 4 && renderer10Usable(settings)
+                && new File(context.getApplicationInfo().nativeLibraryDir, "libmain10.so").exists();
+    }
+
     /** In the game process, before SDL loads the runtime: the driver it should load, if any. */
     static void applyToGame(Context context, AppSettings settings) {
-        if (settings.renderer() == 1 || settings.renderer() == 2) {
+        final int renderer = renderer(settings) == 4 && !renderer10Usable(settings) ? 0 : renderer(settings);
+        if (renderer >= 1 && renderer <= 4) {
             try {
-                Os.setenv("BASARA_RENDERER", settings.renderer() == 1 ? "vulkan" : "gles", true);
+                // WebGPU 1.0 runs the 1.0 renderer, which starts on Dawn as 1.0 did.
+                Os.setenv("BASARA_RENDERER", renderer == 1 ? "vulkan" : renderer == 2 ? "gles" : "dawn", true);
             } catch (Exception e) {
                 Log.e(TAG, "could not choose the renderer", e);
             }

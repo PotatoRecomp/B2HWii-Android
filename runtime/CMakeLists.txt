@@ -194,7 +194,10 @@ set(MKW_CPPWINRT_INCLUDE_DIR "" CACHE PATH "Optional self-contained C++/WinRT in
 # not compiled at all; imported targets with the same names are wired up from
 # the package instead, so this project's own code compiles and links exactly
 # as before.
-set(MKW_AURORA_DIR "${CMAKE_CURRENT_LIST_DIR}/../aurora")
+# Basara: a second build tree points this at aurora10/ (the 1.0 renderer, "WebGPU 1.0" in the
+# launcher) and is shipped as libmain10.so next to libmain.so.
+# The runtime always compiles against aurora/include, so aurora10/include must stay identical.
+set(MKW_AURORA_DIR "${CMAKE_CURRENT_LIST_DIR}/../aurora" CACHE PATH "aurora source tree to build")
 
 # The translator's explicit float casts are PPC single-precision rounding points.
 # Fast-math may erase them and change guest-visible integer conversions.

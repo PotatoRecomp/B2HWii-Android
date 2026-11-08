@@ -1,6 +1,10 @@
-# Android build (arm64-v8a): configure | build | stage.
+# Android build (arm64-v8a): configure | build | stage | stage10.
+# Renderer WebGPU 1.0 (libmain10.so): a second tree built from aurora10/, e.g.
+#   -Mode configure -BuildDir generated\android-build10 -Extra '-DMKW_AURORA_DIR=<root>/aurora10'
+#   -Mode build -BuildDir generated\android-build10, then -Mode stage10 -BuildDir generated\android-build10
+# (after the normal stage).
 param(
-    [ValidateSet('configure', 'build', 'stage')][string]$Mode = 'build',
+    [ValidateSet('configure', 'build', 'stage', 'stage10')][string]$Mode = 'build',
     [int]$Jobs = 12,
     [int]$TranslatedJobs = 6,
     [string]$Ndk = (Join-Path $env:LOCALAPPDATA 'Android\Sdk\ndk\28.2.13676358'),
@@ -43,6 +47,13 @@ if ($Mode -eq 'build') {
     & $cmake --build $bd --target WiiCompiled --parallel $Jobs -- -k 0 2>&1 |
         ForEach-Object { "$_" } | Out-File (Join-Path $logs 'build.log') -Encoding utf8
     "build exit $LASTEXITCODE"; exit $LASTEXITCODE
+}
+if ($Mode -eq 'stage10') {
+    $strip = Join-Path $Ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-strip.exe'
+    $libDir = Join-Path $root 'generated\android-native\jniLibs\arm64-v8a'
+    & $strip --strip-unneeded -o (Join-Path $libDir 'libmain10.so') (Join-Path $bd 'libmain.so')
+    Get-Item (Join-Path $libDir 'libmain10.so') | ForEach-Object { '{0:N1} MB {1}' -f ($_.Length / 1MB), $_.FullName }
+    exit 0
 }
 if ($Mode -eq 'stage') {
     $strip = Join-Path $Ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-strip.exe'

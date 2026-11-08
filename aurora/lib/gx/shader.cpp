@@ -646,13 +646,12 @@ auto fetch_attr(const AttrConfig& mapping, std::string_view buf, std::string_vie
   case GX_S16:
     if (scalarComponents) return fetch_scalar_components("fetch_s16", 2, cnt, buf, offs, fixedTail);
     return fmt::format("fetch_s16_{}(&{}, {}, {}, {})", cnt, buf, offs, mapping.frac, le);
-  case GX_F32:
-    if (scalarComponents) return fetch_scalar_components("fetch_f32", 4, cnt, buf, offs, fmt::format(", {}", le));
-    return fmt::format("fetch_f32_{}(&{}, {}, {})", cnt, buf, offs, le);
   case GX_RGBA8:
     return fmt::format("unpack4x8unorm(load_u32_raw(&{}, {}))", buf, offs);
-  default:
-    Log.fatal("fetch_attr: Unimplemented {}", static_cast<GXCompType>(mapping.compType));
+  case GX_F32:
+  default: // reserved encodings 6..7 decode as float (Dolphin InvalidFloat)
+    if (scalarComponents) return fetch_scalar_components("fetch_f32", 4, cnt, buf, offs, fmt::format(", {}", le));
+    return fmt::format("fetch_f32_{}(&{}, {}, {})", cnt, buf, offs, le);
   }
 }
 
@@ -669,9 +668,8 @@ auto fetch_color_attr(const AttrConfig& mapping, std::string_view buf, std::stri
   case GX_RGBA6:
     return fmt::format("fetch_rgba6(&{}, {}, {})", buf, offs, le);
   case GX_RGBA8:
+  default: // reserved encodings 6..7 decode as RGBA8
     return fmt::format("fetch_rgba8(&{}, {}, {})", buf, offs, le);
-  default:
-    Log.fatal("fetch_color_attr: Unimplemented {}", static_cast<GXCompType>(mapping.compType));
   }
 }
 
@@ -686,9 +684,8 @@ static u32 attr_comp_type_size(u8 compType) noexcept {
   case GX_S16:
     return 2;
   case GX_F32:
+  default: // reserved encodings decode as float
     return 4;
-  default:
-    Log.fatal("attr_comp_type_size: Unimplemented {}", static_cast<GXCompType>(compType));
   }
 }
 

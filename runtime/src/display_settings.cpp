@@ -52,6 +52,19 @@ constexpr int kDynStepCount = static_cast<int>(sizeof(kDynSteps) / sizeof(kDynSt
 // phones. At 1x and below dynamic resolution therefore saves nothing; the heat ladder sheds work
 // there with the 30 fps drawing of Thermal::Warm instead (basara_frameskip.cpp).
 constexpr float kDynMinLines = 480.0f;
+// Emergency only: a GPU far past its budget (an ultimate's full-screen effects took a Mali-G52 MC2 to
+// 46-64 ms a frame at 480 lines under the 30 FPS Lock) may drop below the floor to this many lines,
+// in one jump, and climbs back to 480 the usual way once the GPU has room again.
+constexpr float kDynEmergencyLines = 336.0f;
+constexpr double kDynEmergencyGpuMs = 22.0;   // per 60 fps frame; doubled under the 30 FPS Lock
+// Under 480 lines already (Ultra Low: 360) the emergency floor is 70% of the player's lines, never
+// below 240: 336 sat above 360 x 0.9, so dynamic resolution could not move there at all.
+constexpr float kDynEmergencyMinLines = 240.0f;
+bool g_dynEmergency = false;
+
+float EmergencyLines(float lines) {
+    return std::min(kDynEmergencyLines, std::max(kDynEmergencyMinLines, lines * 0.7f));
+}
 constexpr uint32_t kDynWindowFrames = 60;     // one decision a second at 60 fps
 constexpr double kDynDownBusyMs = 15.0;       // worker this busy a cycle: it is the limit
 constexpr double kDynDownWaitMs = 2.0;        // ...or the game waits this long a frame for it
@@ -119,7 +132,8 @@ void ApplyRenderer(const Settings& settings) {
     }
     const float lines = RenderLines(settings.renderScale, aspect);
     const float factor = kDynSteps[g_dynStep];  // 0 (100%) unless dynamic resolution or the heat lowered it
-    const float dynLines = factor < 1.0f && lines > 0.0f ? std::max(std::min(lines, kDynMinLines), lines * factor)
+    const float floorLines = g_dynEmergency ? EmergencyLines(lines) : kDynMinLines;
+    const float dynLines = factor < 1.0f && lines > 0.0f ? std::max(std::min(lines, floorLines), lines * factor)
                                                          : lines;
     VISetFrameBufferLines(dynLines);
     RT_LOGF(RT_TAG_VI, "display: aspect %d%s, render %.0f lines (%.2gx, dynamic %.0f%%), surface %ux%u\n", aspect,
@@ -146,6 +160,7 @@ bool DynamicResolutionTick() {
                 kDynSteps[g_dynStep - 1] * 100.0f);
         g_dynStep -= 1;
         g_dynCalm = 0;
+        if (g_dynStep == 0) g_dynEmergency = false;
         return true;
     }
     if (++g_dynFrames < kDynWindowFrames) {
@@ -187,6 +202,25 @@ bool DynamicResolutionTick() {
         const char* v = std::getenv("BASARA_DYNRES");
         return v && *v == '2';
     }();
+    const float curLines = RenderLines(g_current.renderScale, EffectiveAspect(g_current.aspect));
+    if (dynamic && !s_cycleTest && curLines > 0.0f && gpuMs > kDynEmergencyGpuMs * budget) {
+        // GPU spike: jump straight to the deepest step that keeps the emergency lines.
+        const float emergencyLines = EmergencyLines(curLines);
+        int target = g_dynStep;
+        while (target + 1 < kDynStepCount && curLines * kDynSteps[target + 1] >= emergencyLines - 0.5f) {
+            ++target;
+        }
+        if (target > g_dynStep && (!g_dynEmergency || curLines * kDynSteps[g_dynStep] > emergencyLines)) {
+            g_dynEmergency = true;
+            g_dynCalm = 0;
+            g_dynSinceChange = 0;
+            RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (gpu spike %.2f ms a frame, emergency %.0f lines)\n",
+                    kDynSteps[g_dynStep] * 100.0f, kDynSteps[target] * 100.0f, gpuMs, curLines * kDynSteps[target]);
+            g_dynStep = target;
+            g_dynSkipWindow = true;
+            return true;
+        }
+    }
     if (s_cycleTest) {
         // BASARA_DYNRES=2 (test): walk down every step and back up, one a window.
         static int s_dir = 1;
@@ -228,8 +262,8 @@ bool DynamicResolutionTick() {
     // At the 480-line floor a step down changes nothing on screen: hold instead of stepping in the
     // dark (a step up from there would then wait out windows that bought nothing).
     if (step > g_dynStep && !s_cycleTest) {
-        const float lines = RenderLines(g_current.renderScale, EffectiveAspect(g_current.aspect));
-        if (lines > 0.0f && lines * kDynSteps[g_dynStep] <= kDynMinLines) {
+        const float floorLines = g_dynEmergency ? EmergencyLines(curLines) : kDynMinLines;
+        if (curLines > 0.0f && curLines * kDynSteps[g_dynStep] <= floorLines) {
             return false;
         }
     }
@@ -246,6 +280,10 @@ bool DynamicResolutionTick() {
             kDynSteps[g_dynStep] * 100.0f, kDynSteps[step] * 100.0f, busyMs, gpuMs, waitMs, reason);
     g_dynStep = step;
     g_dynSkipWindow = true;
+    // Back at or above the normal floor: the emergency is over.
+    if (g_dynEmergency && (step == 0 || curLines * kDynSteps[step] >= kDynMinLines)) {
+        g_dynEmergency = false;
+    }
     return true;
 }
 

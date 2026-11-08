@@ -219,10 +219,16 @@ public final class GameActivity extends SDLActivity
         layoutEditor.open();
     }
 
-    /** SDL is linked into libmain.so, so that one library is all there is to load. */
+    /**
+     * SDL is linked into libmain.so, so that one library is all there is to load. Renderer WebGPU 1.0
+     * loads libmain10.so instead: the same runtime built with the 1.0 renderer (aurora10/).
+     */
     @Override
     protected String[] getLibraries() {
-        return new String[] {"main"};
+        final AppSettings s = settings != null ? settings : new AppSettings(this);
+        final String lib = GpuDrivers.useRenderer10(this, s) ? "main10" : "main";
+        Log.i(TAG, "loading lib" + lib + ".so");
+        return new String[] {lib};
     }
 
     // The game's menus take taps and the remote hides while they are up; it comes back a moment

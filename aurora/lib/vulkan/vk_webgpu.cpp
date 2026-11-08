@@ -921,6 +921,18 @@ struct WGPUSurfaceImpl;
 struct WGPUTextureImpl;
 void DestroyViewFramebuffers(WGPUDeviceImpl* dev, VkImageView view);
 
+// One vkQueueSubmit2 and/or vkQueuePresentKHR, with its arrays owned (they outlive the caller).
+struct QueueJob {
+  bool submit = false;
+  std::vector<VkCommandBufferSubmitInfo> cbs;
+  std::vector<VkSemaphoreSubmitInfo> waits;
+  std::vector<VkSemaphoreSubmitInfo> signals;
+  VkFence fence = VK_NULL_HANDLE;
+  VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+  uint32_t imageIndex = 0;
+  VkSemaphore presentWait = VK_NULL_HANDLE;
+};
+
 struct WGPUDeviceImpl : Object {
   VkInstance instance = VK_NULL_HANDLE;
   VkPhysicalDevice phys = VK_NULL_HANDLE;
@@ -1009,6 +1021,20 @@ struct WGPUDeviceImpl : Object {
 
   std::thread completionThread;
   std::atomic<bool> stopping{false};
+
+  // Submit thread (PushQueueJob): jobs in serial order; submitBusy while one is being run.
+  bool threadedSubmit = false;
+  std::mutex submitMutex;
+  std::condition_variable submitCv;
+  std::condition_variable submitIdleCv;
+  std::deque<QueueJob> submitJobs;
+  bool submitBusy = false;
+  bool submitStop = false;
+  // Presents queued or running; acquire waits only for these (render submits never block it).
+  uint32_t presentsPending = 0;
+  std::thread submitThread;
+  // The first failed present result since wgpuSurfacePresent last read it.
+  std::atomic<int32_t> lastPresentResult{VK_SUCCESS};
   std::atomic<uint64_t> encoderIds{0};
 
   WGPUUncapturedErrorCallbackInfo errorCallback{};
@@ -1384,6 +1410,110 @@ VkFence NewSerialFence(WGPUDeviceImpl* dev, uint64_t serial) {
   std::lock_guard lock(dev->fenceMutex);
   dev->serialFences.emplace_back(serial, std::move(fence));
   return handle;
+}
+
+// Adapted from Dolphin CommandBufferManager (GPL-2.0-or-later, "Backend Multithreading"): every queue
+// submit and present runs in order on one thread. vkQueuePresentKHR blocks for a whole GPU frame on
+// GPU-bound phones (FIFO, or a driver that waits for the frame's work); inline it held queueMutex that
+// long, and with it every queue write and the other threads' submits. Serials, fences and in-flight
+// entries are still assigned by the caller under queueMutex, so a fence or timeline value may be waited
+// on before its submit has reached the driver; that wait simply lasts until it has.
+// AURORA_VK_SUBMIT_THREAD=0 runs jobs inline.
+VkResult RunQueueJob(WGPUDeviceImpl* dev, const QueueJob& job) {
+  if (job.submit) {
+    const VkSubmitInfo2 submit{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .waitSemaphoreInfoCount = static_cast<uint32_t>(job.waits.size()),
+        .pWaitSemaphoreInfos = job.waits.empty() ? nullptr : job.waits.data(),
+        .commandBufferInfoCount = static_cast<uint32_t>(job.cbs.size()),
+        .pCommandBufferInfos = job.cbs.data(),
+        .signalSemaphoreInfoCount = static_cast<uint32_t>(job.signals.size()),
+        .pSignalSemaphoreInfos = job.signals.empty() ? nullptr : job.signals.data(),
+    };
+    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, job.fence));
+  }
+  if (job.swapchain == VK_NULL_HANDLE) {
+    return VK_SUCCESS;
+  }
+  const VkPresentInfoKHR present{
+      .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &job.presentWait,
+      .swapchainCount = 1,
+      .pSwapchains = &job.swapchain,
+      .pImageIndices = &job.imageIndex,
+  };
+  return vkQueuePresentKHR(dev->queue, &present);
+}
+
+// Caller holds queueMutex, so jobs are queued in serial order. Returns the present's result inline;
+// on the submit thread, the first failure of an earlier present (reported one frame late, as Dolphin).
+VkResult PushQueueJob(WGPUDeviceImpl* dev, QueueJob&& job) {
+  if (!dev->threadedSubmit) {
+    return RunQueueJob(dev, job);
+  }
+  const bool present = job.swapchain != VK_NULL_HANDLE;
+  {
+    std::lock_guard lock(dev->submitMutex);
+    dev->submitJobs.push_back(std::move(job));
+    dev->presentsPending += present ? 1 : 0;
+  }
+  dev->submitCv.notify_one();
+  return present ? static_cast<VkResult>(dev->lastPresentResult.exchange(VK_SUCCESS)) : VK_SUCCESS;
+}
+
+// Until every queued job has reached the driver (before vkAcquireNextImageKHR, swapchain teardown, or
+// vkQueueWaitIdle). Never call it from the submit thread.
+void WaitSubmitIdle(WGPUDeviceImpl* dev) {
+  if (!dev->threadedSubmit) {
+    return;
+  }
+  std::unique_lock lock(dev->submitMutex);
+  dev->submitIdleCv.wait(lock, [dev] { return dev->submitJobs.empty() && !dev->submitBusy; });
+}
+
+// Until no present is queued or running: the swapchain is externally synchronized between
+// vkQueuePresentKHR and vkAcquireNextImageKHR. Render submits queued meanwhile are not waited for.
+void WaitPresentsDone(WGPUDeviceImpl* dev) {
+  if (!dev->threadedSubmit) {
+    return;
+  }
+  std::unique_lock lock(dev->submitMutex);
+  dev->submitIdleCv.wait(lock, [dev] { return dev->presentsPending == 0; });
+}
+
+void SubmitThread(WGPUDeviceImpl* dev) {
+  std::unique_lock lock(dev->submitMutex);
+  for (;;) {
+    dev->submitCv.wait(lock, [dev] { return dev->submitStop || !dev->submitJobs.empty(); });
+    if (dev->submitJobs.empty()) {
+      break;
+    }
+    QueueJob job = std::move(dev->submitJobs.front());
+    dev->submitJobs.pop_front();
+    dev->submitBusy = true;
+    lock.unlock();
+    const VkResult result = RunQueueJob(dev, job);
+    if (result != VK_SUCCESS) {
+      int32_t expected = VK_SUCCESS;
+      dev->lastPresentResult.compare_exchange_strong(expected, result);
+    }
+    lock.lock();
+    dev->submitBusy = false;
+    const bool presented = job.swapchain != VK_NULL_HANDLE;
+    dev->presentsPending -= presented ? 1 : 0;
+    if (dev->submitJobs.empty() || (presented && dev->presentsPending == 0)) {
+      dev->submitIdleCv.notify_all();
+    }
+  }
+  dev->submitIdleCv.notify_all();
+}
+
+// Present results the caller sees: out of date and suboptimal are handled at the next acquire.
+WGPUStatus PresentStatus(VkResult result) {
+  return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR
+             ? WGPUStatus_Success
+             : WGPUStatus_Error;
 }
 
 // Waits up to timeoutNs for submission `serial` to finish.
@@ -2090,6 +2220,7 @@ void WGPUSurfaceImpl::DestroySwapchain() {
   }
   {
     std::lock_guard lock(dev->queueMutex);
+    WaitSubmitIdle(dev);
     vkQueueWaitIdle(dev->queue);
     dev->pendingAcquire = VK_NULL_HANDLE;
     dev->pendingAcquireSerial = nullptr;
@@ -2122,6 +2253,14 @@ void WGPUSurfaceImpl::DestroySwapchain() {
 }
 
 WGPUDeviceImpl::~WGPUDeviceImpl() {
+  if (submitThread.joinable()) {
+    {
+      std::lock_guard lock(submitMutex);
+      submitStop = true;
+    }
+    submitCv.notify_all();
+    submitThread.join();
+  }
   stopping.store(true);
   futureCv.notify_all();
   if (completionThread.joinable()) {
@@ -2959,6 +3098,14 @@ WGPUDeviceImpl* CreateDevice() {
 
   tint::Initialize();
   dev->completionThread = std::thread(CompletionThread, dev);
+  {
+    const char* v = std::getenv("AURORA_VK_SUBMIT_THREAD");
+    dev->threadedSubmit = v == nullptr || v[0] != '0';
+    if (dev->threadedSubmit) {
+      dev->submitThread = std::thread(SubmitThread, dev);
+    }
+    Log("queue submit and present: %s", dev->threadedSubmit ? "submit thread" : "inline");
+  }
   Log("device: %s (Vulkan %u.%u.%u%s), pipeline cache %zu bytes", dev->props.deviceName,
       VK_API_VERSION_MAJOR(dev->props.apiVersion), VK_API_VERSION_MINOR(dev->props.apiVersion),
       VK_API_VERSION_PATCH(dev->props.apiVersion), dev->api13 ? "" : dev->hasSync2 ? ", 1.3 features from extensions" : ", 1.3 features from extensions, synchronization2 emulated",
@@ -4723,17 +4870,15 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
         .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
     };
     // Tier 0 has no timeline semaphore: the serial's fence stands in for the signal.
-    const VkFence fence = NewSerialFence(dev, serial);
-    const VkSubmitInfo2 submit{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .waitSemaphoreInfoCount = acquire != VK_NULL_HANDLE ? 1u : 0u,
-        .pWaitSemaphoreInfos = &wait,
-        .commandBufferInfoCount = static_cast<uint32_t>(cbs.size()),
-        .pCommandBufferInfos = cbs.data(),
-        .signalSemaphoreInfoCount = static_cast<uint32_t>(signals.size()),
-        .pSignalSemaphoreInfos = signals.empty() ? nullptr : signals.data(),
-    };
-    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, fence));
+    QueueJob job;
+    job.submit = true;
+    job.fence = NewSerialFence(dev, serial);
+    job.cbs = std::move(cbs);
+    job.signals = std::move(signals);
+    if (acquire != VK_NULL_HANDLE) {
+      job.waits.push_back(wait);
+    }
+    PushQueueJob(dev, std::move(job));
     std::lock_guard inflightLock(dev->inflightMutex);
     dev->inflight.push_back(std::move(entry));
   }
@@ -4969,6 +5114,8 @@ void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration* c
   if (old != VK_NULL_HANDLE) {
     {
       std::lock_guard lock(dev->queueMutex);
+      WaitSubmitIdle(dev);
+      dev->lastPresentResult.store(VK_SUCCESS);
       vkQueueWaitIdle(dev->queue);
       dev->pendingAcquire = VK_NULL_HANDLE;
       dev->pendingAcquireSerial = nullptr;
@@ -5089,6 +5236,8 @@ void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture* out) 
                                        : WGPUSurfaceGetCurrentTextureStatus_Error;
     return;
   }
+  // The swapchain is externally synchronized: a present still on the submit thread must finish first.
+  WaitPresentsDone(dev);
   const uint32_t slot = surface->nextAcquire;
   // The semaphore must not still be waited on by an unfinished submission.
   if (const uint64_t serial = surface->acquireSemSerial[slot];
@@ -5155,20 +5304,13 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
     std::lock_guard lock(dev->queueMutex);
     if (dev->presentSignaled && !dev->uploadOpen && !debugClear && tex->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
       dev->presentSignaled = false;
-      const VkPresentInfoKHR present{
-          .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-          .waitSemaphoreCount = 1,
-          .pWaitSemaphores = &surface->presentSems[index],
-          .swapchainCount = 1,
-          .pSwapchains = &surface->swapchain,
-          .pImageIndices = &index,
-      };
-      const VkResult result = vkQueuePresentKHR(dev->queue, &present);
+      QueueJob job;
+      job.swapchain = surface->swapchain;
+      job.imageIndex = index;
+      job.presentWait = surface->presentSems[index];
+      const VkResult result = PushQueueJob(dev, std::move(job));
       surface->current = UINT32_MAX;
-      if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
-        return WGPUStatus_Error;
-      }
-      return WGPUStatus_Success;
+      return PresentStatus(result);
     }
     dev->pendingPresent = VK_NULL_HANDLE;
     dev->presentSignaled = false;
@@ -5261,34 +5403,26 @@ WGPUStatus wgpuSurfacePresent(WGPUSurface surface) {
     };
     // Tier 0 has no timeline semaphore: only the present semaphore is signalled, and the serial's
     // fence stands in for the timeline value.
-    const VkFence fence = NewSerialFence(dev, serial);
-    const VkSubmitInfo2 submit{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .waitSemaphoreInfoCount = acquire != VK_NULL_HANDLE ? 1u : 0u,
-        .pWaitSemaphoreInfos = &wait,
-        .commandBufferInfoCount = static_cast<uint32_t>(cbs.size()),
-        .pCommandBufferInfos = cbs.data(),
-        .signalSemaphoreInfoCount = dev->legacy ? 1u : static_cast<uint32_t>(signals.size()),
-        .pSignalSemaphoreInfos = dev->legacy ? &signals[1] : signals.data(),
-    };
-    VK_CHECK(vkQueueSubmit2(dev->queue, 1, &submit, fence));
+    QueueJob job;
+    job.submit = true;
+    job.fence = NewSerialFence(dev, serial);
+    job.cbs = std::move(cbs);
+    if (acquire != VK_NULL_HANDLE) {
+      job.waits.push_back(wait);
+    }
+    job.signals.assign(dev->legacy ? signals.begin() + 1 : signals.begin(), signals.end());
+    job.swapchain = surface->swapchain;
+    job.imageIndex = index;
+    job.presentWait = surface->presentSems[index];
+    result = PushQueueJob(dev, std::move(job));
     {
       std::lock_guard inflightLock(dev->inflightMutex);
       dev->inflight.push_back(std::move(entry));
     }
-    const VkPresentInfoKHR present{
-        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &surface->presentSems[index],
-        .swapchainCount = 1,
-        .pSwapchains = &surface->swapchain,
-        .pImageIndices = &index,
-    };
-    result = vkQueuePresentKHR(dev->queue, &present);
   }
   dev->futureCv.notify_all();
   surface->current = UINT32_MAX;
-  if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
+  if (PresentStatus(result) != WGPUStatus_Success) {
     return WGPUStatus_Error;
   }
   return WGPUStatus_Success;
@@ -5308,6 +5442,15 @@ void aurora_vk_flush_buffer_range(WGPUBuffer buffer, uint64_t offset, uint64_t s
 uint64_t aurora_vk_submitted_serial() {
   WGPUDeviceImpl* dev = g_device;
   return dev != nullptr ? dev->submittedSerial.load(std::memory_order_acquire) : 0;
+}
+
+// The frame worker waits here before it times its acquire, so the previous frame's queued present
+// counts as present time, not as an acquire backlog.
+void aurora_vk_wait_submit_idle() {
+  WGPUDeviceImpl* dev = g_device;
+  if (dev != nullptr) {
+    WaitPresentsDone(dev);
+  }
 }
 
 uint64_t aurora_vk_poll_completed() {

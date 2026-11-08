@@ -124,7 +124,14 @@ final class DeviceProfile {
      * resolution to hold speed. V-Sync stays as it is: off, frames reach the screen out of step with
      * its refresh and motion stutters even at 60 fps (tested on a Redmi, Adreno 618).
      */
-    static java.util.Map<String, Object> lowEndValues(String gpu) {
+    static java.util.Map<String, Object> lowEndValues(String gpu) { return lowEndValues(gpu, 1); }
+
+    /**
+     * Level 1 Low-End, level 2 Ultra Low: on top of Low-End, a 360p display, 0.75x render (360 lines; 0.5x
+     * stays 0.5x) and the 30 FPS Lock, for a GPU that cannot hold even 30 fps at 480 lines in the
+     * heaviest effects (Mali-G52 MC2 in an ultimate: 46-64 ms a frame).
+     */
+    static java.util.Map<String, Object> lowEndValues(String gpu, int level) {
         final java.util.Map<String, Object> v = new java.util.LinkedHashMap<>();
         v.put("display_lines", 480);
         v.put("resolution_scale", scaleFor(gpu) <= 0.5f ? 0.5f : 1f);
@@ -138,6 +145,11 @@ final class DeviceProfile {
         v.put("show_fps", true);
         v.put("overlay_items", AppSettings.OVERLAY_FPS);
         v.put("frame_graph", false);
+        if (level >= 2) {
+            v.put("display_lines", 360);
+            v.put("resolution_scale", scaleFor(gpu) <= 0.5f ? 0.5f : 0.75f);
+            v.put("fps_lock_30", true);
+        }
         return v;
     }
 

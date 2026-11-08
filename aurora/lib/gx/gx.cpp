@@ -1989,6 +1989,7 @@ u8 comp_type_size(GXAttr attr, GXCompType type) noexcept {
       return 3;
     case GX_RGBX8:
     case GX_RGBA8:
+    default: // 6 and 7 decode as RGBA8 on hardware (Dolphin InvalidColor6/7)
       return 4;
     }
   default:
@@ -1999,12 +2000,19 @@ u8 comp_type_size(GXAttr attr, GXCompType type) noexcept {
     case GX_U16:
     case GX_S16:
       return 2;
-    case GX_F32:
+    default: // 5..7 decode as float on hardware (Dolphin InvalidFloat5..7)
       return 4;
-    default:
-      Log.fatal("comp_type_size: Unsupported component type {}", type);
     }
   }
+}
+
+u8 sanitize_comp_type(GXAttr attr, u8 type) noexcept {
+  const bool color = attr == GX_VA_CLR0 || attr == GX_VA_CLR1;
+  if (color) {
+    return type > GX_RGBA8 ? static_cast<u8>(GX_RGBA8) : type;
+  }
+  // 5 keeps its existing fetch path (unpack4x8unorm in fetch_attr); 6..7 become float.
+  return type > GX_RGBA8 ? static_cast<u8>(GX_F32) : type;
 }
 
 u8 comp_cnt_count(GXAttr attr, GXCompCnt cnt) noexcept {
@@ -2098,7 +2106,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     mapping = AttrConfig{
         .attrType = static_cast<u8>(type),
         .cnt = cnt,
-        .compType = static_cast<u8>(attrFmt.type),
+        .compType = sanitize_comp_type(attr, static_cast<u8>(attrFmt.type)),
         .offset = vtxOffset,
         .stride = 0,
         .frac = attrFmt.frac,

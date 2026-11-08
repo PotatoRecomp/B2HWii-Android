@@ -132,6 +132,8 @@ void vulkan_flush_buffer_range(const wgpu::Buffer& buffer, uint64_t offset, uint
 uint64_t vulkan_submitted_serial() noexcept;
 uint64_t vulkan_poll_completed() noexcept;
 void vulkan_wait_serial(uint64_t serial) noexcept;
+// Until the Vulkan submit thread has handed every queued submit and present to the driver.
+void vulkan_wait_submit_idle() noexcept;
 void vulkan_clear_attachments(const wgpu::RenderPassEncoder& pass, bool clearColor, const wgpu::Color& color,
                               bool clearDepth, float depth, uint32_t x, uint32_t y, uint32_t width,
                               uint32_t height) noexcept;

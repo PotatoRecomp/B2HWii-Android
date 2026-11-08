@@ -106,12 +106,15 @@ final class AppSettings {
     // --- Low-End preset -----------------------------------------------------------------------------
     /** Every setting the Low-End preset may change; what they were before is kept for Undo. */
     static final String[] LOW_END_KEYS = {"display_lines", "resolution_scale", "texture_filter", "fsr_on",
-        "frameskip", "dynamic_resolution", "hd_textures", "show_fps", "overlay_items", "frame_graph"};
+        "frameskip", "dynamic_resolution", "hd_textures", "show_fps", "overlay_items", "frame_graph", "fps_lock_30"};
     /** Preset keys the player may still change while it is on. */
     private static final java.util.Set<String> LOW_END_FREE = new java.util.HashSet<>(java.util.Arrays.asList(
-            "resolution_scale", "show_fps", "overlay_items", "frame_graph"));
+            "resolution_scale", "show_fps", "overlay_items", "frame_graph", "fps_lock_30"));
 
     boolean lowEndApplied() { return prefs.contains("low_end_backup"); }
+
+    /** 0 off, 1 Low-End, 2 Ultra Low (DeviceProfile.lowEndValues). */
+    int lowEndLevel() { return lowEndApplied() ? Math.max(1, Math.min(2, prefs.getInt("low_end_level", 1))) : 0; }
 
     /**
      * A setting the Low-End preset holds while it is on: it still has the preset's value, so it cannot be
@@ -120,12 +123,14 @@ final class AppSettings {
      */
     boolean lowEndHolds(String key) {
         if (!lowEndApplied() || LOW_END_FREE.contains(key)) return false;
-        final Object want = DeviceProfile.lowEndValues(gpuName()).get(key);
+        final Object want = DeviceProfile.lowEndValues(gpuName(), lowEndLevel()).get(key);
         return want != null && want.equals(prefs.getAll().get(key));
     }
 
     /** Saves what the LOW_END_KEYS hold now (a missing key stays missing on Undo), then writes `values`. */
-    void applyLowEnd(java.util.Map<String, Object> values) {
+    void applyLowEnd(java.util.Map<String, Object> values) { applyLowEnd(values, 1); }
+
+    void applyLowEnd(java.util.Map<String, Object> values, int level) {
         final java.util.Map<String, ?> all = prefs.getAll();
         final StringBuilder backup = new StringBuilder();
         for (String key : LOW_END_KEYS) {
@@ -133,7 +138,8 @@ final class AppSettings {
             final String type = v instanceof Boolean ? "b" : v instanceof Integer ? "i" : v instanceof Float ? "f" : "-";
             backup.append(key).append('=').append(type).append(':').append(v == null ? "" : v).append('\n');
         }
-        final SharedPreferences.Editor e = prefs.edit().putString("low_end_backup", backup.toString());
+        final SharedPreferences.Editor e = prefs.edit().putString("low_end_backup", backup.toString())
+                .putInt("low_end_level", level);
         for (java.util.Map.Entry<String, Object> entry : values.entrySet()) {
             final Object v = entry.getValue();
             if (v instanceof Boolean) e.putBoolean(entry.getKey(), (Boolean) v);
@@ -167,7 +173,7 @@ final class AppSettings {
     void undoLowEnd() {
         final String backup = prefs.getString("low_end_backup", null);
         if (backup == null) return;
-        final SharedPreferences.Editor e = prefs.edit().remove("low_end_backup");
+        final SharedPreferences.Editor e = prefs.edit().remove("low_end_backup").remove("low_end_level");
         for (String line : backup.split("\n")) {
             final int eq = line.indexOf('='), colon = line.indexOf(':', eq + 1);
             if (eq <= 0 || colon < 0) continue;
@@ -190,7 +196,7 @@ final class AppSettings {
      * Display Resolution: the short side of the surface the game draws into (0: the screen's own). The
      * compositor stretches it to the screen for free, so every full-screen pass gets cheaper.
      */
-    static final int[] DISPLAY_LINES = {0, 960, 720, 480};
+    static final int[] DISPLAY_LINES = {0, 960, 720, 480, 360};
     int displayLines() { return Math.max(0, prefs.getInt("display_lines", 0)); }
     void setDisplayLines(int lines) { prefs.edit().putInt("display_lines", lines).commit(); }
 
@@ -309,15 +315,34 @@ final class AppSettings {
     String gpuDriver() { return prefs.getString("gpu_driver", ""); }
 
     /** 0 = Auto (Dawn; the Vulkan backend only for a driver Dawn cannot use), 1 = Vulkan backend first. */
-    /** Renderer: 0 Auto, 1 Vulkan (aurora's own), 2 OpenGL ES (Dawn on OpenGL ES). */
+    /**
+     * Renderer: 0 Auto, 1 Vulkan (aurora's own), 2 OpenGL ES (Dawn on OpenGL ES), 3 Dawn, 4 WebGPU 1.0
+     * (libmain10.so: the 1.0 renderer, GpuDrivers.useRenderer10).
+     */
     int renderer() { return prefs.getInt("renderer", 0); }
-    static String rendererName(int which) { return which == 1 ? "Vulkan" : which == 2 ? "OpenGL ES" : "Auto"; }
+    /** The Renderer choice in menu order: Auto, Dawn, WebGPU 1.0, Vulkan, OpenGL ES. */
+    static final int[] RENDERER_ORDER = {0, 3, 4, 1, 2};
+    static String rendererName(int which) {
+        switch (which) {
+            case 1: return "Vulkan";
+            case 2: return "OpenGL ES";
+            case 3: return "Dawn";
+            case 4: return "WebGPU 1.0";
+            default: return "Auto";
+        }
+    }
     void setRenderer(int which) { prefs.edit().putInt("renderer", which).commit(); }
     void setGpuDriver(String id) { prefs.edit().putString("gpu_driver", id == null ? "" : id).commit(); }
     void setTouchLayout(String layout) { prefs.edit().putString("touch_layout", layout).commit(); }
 
     /** GX Thread: GX work on its own thread; read when the game starts. */
     boolean gxThread() { return prefs.getBoolean("gx_thread", false); }
+    /**
+     * What the game starts with: Ultra Low under the 30 FPS Lock always runs GX Thread (Redmi bench: the
+     * Lock alone saved 23% of the game thread's work a step, with GX Thread 36%, and steadier frames).
+     * The menu's switch keeps the player's own choice. The GL backend still turns it off by itself.
+     */
+    boolean gxThreadAtStart() { return gxThread() || (lowEndLevel() == 2 && fpsLock30()); }
     /** Real (Hor+) widescreen; off stretches the 4:3 picture, lighter on the CPU. */
     boolean realWidescreen() { return prefs.getBoolean("real_widescreen", false); }
     void setRealWidescreen(boolean on) { prefs.edit().putBoolean("real_widescreen", on).commit(); }

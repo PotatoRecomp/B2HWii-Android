@@ -62,6 +62,7 @@ extern "C" void aurora_vk_flush_buffer_range(WGPUBuffer buffer, uint64_t offset,
 extern "C" uint64_t aurora_vk_submitted_serial();
 extern "C" uint64_t aurora_vk_poll_completed();
 extern "C" void aurora_vk_wait_serial(uint64_t serial);
+extern "C" void aurora_vk_wait_submit_idle();
 extern "C" void aurora_vk_clear_attachments(WGPURenderPassEncoder pass, bool clearColor, WGPUColor color,
                                             bool clearDepth, float depth, uint32_t x, uint32_t y, uint32_t width,
                                             uint32_t height);
@@ -77,6 +78,11 @@ uint64_t vulkan_poll_completed() noexcept { return aurora_wgpu_vk ? aurora_vk_po
 void vulkan_wait_serial(uint64_t serial) noexcept {
   if (aurora_wgpu_vk) {
     aurora_vk_wait_serial(serial);
+  }
+}
+void vulkan_wait_submit_idle() noexcept {
+  if (aurora_wgpu_vk) {
+    aurora_vk_wait_submit_idle();
   }
 }
 void vulkan_clear_attachments(const wgpu::RenderPassEncoder& pass, bool clearColor, const wgpu::Color& color,
@@ -95,6 +101,7 @@ void vulkan_flush_buffer_range(const wgpu::Buffer&, uint64_t, uint64_t) noexcept
 uint64_t vulkan_submitted_serial() noexcept { return 0; }
 uint64_t vulkan_poll_completed() noexcept { return 0; }
 void vulkan_wait_serial(uint64_t) noexcept {}
+void vulkan_wait_submit_idle() noexcept {}
 void vulkan_clear_attachments(const wgpu::RenderPassEncoder&, bool, const wgpu::Color&, bool, float, uint32_t,
                               uint32_t, uint32_t, uint32_t) noexcept {}
 #endif
@@ -274,9 +281,15 @@ static void choose_gpu_compat() {
   // default. Battles on a Redmi (Adreno 618, same APK, 2026-11-07) ran 48.9 fps with vertex pulling
   // and 46-47.5 with the loader, the GX thread busier; the A610 phones are CPU-bound as well. Only
   // for tests: AURORA_VERTEX_LOADER=1 or the gfx flag vtxload. Pulled indices keep vertex pulling.
+  // PowerVR Rogue on Vulkan gets it by default: an OPPO CPH2209 (GM9446, Vulkan 1.1.131, Android 12,
+  // 2026-11-08) drew a black game picture with vertex pulling (the ImGui overlay, which uses vertex
+  // inputs, still showed) and the whole picture with AURORA_VERTEX_LOADER=1. B-Series (BXM) is fine
+  // with vertex pulling and keeps it.
+  const bool powervrRogue = contains_ignore_case(text(g_adapterInfo.device), "rogue") &&
+                            g_backendType == wgpu::BackendType::Vulkan;
   {
     const char* env = std::getenv("AURORA_VERTEX_LOADER");
-    bool want = gfx_flag("vtxload");
+    bool want = gfx_flag("vtxload") || powervrRogue;
     if (env != nullptr && env[0] != '\0') want = env[0] == '1';
     g_vertexLoader = !g_indexPulling && !gfx_flag("novtxload") && want;
   }
@@ -1244,7 +1257,7 @@ static void reset_instance() {
 // Vulkan backend (lib/vulkan/vk_webgpu.cpp, including tier 0 VkRenderPass + fences for Vulkan 1.1
 // devices without dynamic rendering) and Dawn. The order:
 //   default (Auto / Vulkan): aurora's Vulkan backend first, then Dawn as fallback;
-//   BASARA_RENDERER=dawn (or debug flag `dawn`): Dawn first, then aurora's Vulkan backend;
+//   BASARA_RENDERER=dawn (Renderer Dawn, or debug flag `dawn`): Dawn first, then aurora's Vulkan backend;
 //   BASARA_RENDERER=gles (Adreno 5xx on Android 10): Dawn's OpenGL ES backend first, then Vulkan;
 //   a player driver that neither starts is dropped, and the order runs again on the system driver.
 bool initialize(AuroraBackend auroraBackend) {

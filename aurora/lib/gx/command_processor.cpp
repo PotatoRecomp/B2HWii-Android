@@ -30,6 +30,7 @@
 
 namespace aurora::gx::fifo {
 static Module Log("aurora::gx::fifo");
+static void dump_fifo_desync(const char* reason, const u8* data, u32 pos, u32 size);
 
 using IndexBuffer = std::vector<u16>;
 
@@ -700,6 +701,9 @@ uint32_t process(const u8* data, u32 size, bool bigEndian) {
       const u32 byteCount = static_cast<u32>(len) * 4u;
       if (array.data == nullptr || array.stride == 0 || byteOffset + byteCount > array.size) {
         static u32 invalidIndexedXfLogCount = 0;
+        if (invalidIndexedXfLogCount == 0) {
+          dump_fifo_desync("indexed XF from empty array", data, pos >= 5 ? pos - 5 : 0, size);
+        }
         if (invalidIndexedXfLogCount < 16) {
           Log.warn("Skipping indexed XF load with invalid source array: array={} idx={} stride={} offset={} bytes={} "
                    "size={} dst=0x{:04X}",
@@ -731,6 +735,7 @@ uint32_t process(const u8* data, u32 size, bool bigEndian) {
     case CP_CMD_CALL_DL: {
       // Call display list: 8 bytes (address + size)
       CHECK(pos + 8 <= size, "call DL read overrun");
+      dump_fifo_desync("nested call DL", data, pos >= 1 ? pos - 1 : 0, size);
       Log.warn("Ignoring nested GX_CMD_CALL_DL");
       pos += 8;
       break;
@@ -1987,8 +1992,26 @@ static void handle_xf(const u8* data, u32& pos, u32 size, bool bigEndian) {
   pos += dataBytes;
 }
 
+// First FIFO desyncs of a session: dump the whole buffer being decoded (up to 8 KiB before the
+// failure), so a tester log shows which command the decoder mis-sized. Twice per session at most.
+static void dump_fifo_desync(const char* reason, const u8* data, u32 pos, u32 size) {
+  static u32 dumps = 0;
+  if (dumps >= 2) return;
+  ++dumps;
+  const u32 start = pos > 8192 ? (pos - 8192) & ~63u : 0;
+  const u32 end = std::min(size, pos + 512);
+  Log.warn("FIFO desync dump {} ({}): pos {} of {} bytes, rows {}-{}", dumps, reason, pos, size, start, end);
+  std::string row;
+  for (u32 rowStart = start; rowStart < end; rowStart += 64) {
+    row.clear();
+    for (u32 i = rowStart; i < std::min(end, rowStart + 64); ++i) row += fmt::format("{:02x}", data[i]);
+    Log.warn("  fifo {:05d}: {}", rowStart, row);
+  }
+}
+
 static void handle_draw_overrun(u8 cmd, u16 vtxCount, u32 vtxSize, u32 totalVtxBytes, const u8* data, const u32& pos,
                                 u32 size) {
+  dump_fifo_desync("truncated draw", data, pos >= 3 ? pos - 3 : 0, size);
   static u32 truncatedDrawLogCount = 0;
   if (truncatedDrawLogCount >= 64) {
     if (truncatedDrawLogCount == 64) {
@@ -2063,8 +2086,9 @@ static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
   return vtxSize;
 }
 
-static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
-                                 gfx::Range vertRange, uint16_t usedPnMtxMask,
+struct CachedPipelineState;
+static void handle_draw_unmerged(const CachedPipelineState& pipelineState, GXPrimitive prim, GXVtxFmt fmt,
+                                 u16 vtxCount, gfx::Range vertRange, uint16_t usedPnMtxMask,
                                  HashType matrixTopologySignature,
                                  HashType geometrySignature, bool interpolationIdentityActive);
 
@@ -2323,8 +2347,10 @@ static gfx::Range push_draw_vertices(const CachedPipelineState& state, const uin
   return range;
 }
 
-static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t rawBytes, bool merged = false) {
-  const auto& state = resolve_pipeline_state(prim, fmt);
+// `state` is the draw's resolve_pipeline_state, resolved once by the caller: each resolve reads the
+// render pass's sample count and compares the memo, and a draw used to pay for that three times.
+static bool admit_draw(const CachedPipelineState& state, GXPrimitive prim, u16 count, uint32_t rawBytes,
+                       bool merged = false) {
   const auto& indexTemplate = cached_index_template(prim, count);
   gfx::StagingSizes demand{vertex_demand(state, count, rawBytes), 0, indexTemplate.indices.size() * sizeof(u16), 0};
   if (merged) return gfx::staging_has_space(demand);
@@ -2390,19 +2416,21 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
 
   // This entry point bypasses process(), so it owns the renderer lock itself.
   std::unique_lock gpuLock(aurora::renderer_gpu_mutex());
-  if (!admit_draw(prim, fmt, vtxCount, vertexBytes)) {
+  const CachedPipelineState* state = &resolve_pipeline_state(prim, fmt);
+  if (!admit_draw(*state, prim, vtxCount, vertexBytes)) {
     gpuLock.unlock();
     gfx::split_staging_batch();
     gpuLock.lock();
-    if (!admit_draw(prim, fmt, vtxCount, vertexBytes))
+    state = &resolve_pipeline_state(prim, fmt);  // the batch split may have begun another pass
+    if (!admit_draw(*state, prim, vtxCount, vertexBytes))
       throw gfx::StagingCapacityError("Raw draw does not fit after capacity submission");
   }
-  const gfx::Range vertRange = push_draw_vertices(resolve_pipeline_state(prim, fmt), vertices, vtxCount, vertexBytes);
+  const gfx::Range vertRange = push_draw_vertices(*state, vertices, vtxCount, vertexBytes);
   const bool interpolationIdentityActive = frame_interpolation_identity_needed();
   const PnMtxUsage matrixUsage = interpolationIdentityActive
                                      ? pn_mtx_usage(vertices, vtxCount, vtxSize)
                                      : PnMtxUsage{};
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
+  handle_draw_unmerged(*state, prim, fmt, vtxCount, vertRange,
                        matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
                        interpolationIdentityActive);
@@ -2496,6 +2524,8 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   const bool noMerge = noMergeMode == 1 || (noMergeMode == 2 && scratch) || (noMergeMode == 3 && !scratch);
   // Decide admission before allocating anything. The merged path needs only
   // vertices and indices; it must not resolve pipelines or upload arrays.
+  // One resolve for the whole draw (merge check, admission, vertices, the draw itself).
+  const CachedPipelineState& pipelineState = resolve_pipeline_state(prim, fmt);
   // Try to merge with previous draw call
   if (!g_gxState.stateDirty && !noMerge) LIKELY {
     auto* lastDraw = gfx::get_last_draw_command<DrawData>();
@@ -2506,7 +2536,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
         !lastDraw->expandedPrimitive && lastDraw->instanceCount == 1 &&
         uint64_t(lastDraw->vtxCount) +
             vtxCount <= 65536u &&
-        lastDraw->vtxStride == resolve_pipeline_state(prim, fmt).decoder.nativeStride) LIKELY {
+        lastDraw->vtxStride == pipelineState.decoder.nativeStride) LIKELY {
       mergeTarget = lastDraw;
     }
   }
@@ -2523,9 +2553,9 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     }
     g_mergeSuspects.clear();
   }
-  if (!admit_draw(prim, fmt, vtxCount, totalVtxBytes, mergeTarget != nullptr)) throw gfx::StagingBatchFull{};
+  if (!admit_draw(pipelineState, prim, vtxCount, totalVtxBytes, mergeTarget != nullptr)) throw gfx::StagingBatchFull{};
   const uint8_t* vertices = data + pos;
-  gfx::Range vertRange = push_draw_vertices(resolve_pipeline_state(prim, fmt), vertices, vtxCount, totalVtxBytes);
+  gfx::Range vertRange = push_draw_vertices(pipelineState, vertices, vtxCount, totalVtxBytes);
   pos += totalVtxBytes;
   if (auto* lastDraw = mergeTarget) {
       const auto& indexTemplate = cached_index_template(prim, vtxCount);
@@ -2554,14 +2584,15 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   const PnMtxUsage matrixUsage = interpolationIdentityActive
                                      ? pn_mtx_usage(vertices, vtxCount, vtxSize)
                                      : PnMtxUsage{};
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
+  handle_draw_unmerged(pipelineState, prim, fmt, vtxCount, vertRange,
                        matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
                        interpolationIdentityActive);
   return true;
 }
 
-static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+static void handle_draw_unmerged(const CachedPipelineState& pipelineState, GXPrimitive prim, GXVtxFmt fmt,
+                                 u16 vtxCount,
                                  gfx::Range vertRange, uint16_t usedPnMtxMask,
                                  HashType matrixTopologySignature,
                                  HashType geometrySignature, bool interpolationIdentityActive) {
@@ -2578,7 +2609,6 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   const gfx::Range idxRange = gfx::push_indices(ArrayRef<u16>{
       indexTemplate.indices.data(), indexTemplate.indices.size()});
 
-  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
   const auto& info = pipelineState.shaderInfo;
   const u32 nativeStride = pipelineState.decoder.nativeStride;
 

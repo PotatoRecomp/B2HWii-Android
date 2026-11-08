@@ -779,5 +779,7 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept;
 void notify_copy_texture_created() noexcept;
 
 u8 comp_type_size(GXAttr attr, GXCompType type) noexcept;
+// Maps the reserved VAT encodings (6..7) to the format hardware decodes them as, instead of a fatal.
+u8 sanitize_comp_type(GXAttr attr, u8 type) noexcept;
 u8 comp_cnt_count(GXAttr attr, GXCompCnt cnt) noexcept;
 } // namespace aurora::gx

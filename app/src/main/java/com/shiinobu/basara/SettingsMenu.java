@@ -258,11 +258,20 @@ final class SettingsMenu {
                 new String[] {Tr.t("Auto"), Tr.t("On"), Tr.t("Off")}, settings.gpuCompat(), true,
                 which -> settings.setGpuCompat(which));
         restart(null);
-        choiceRow(Tr.t("Renderer"), Tr.t("Auto uses Dawn, and the Vulkan renderer only for a GPU driver Dawn cannot "
-                        + "use (like malisx2 on Mali). Vulkan always tries the Vulkan renderer first: lighter, "
-                        + "made for older phones. OpenGL ES runs Dawn on OpenGL ES, for phones whose Vulkan driver "
-                        + "shows a black screen or closes the game."),
-                new String[] {Tr.t("Auto"), Tr.t("Vulkan"), Tr.t("OpenGL ES")}, settings.renderer(), true, which -> {
+        int rendererIndex = 0;
+        for (int i = 0; i < AppSettings.RENDERER_ORDER.length; i++) {
+            if (AppSettings.RENDERER_ORDER[i] == settings.renderer()) rendererIndex = i;
+        }
+        choiceRow(Tr.t("Renderer"), Tr.t("Auto picks one for this phone (the Vulkan renderer on most). Dawn: the "
+                        + "WebGPU renderer of this version. WebGPU 1.0: the renderer of version 1.0, which some "
+                        + "phones run smoother; it has none of the renderer changes made after 1.0, so Graphics Compatibility "
+                        + "and the GPU-time Dynamic Resolution do nothing there (not on PowerVR, Adreno 5xx or "
+                        + "Android 10: they use Auto). Vulkan: "
+                        + "the game talks to the Vulkan driver directly. OpenGL ES: Dawn on OpenGL ES, for phones "
+                        + "whose Vulkan driver shows a black screen or closes the game."),
+                new String[] {Tr.t("Auto"), "Dawn", "WebGPU 1.0", Tr.t("Vulkan"), Tr.t("OpenGL ES")}, rendererIndex,
+                true, index -> {
+                    final int which = AppSettings.RENDERER_ORDER[index];
                     final int before = settings.renderer();
                     settings.setRenderer(which);
                     confirmRestart(Tr.t("Renderer"), AppSettings.rendererName(which), AppSettings.rendererName(before),
@@ -556,19 +565,24 @@ final class SettingsMenu {
      * from its first start (DeviceProfile.applyOnce). Off puts back the settings from before it.
      */
     private void lowEndRow() {
-        final java.util.Map<String, Object> values = DeviceProfile.lowEndValues(settings.gpuName());
-        final String render = AppSettings.resolutionLabel((Float) values.get("resolution_scale"));
-        toggleRow(Tr.t("Low-End Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
+        final String gpu = settings.gpuName();
+        final String render = AppSettings.resolutionLabel((Float) DeviceProfile.lowEndValues(gpu, 1).get("resolution_scale"));
+        final String ultraRender = AppSettings.resolutionLabel((Float) DeviceProfile.lowEndValues(gpu, 2).get("resolution_scale"));
+        final String[] options = {Tr.t("Off"), Tr.t("Low-End"), Tr.t("Ultra Low")};
+        choiceRow(Tr.t("Low-End Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
                         + "60 fps: steadier, blurrier.") + "\n• " + Tr.t("Display Resolution") + " 480p\n• "
                         + Tr.t("Render Resolution") + " " + render + "\n• " + Tr.t("Texture Detail") + " "
                         + Tr.t("Original") + "\n• " + Tr.t("Upscaler") + " " + Tr.t("Off") + "\n• "
                         + Tr.t("Frameskip") + " " + Tr.t("Auto") + "\n• " + Tr.t("Dynamic Resolution") + " "
                         + Tr.t("On") + "\n• " + Tr.t("HD Textures") + " " + Tr.t("Off") + "\n"
+                        + Tr.t("Ultra Low: the same, with Display Resolution 360p, Render Resolution ") + ultraRender
+                        + Tr.t(" and the 30 FPS Lock with GX Thread, for a phone that drops in the heaviest effects.") + "\n"
                         + Tr.t("Off puts back the settings from "
                         + "before it. Applies when the game starts again."),
-                settings.lowEndApplied(), on -> {
-                    if (on) settings.applyLowEnd(values);
-                    else settings.undoLowEnd();
+                options, settings.lowEndLevel(), true, which -> {
+                    if (which == settings.lowEndLevel()) return;
+                    settings.undoLowEnd();  // a switch between levels keeps the backup from before either
+                    if (which > 0) settings.applyLowEnd(DeviceProfile.lowEndValues(gpu, which), which);
                     changed();
                 });
     }

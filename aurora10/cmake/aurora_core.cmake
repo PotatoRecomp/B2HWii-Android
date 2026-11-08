@@ -1,0 +1,100 @@
+add_library(aurora_core STATIC
+        lib/aurora.cpp
+        lib/input.cpp
+        lib/window.cpp
+        lib/logging.cpp
+        lib/system_info.cpp
+        lib/system_info.hpp
+)
+add_library(aurora::core ALIAS aurora_core)
+set_target_properties(aurora_core PROPERTIES FOLDER "aurora")
+
+target_compile_definitions(aurora_core PUBLIC AURORA TARGET_PC)
+target_include_directories(aurora_core PUBLIC include)
+target_link_libraries(aurora_core PUBLIC fmt::fmt ${AURORA_SDL3_TARGET} xxhash)
+target_link_libraries(aurora_core PRIVATE absl::btree absl::flat_hash_map sqlite3 TracyClient)
+if (AURORA_ENABLE_GX AND AURORA_CACHE_USE_ZSTD)
+    target_compile_definitions(aurora_core PRIVATE AURORA_CACHE_USE_ZSTD)
+    target_link_libraries(aurora_core PRIVATE libzstd_static)
+endif ()
+
+if (CMAKE_SYSTEM_NAME STREQUAL Windows)
+    # stuff for fetching system info.
+    target_link_libraries(aurora_core PRIVATE ntdll dxgi advapi32 user32)
+elseif (APPLE)
+    target_sources(aurora_core PRIVATE lib/system_info_mac.mm)
+endif ()
+
+if (AURORA_ENABLE_GX)
+    target_sources(aurora_core PRIVATE lib/imgui.cpp)
+    target_link_libraries(aurora_core PUBLIC imgui)
+endif ()
+
+if (AURORA_ENABLE_GX)
+    target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
+    target_sources(aurora_core PRIVATE lib/webgpu/gpu.cpp lib/webgpu/gpu_cache.cpp lib/webgpu/fsr.cpp lib/webgpu/sgsr.cpp lib/webgpu/custom_driver.cpp lib/dawn/BackendBinding.cpp)
+    target_link_libraries(aurora_core PRIVATE dawn::webgpu_dawn)
+    if (ANDROID)
+        # libadrenotools (BSD-2-Clause) loads player-installed Vulkan drivers (lib/webgpu/custom_driver.cpp).
+        # Its hook libraries are loaded at run time from a folder; tools/b-android.ps1 -Mode stage puts
+        # them in the APK's assets (runtime/gpu_hooks), and the app copies them out.
+        include(FetchContent)
+        set(_aurora_adrenotools_local "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/src/libadrenotools")
+        if (EXISTS "${_aurora_adrenotools_local}/CMakeLists.txt")
+            FetchContent_Declare(adrenotools SOURCE_DIR "${_aurora_adrenotools_local}")
+        else ()
+            FetchContent_Declare(adrenotools GIT_REPOSITORY https://github.com/bylaws/libadrenotools.git
+                                 GIT_TAG 8fae8ce254dfc1344527e05301e43f37dea2df80 GIT_SUBMODULES_RECURSE TRUE)
+        endif ()
+        FetchContent_MakeAvailable(adrenotools)
+        target_link_libraries(aurora_core PRIVATE adrenotools)
+        foreach (_aurora_hook hook_impl main_hook file_redirect_hook gsl_alloc_hook)
+            target_link_options(${_aurora_hook} PRIVATE "LINKER:-z,max-page-size=16384")
+        endforeach ()
+        add_custom_target(aurora_gpu_hooks DEPENDS main_hook file_redirect_hook gsl_alloc_hook hook_impl)
+        add_dependencies(aurora_core aurora_gpu_hooks)
+        include(cmake/aurora_vk.cmake)
+        # PUBLIC: the dispatch must come ahead of the (renamed) Dawn archive for everything that calls wgpu*.
+        target_link_libraries(aurora_core PUBLIC aurora_vk)
+    endif ()
+    if (APPLE AND DAWN_ENABLE_METAL)
+        find_library(AURORA_METALFX_FRAMEWORK MetalFX)
+    endif ()
+    if (APPLE AND DAWN_ENABLE_METAL AND AURORA_METALFX_FRAMEWORK)
+        target_sources(aurora_core PRIVATE lib/webgpu/metalfx.mm)
+        set_source_files_properties(lib/webgpu/metalfx.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+        target_link_options(aurora_core PUBLIC "LINKER:-weak_framework,MetalFX")
+        target_link_libraries(aurora_core PRIVATE "-framework IOSurface")
+    else ()
+        target_sources(aurora_core PRIVATE lib/webgpu/metalfx_stub.cpp)
+    endif ()
+    if (DAWN_ENABLE_VULKAN)
+        target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_VULKAN)
+    endif ()
+    if (DAWN_ENABLE_METAL)
+        target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_METAL)
+        target_sources(aurora_core PRIVATE lib/dawn/MetalBinding.mm)
+        set_source_files_properties(lib/dawn/MetalBinding.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+        target_link_options(aurora_core PUBLIC
+            "LINKER:-weak_framework,Metal"
+            "LINKER:-U,_OBJC_CLASS_$_MTLLogStateDescriptor")
+    endif ()
+    if (DAWN_ENABLE_D3D11)
+        target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_D3D11)
+    endif ()
+    if (DAWN_ENABLE_D3D12)
+        target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_D3D12)
+    endif ()
+    if (DAWN_ENABLE_DESKTOP_GL OR DAWN_ENABLE_OPENGLES)
+        target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_OPENGL)
+        if (DAWN_ENABLE_DESKTOP_GL)
+            target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_DESKTOP_GL)
+        endif ()
+        if (DAWN_ENABLE_OPENGLES)
+            target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_OPENGLES)
+        endif ()
+    endif ()
+    if (DAWN_ENABLE_NULL)
+        target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_NULL)
+    endif ()
+endif ()

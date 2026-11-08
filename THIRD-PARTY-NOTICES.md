@@ -127,6 +127,12 @@ draws saber-slash, sword-spin, fire-dash, jump-across, eye-target, bordered-shie
 crosshair, pause-button, shouting, cog and house, converted to absolute path data in
 `app/src/main/java/com/shiinobu/basara/TouchGlyphs.java`; the shapes are unchanged.
 
+### Roboto Medium - Apache-2.0
+
+Roboto by Google, <https://fonts.google.com/specimen/Roboto>, licensed under the Apache License 2.0
+(<https://www.apache.org/licenses/LICENSE-2.0>). `app/src/main/assets/fonts/Roboto-Medium.ttf` is the
+unmodified copy shipped in Dear ImGui's `misc/fonts`; the performance overlay draws its text with it.
+
 ---
 
 ## Fetched at build time and redistributed in release builds

@@ -88,6 +88,8 @@ struct PresentTimingSample {
   // Slot carried a copy of the native image instead of replayed interpolation, so the present
   // counts toward the rate but shows no new motion.
   bool duplicated = false;
+  // Time since the previous present that carried new motion (0 for a duplicated slot).
+  std::chrono::nanoseconds newMotionInterval{};
 };
 
 std::mutex g_presentTimingMutex;
@@ -95,6 +97,7 @@ std::array<PresentTimingSample, 512> g_presentTimingSamples{};
 size_t g_presentTimingWriteIndex = 0;
 size_t g_presentTimingSampleCount = 0;
 std::optional<PresentClock::time_point> g_lastSuccessfulPresent;
+std::optional<PresentClock::time_point> g_lastNewMotionPresent;
 uint64_t g_totalPresentCount = 0;
 
 void wait_until_precise(PresentClock::time_point deadline) noexcept {
@@ -161,10 +164,18 @@ void record_successful_present(bool, uint32_t,
       interval = std::chrono::duration_cast<std::chrono::nanoseconds>(now - *g_lastSuccessfulPresent);
     }
     g_lastSuccessfulPresent = now;
+    std::chrono::nanoseconds newMotionInterval{};
+    if (!duplicated) {
+      if (g_lastNewMotionPresent) {
+        newMotionInterval = std::chrono::duration_cast<std::chrono::nanoseconds>(now - *g_lastNewMotionPresent);
+      }
+      g_lastNewMotionPresent = now;
+    }
     g_presentTimingSamples[g_presentTimingWriteIndex] = {
         .presentedAt = now,
         .interval = interval,
         .duplicated = duplicated,
+        .newMotionInterval = newMotionInterval,
     };
     g_presentTimingWriteIndex = (g_presentTimingWriteIndex + 1) % g_presentTimingSamples.size();
     g_presentTimingSampleCount = std::min(g_presentTimingSampleCount + 1, g_presentTimingSamples.size());
@@ -178,6 +189,7 @@ AuroraPresentTiming snapshot_present_timing() noexcept {
   std::vector<double> milliseconds;
   uint64_t totalPresentCount = 0;
   size_t newMotionSamples = 0;
+  double worstNewMotionMs = 0.0;
   {
     std::lock_guard lock(g_presentTimingMutex);
     totalPresentCount = g_totalPresentCount;
@@ -189,6 +201,8 @@ AuroraPresentTiming snapshot_present_timing() noexcept {
             std::chrono::duration<double, std::milli>(sample.interval).count());
         if (!sample.duplicated) {
           ++newMotionSamples;
+          worstNewMotionMs = std::max(
+              worstNewMotionMs, std::chrono::duration<double, std::milli>(sample.newMotionInterval).count());
         }
       }
     }
@@ -208,11 +222,10 @@ AuroraPresentTiming snapshot_present_timing() noexcept {
   }
   result.averageFrameTimeMs = totalMilliseconds / static_cast<double>(milliseconds.size());
   result.framesPerSecond = result.averageFrameTimeMs > 0.0 ? 1000.0 / result.averageFrameTimeMs : 0.0;
-  // Duplicated presentation slots keep the presented cadence but carry no new
-  // motion; scale them out so this reads as the rate the eye actually sees.
-  result.effectiveFramesPerSecond =
-      result.framesPerSecond *
-      (static_cast<double>(newMotionSamples) / static_cast<double>(milliseconds.size()));
+  // Frames with new motion that reached the screen in the last second, counted, not derived from
+  // the average interval: duplicated slots and frames the presenter dropped are not in it.
+  result.effectiveFramesPerSecond = static_cast<double>(newMotionSamples);
+  result.worstFrameTimeMs = worstNewMotionMs;
   for (const double value : milliseconds) {
     const double difference = value - result.averageFrameTimeMs;
     result.jitterMs += difference * difference;
@@ -1076,11 +1089,9 @@ bool present_presentation_job(const PresentationJob& job) {
           }
           presentDuration = std::chrono::duration_cast<std::chrono::nanoseconds>(
               PresentClock::now() - presentStarted);
-          // On Android native Vulkan (Adreno), swapchain backpressure blocks inside vkQueuePresentKHR
-          // rather than vkAcquireNextImageKHR. Include presentDuration so presenter_main detects
-          // backed-up flip queues and drops queued frames instead of stalling the shared queue mutex.
-          g_lastAcquireNanos.store((acquireDuration + presentDuration).count(),
-                                   std::memory_order_relaxed);
+          // Only the acquire counts as backlog (as in 1.0). Counting a slow Present() too dropped
+          // every other frame on GPU-bound phones (Mali-G57 MP1, gpu ~20 ms): the GPU still drew the
+          // dropped frames, so the picture judders at half rate while the game never slows down.
           if (presentStatus == wgpu::Status::Success) {
             presented = true;
             record_successful_present(

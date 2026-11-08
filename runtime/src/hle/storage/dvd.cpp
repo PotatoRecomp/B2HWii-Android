@@ -22,6 +22,7 @@ extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #include <windows.h>
 #elif defined(__ANDROID__)
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -115,7 +116,24 @@ static std::vector<DVDFileEntry> g_fileEntries;
 // with pread on a descriptor kept open, so a file is opened once rather than on every read.
 namespace {
 
-using FileBytes = std::shared_ptr<const std::vector<uint8_t>>;
+// A cached file: heap bytes on Windows, a read-only file mapping on Android. The mapping lives in
+// the page cache, so under memory pressure the kernel drops its pages (a later read faults them
+// back from storage) instead of lmkd killing the game, as 0.9 GiB of heap did on a 6 GB Redmi.
+struct CachedBytes {
+    std::vector<uint8_t> owned;
+    void* map = nullptr;
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    CachedBytes() = default;
+    CachedBytes(const CachedBytes&) = delete;
+    CachedBytes& operator=(const CachedBytes&) = delete;
+    ~CachedBytes() {
+#if defined(__ANDROID__)
+        if (map != nullptr) ::munmap(map, size);
+#endif
+    }
+};
+using FileBytes = std::shared_ptr<const CachedBytes>;
 std::mutex g_readCacheMutex;
 std::unordered_map<fs::path::string_type, FileBytes> g_readCache;
 std::atomic<uint64_t> g_dvdReadNanos{0};
@@ -200,13 +218,12 @@ bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::v
     bool ok = false;
     if (const FileBytes bytes = CachedFile(path)) {
         failure = DvdReadContract::HostReadFailure::None;
-        if (offset >= bytes->size()) {
+        if (offset >= bytes->size) {
             failure = DvdReadContract::HostReadFailure::BadOffset;
-        } else if (length > bytes->size() - offset) {
+        } else if (length > bytes->size - offset) {
             failure = DvdReadContract::HostReadFailure::ShortRead;
         } else {
-            destination.assign(bytes->begin() + static_cast<std::ptrdiff_t>(offset),
-                               bytes->begin() + static_cast<std::ptrdiff_t>(offset + length));
+            destination.assign(bytes->data + offset, bytes->data + offset + length);
             ok = true;
         }
     } else {
@@ -230,9 +247,10 @@ std::atomic<int64_t> g_preloadBytes{0};
 void StartReadCachePreload() {
 #if defined(__ANDROID__)
     const uint64_t ram = static_cast<uint64_t>(sysconf(_SC_PHYS_PAGES)) * static_cast<uint64_t>(sysconf(_SC_PAGE_SIZE));
-    // The preload holds ~0.9 GiB for the whole session: on a 4 GB phone (3.8 GiB reported) that left
-    // under 0.1 GiB free in battle and lmkd killed the game. Only 6 GB phones and up keep it.
-    if (ram < (5ull << 30) || std::getenv("BASARA_NO_DVD_PRELOAD") != nullptr) {
+    // On the heap the preload held ~0.9 GiB for the whole session: on a 4 GB phone (3.8 GiB
+    // reported) that left under 0.1 GiB free in battle and lmkd killed the game. Mapped files are
+    // page cache the kernel can take back, so 3 GB phones and up keep it now.
+    if (ram < (3ull << 30) || std::getenv("BASARA_NO_DVD_PRELOAD") != nullptr) {
         RT_LOGF(RT_TAG_DVD, "read cache: off (%llu MiB of RAM)\n", static_cast<unsigned long long>(ram >> 20));
         g_preloadBytes.store(-1, std::memory_order_relaxed);
         return;
@@ -261,14 +279,39 @@ void StartReadCachePreload() {
             if (ec || size == 0 || total + size > kCacheLimitBytes || CachedFile(path)) {
                 continue;
             }
-            std::ifstream file(path, std::ios::binary);
-            auto bytes = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(size));
-            if (!file.read(reinterpret_cast<char*>(bytes->data()), static_cast<std::streamsize>(size))) {
+            auto bytes = std::make_shared<CachedBytes>();
+            bytes->size = static_cast<size_t>(size);
+#if defined(__ANDROID__)
+            const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+            if (fd < 0) {
                 continue;
             }
+            void* map = ::mmap(nullptr, bytes->size, PROT_READ, MAP_SHARED, fd, 0);
+            ::close(fd);
+            if (map == MAP_FAILED) {
+                continue;
+            }
+            ::madvise(map, bytes->size, MADV_WILLNEED);
+            // Touch every page here, at the lowest priority, so the game's reads find them resident.
+            const long page = sysconf(_SC_PAGE_SIZE) > 0 ? sysconf(_SC_PAGE_SIZE) : 4096;
+            volatile uint8_t sink = 0;
+            for (size_t at = 0; at < bytes->size; at += static_cast<size_t>(page)) {
+                sink = sink + static_cast<const volatile uint8_t*>(map)[at];
+            }
+            (void)sink;
+            bytes->map = map;
+            bytes->data = static_cast<const uint8_t*>(map);
+#else
+            std::ifstream file(path, std::ios::binary);
+            bytes->owned.resize(bytes->size);
+            if (!file.read(reinterpret_cast<char*>(bytes->owned.data()), static_cast<std::streamsize>(size))) {
+                continue;
+            }
+            bytes->data = bytes->owned.data();
+#endif
             {
                 std::lock_guard lock(g_readCacheMutex);
-                g_readCache.emplace(path.native(), std::move(bytes));
+                g_readCache.emplace(path.native(), FileBytes(std::move(bytes)));
             }
             total += size;
             ++files;

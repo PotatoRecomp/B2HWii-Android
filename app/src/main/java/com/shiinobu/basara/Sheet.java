@@ -211,9 +211,13 @@ final class Sheet {
         return this;
     }
 
-    /** Back (or tapping outside) closes it as if this ran. */
+    /** Back (or tapping outside) closes it as if this ran; null closes it and does nothing more. */
     Sheet onCancel(Runnable run) {
-        dialog.setOnCancelListener(d -> run.run());
+        // The in-game Restart button passes null (GameActivity.confirmRestart): Back then crashed
+        // the game (tester report, itel A666LN, 2026-11-08).
+        dialog.setOnCancelListener(d -> {
+            if (run != null) run.run();
+        });
         return this;
     }
 
@@ -246,7 +250,9 @@ final class Sheet {
     }
 
     Sheet onDismiss(Runnable run) {
-        dialog.setOnDismissListener(d -> run.run());
+        dialog.setOnDismissListener(d -> {
+            if (run != null) run.run();
+        });
         return this;
     }
 

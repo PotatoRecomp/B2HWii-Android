@@ -2,6 +2,7 @@
 #include "thermal.h"
 
 #include "runtime_log.h"
+#include "system_stats.h"
 
 #include <atomic>
 
@@ -32,8 +33,21 @@ using AcquireFn = void* (*)();
 using HeadroomFn = float (*)(void*, int);
 using StatusFn = int (*)(void*);
 
-// The headroom call is a binder round trip and Android answers NaN to calls less than a second
-// apart, so it runs here and the game only reads the atomics.
+// Hysteresis on one level: on from enter, off again below leave.
+bool Level(bool on, float value, float enter, float leave) { return on ? value >= leave : value >= enter; }
+
+void SetLevels(bool warm, bool hot, const char* source, float value) {
+    g_warm.store(warm, std::memory_order_relaxed);
+    if (g_hot.exchange(hot, std::memory_order_relaxed) != hot) {
+        RT_LOGF(RT_TAG_RUNTIME, "thermal: %s (%s %.2f)\n", hot ? "hot" : "cool again", source, value);
+    }
+}
+
+// The headroom call is a binder round trip, and Android answers NaN when asked more often than once
+// in 10 s: the 2 s poll here before read NaN in every Redmi log, so Thermal Control never saw the
+// heat. Headroom now runs every 10 s and keeps its last valid value; status and the battery
+// fallback run every 2 s. With no valid headroom for 30 s (no API, or a thermal HAL without skin
+// sensors), the battery temperature decides instead.
 void Poll(void* manager, HeadroomFn headroom, StatusFn status) {
     pthread_setname_np(pthread_self(), "Thermal");
     setpriority(PRIO_PROCESS, 0, 10);
@@ -45,31 +59,55 @@ void Poll(void* manager, HeadroomFn headroom, StatusFn status) {
         std::sscanf(env, "%f:%d", &fake, &fakeSeconds);
         RT_LOGF(RT_TAG_RUNTIME, "thermal: fake headroom %.2f for %d s\n", fake, fakeSeconds);
     }
-    const auto start = std::chrono::steady_clock::now();
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    Clock::time_point lastAsk{};
+    Clock::time_point lastValid = start;
+    bool haveValid = false;
+    bool usingBattery = false;
     for (;;) {
-        float h = headroom(manager, 10);
-        if (fake >= 0.0f && std::chrono::steady_clock::now() - start < std::chrono::seconds(fakeSeconds)) {
-            h = fake;
-        }
-        if (!std::isnan(h)) {
-            g_headroom.store(h, std::memory_order_relaxed);
-            const bool warm = g_warm.load(std::memory_order_relaxed);
-            g_warm.store(warm ? h >= kWarmCoolHeadroom : h >= kWarmHeadroom, std::memory_order_relaxed);
-            const bool hot = g_hot.load(std::memory_order_relaxed);
-            const bool now = hot ? h >= kCoolHeadroom : h >= kHotHeadroom;
-            if (now != hot) {
-                g_hot.store(now, std::memory_order_relaxed);
-                RT_LOGF(RT_TAG_RUNTIME, "thermal: %s (headroom %.2f in 10 s)\n", now ? "hot" : "cool again", h);
-            }
-        }
-        if (status != nullptr) {
-            const int s = status(manager);
+        const auto now = Clock::now();
+        int s = -1;
+        if (manager != nullptr && status != nullptr) {
+            s = status(manager);
             g_status.store(s, std::memory_order_relaxed);
             if (s != logged) {
                 if (logged >= 0) {
                     RT_LOGF(RT_TAG_RUNTIME, "thermal: status %d -> %d\n", logged, s);
                 }
                 logged = s;
+            }
+        }
+        const bool faking = fake >= 0.0f && now - start < std::chrono::seconds(fakeSeconds);
+        if (manager != nullptr && headroom != nullptr &&
+            (faking || lastAsk == Clock::time_point{} || now - lastAsk >= std::chrono::seconds(10))) {
+            const float h = faking ? fake : headroom(manager, 10);
+            if (!faking) lastAsk = now;
+            // ADPF: a severe forecast while the status still says NONE is a headroom not updated yet.
+            const bool stale = !faking && s == 0 && h >= kHotHeadroom;
+            if (!std::isnan(h) && h >= 0.0f && !stale) {
+                g_headroom.store(h, std::memory_order_relaxed);
+                lastValid = now;
+                if (!haveValid || usingBattery) {
+                    RT_LOGF(RT_TAG_RUNTIME, "thermal: headroom %.2f (system forecast)\n", h);
+                }
+                haveValid = true;
+                usingBattery = false;
+                SetLevels(Level(g_warm.load(std::memory_order_relaxed), h, kWarmHeadroom, kWarmCoolHeadroom),
+                          Level(g_hot.load(std::memory_order_relaxed), h, kHotHeadroom, kCoolHeadroom),
+                          "headroom", h);
+            }
+        }
+        if (now - lastValid >= std::chrono::seconds(30)) {
+            const float c = SampleSystemStats().batteryTempC;
+            if (c > 0.0f) {
+                if (!usingBattery) {
+                    RT_LOGF(RT_TAG_RUNTIME, "thermal: no valid headroom, using the battery temperature (%.1f C)\n", c);
+                    usingBattery = true;
+                }
+                SetLevels(Level(g_warm.load(std::memory_order_relaxed), c, kWarmBatteryC, kWarmCoolBatteryC),
+                          Level(g_hot.load(std::memory_order_relaxed), c, kHotBatteryC, kCoolBatteryC),
+                          "battery C", c);
             }
         }
         std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -93,8 +131,7 @@ void Start() {
         const auto status = lib ? reinterpret_cast<StatusFn>(dlsym(lib, "AThermal_getCurrentThermalStatus")) : nullptr;
         void* manager = acquire ? acquire() : nullptr;
         if (manager == nullptr || headroom == nullptr) {
-            RT_LOGF(RT_TAG_RUNTIME, "thermal: no headroom API on this system\n");
-            return false;
+            RT_LOGF(RT_TAG_RUNTIME, "thermal: no headroom API on this system, battery temperature only\n");
         }
         std::thread(Poll, manager, headroom, status).detach();
         return true;

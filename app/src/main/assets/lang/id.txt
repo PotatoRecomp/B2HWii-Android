@@ -211,7 +211,7 @@ Saves each texture the game uses to 	Menyimpan tiap tekstur yang dipakai game ke
 . Turn it off when done.	. Matikan bila sudah selesai.
 Turn Custom Textures on to choose.	Nyalakan Tekstur Custom untuk memilih.
 Can make the picture switch between sharp and soft during battles.	Gambar bisa berganti tajam dan lembut selama pertempuran.
-Lowers the render resolution while the GPU holds the game back (down to 0.5x) and raises it again when there is room. Render Resolution stays the highest it goes.	Menurunkan resolusi render saat GPU menahan game (sampai 0.5x) dan menaikkannya lagi bila ada ruang. Resolusi Render tetap jadi batas tertinggi.
+Lowers the render resolution while the GPU holds the game back (never below 480 lines) and raises it again when there is room. Render Resolution stays the highest it goes.	Menurunkan resolusi render saat GPU menahan game (tidak di bawah 480 baris) dan menaikkannya lagi bila ada ruang. Resolusi Render tetap jadi batas tertinggi.
 Known issue: textures and the sky can flicker white.	Masalah yang diketahui: tekstur dan langit bisa berkedip putih.
 Runs the graphics work on its own CPU core, so busy battles run faster on slower phones.	Menjalankan kerja grafis di core CPU sendiri, jadi pertempuran ramai lebih cepat di HP lambat.
 Clear HD Texture Cache?	Hapus Cache Tekstur HD?

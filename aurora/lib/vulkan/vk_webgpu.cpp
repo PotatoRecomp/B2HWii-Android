@@ -953,6 +953,8 @@ struct WGPUDeviceImpl : Object {
   // semaphores: Adreno 5xx, PowerVR GE8320): passes are VkRenderPass + VkFramebuffer and every
   // submission signals a fence. False everywhere else, where nothing below is used.
   bool legacy = false;
+  // Tier 0 on PowerVR Rogue: no CLEAR load op in any pass; clears go through vkCmdClearAttachments.
+  bool clearByAttachments = false;
   // VK_EXT_memory_budget is on: VMA tracks the driver's budget, logged when an allocation fails.
   bool hasMemoryBudget = false;
   std::mutex renderPassMutex;
@@ -2521,6 +2523,15 @@ VkRenderPass LegacyCompatiblePass(WGPUDeviceImpl* dev, const std::vector<VkForma
   depth.format = depthFormat;
   depth.samples = samples;
   depth.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  if (dev->clearByAttachments) {
+    // PowerVR Rogue: the pipelines' pass has the same load/store ops as the passes they draw in.
+    for (LegacyAttachment& c : colors) {
+      c.load = VK_ATTACHMENT_LOAD_OP_LOAD;
+      c.store = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    depth.load = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.store = VK_ATTACHMENT_STORE_OP_STORE;
+  }
   return LegacyRenderPass(dev, colors, {}, depth);
 }
 
@@ -2954,6 +2965,20 @@ WGPUDeviceImpl* CreateDevice() {
       cacheData.size());
   if (dev->legacy) {
     Log("tier 0: render passes and fences%s", chosenTier0 ? "" : " (forced, AURORA_VK_FORCE_TIER0)");
+    // Dolphin DriverDetails BUG_BROKEN_CLEAR_LOADOP_RENDERPASS (ImgTec): the PowerVR driver breaks
+    // when one pass's load ops differ from another's on the same attachments. An OPPO CPH2209
+    // (PowerVR Rogue GM9446, driver 1.13) showed only the clear colour on Vulkan. Rogue gets every
+    // pass with LOAD and clears through vkCmdClearAttachments; the B-Series rendered fine without.
+    // AURORA_VK_CLEAR_ATTACHMENTS=1/0 forces it on/off on any tier 0 device.
+    const std::string_view name(dev->props.deviceName);
+    bool want = dev->props.vendorID == 0x1010 && name.find("Rogue") != std::string_view::npos;
+    if (const char* v = std::getenv("AURORA_VK_CLEAR_ATTACHMENTS"); v != nullptr && v[0] != '\0') {
+      want = v[0] == '1';
+    }
+    dev->clearByAttachments = want;
+    if (want) {
+      Log("tier 0: passes load and clear with vkCmdClearAttachments (PowerVR clear load op bug)");
+    }
   }
   g_device = dev;
   return dev;
@@ -4437,6 +4462,34 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
       fbWidth = std::max(1u, width);
       fbHeight = std::max(1u, height);
     }
+    // PowerVR Rogue (clearByAttachments): CLEAR becomes LOAD here and the clear runs right after
+    // the pass begins, so every pass on these attachments has the same load ops.
+    std::vector<VkClearAttachment> lateClears;
+    if (encoder->dev->clearByAttachments) {
+      for (size_t i = 0; i < legacyColors.size(); ++i) {
+        LegacyAttachment& c = legacyColors[i];
+        if (c.format != VK_FORMAT_UNDEFINED && c.load == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+          c.load = VK_ATTACHMENT_LOAD_OP_LOAD;
+          lateClears.push_back(VkClearAttachment{VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(i),
+                                                 colors[i].clearValue});
+        }
+      }
+      VkImageAspectFlags aspects = 0;
+      if (legacyDepth.format != VK_FORMAT_UNDEFINED && legacyDepth.load == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+        legacyDepth.load = VK_ATTACHMENT_LOAD_OP_LOAD;
+        aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+      }
+      if (legacyDepth.format != VK_FORMAT_UNDEFINED && legacyDepth.stencilLoad == VK_ATTACHMENT_LOAD_OP_CLEAR) {
+        legacyDepth.stencilLoad = VK_ATTACHMENT_LOAD_OP_LOAD;
+        aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+      }
+      if (aspects != 0) {
+        VkClearValue clear{};
+        clear.depthStencil.depth = depth.clearValue.depthStencil.depth;
+        clear.depthStencil.stencil = stencil.clearValue.depthStencil.stencil;
+        lateClears.push_back(VkClearAttachment{aspects, 0, clear});
+      }
+    }
     const VkRenderPass renderPass = LegacyRenderPass(encoder->dev, legacyColors, legacyResolves, legacyDepth);
     const VkFramebuffer fb = GetCachedFramebuffer(encoder->dev, renderPass, views, fbWidth, fbHeight);
     const VkRenderPassBeginInfo begin{
@@ -4448,6 +4501,10 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder encod
         .pClearValues = clears.empty() ? nullptr : clears.data(),
     };
     vkCmdBeginRenderPass(cb, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    if (!lateClears.empty()) {
+      const VkClearRect rect{.rect = {{0, 0}, {fbWidth, fbHeight}}, .baseArrayLayer = 0, .layerCount = 1};
+      vkCmdClearAttachments(cb, static_cast<uint32_t>(lateClears.size()), lateClears.data(), 1, &rect);
+    }
   } else {
     vkCmdBeginRendering(cb, &info);
   }

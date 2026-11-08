@@ -515,7 +515,7 @@ final class SettingsMenu {
         heldToggle("vsync", Tr.t("V-Sync"), Tr.t("Frames go out in step with the display: smoother motion."), settings.vsync(),
                 on -> settings.setVSync(on));
         heldToggle("dynamic_resolution", Tr.t("Dynamic Resolution"), Tr.t("Lowers the render resolution while the GPU holds the game back "
-                        + "(down to 0.5x) and raises it again when there is room. Render Resolution stays the "
+                        + "(never below 480 lines) and raises it again when there is room. Render Resolution stays the "
                         + "highest it goes."),
                 settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
         restart(null);

@@ -21,6 +21,11 @@
 
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
+#if defined(__ANDROID__)
+#include <SDL3/SDL.h>
+#include <android/native_window.h>
+#include <dlfcn.h>
+#endif
 
 namespace DisplaySettings {
 namespace {
@@ -43,7 +48,10 @@ uint32_t g_surfaceHeight = 0;
 // game back and raised again once it has room. The player's choice stays the ceiling.
 constexpr float kDynSteps[] = {1.0f, 0.9f, 0.8f, 0.7f, 0.6f, 0.5f};
 constexpr int kDynStepCount = static_cast<int>(sizeof(kDynSteps) / sizeof(kDynSteps[0]));
-constexpr float kDynMinLines = 240.0f;        // never below 0.5x
+// Never below the Wii's own 480 lines: at 240 ("0.5x") the picture went visibly coarse on Mali
+// phones. At 1x and below dynamic resolution therefore saves nothing; the heat ladder sheds work
+// there with the 30 fps drawing of Thermal::Warm instead (basara_frameskip.cpp).
+constexpr float kDynMinLines = 480.0f;
 constexpr uint32_t kDynWindowFrames = 60;     // one decision a second at 60 fps
 constexpr double kDynDownBusyMs = 15.0;       // worker this busy a cycle: it is the limit
 constexpr double kDynDownWaitMs = 2.0;        // ...or the game waits this long a frame for it
@@ -149,7 +157,10 @@ bool DynamicResolutionTick() {
     const double busyMs = cycles ? (now.busyNanos - g_dynLast.busyNanos) / 1e6 / cycles : 0.0;
     const double waitMs = (now.producerWaitNanos - g_dynLast.producerWaitNanos) / 1e6 / g_dynFrames;
     const uint64_t gpuFrames = now.gpuFrames - g_dynLast.gpuFrames;
-    const double gpuMs = gpuFrames ? (now.gpuNanos - g_dynLast.gpuNanos) / 1e6 / gpuFrames : 0.0;
+    // Per frame the worker rendered, not per present: the GPU time of frames the presenter dropped
+    // lands on the next present, and a Mali-G57 MP1 then read 80-140 ms "a frame" and went to 50%.
+    const uint64_t gpuDivisor = std::max<uint64_t>(gpuFrames, cycles);
+    const double gpuMs = gpuFrames ? (now.gpuNanos - g_dynLast.gpuNanos) / 1e6 / gpuDivisor : 0.0;
     g_dynLast = now;
     g_dynFrames = 0;
     if (g_dynSinceUp < (1 << 20)) {
@@ -212,6 +223,14 @@ bool DynamicResolutionTick() {
             g_dynSinceUp = 0;
         } else if (!fits) {
             g_dynCalm = 0;
+        }
+    }
+    // At the 480-line floor a step down changes nothing on screen: hold instead of stepping in the
+    // dark (a step up from there would then wait out windows that bought nothing).
+    if (step > g_dynStep && !s_cycleTest) {
+        const float lines = RenderLines(g_current.renderScale, EffectiveAspect(g_current.aspect));
+        if (lines > 0.0f && lines * kDynSteps[g_dynStep] <= kDynMinLines) {
+            return false;
         }
     }
     if (step == g_dynStep) {
@@ -322,7 +341,54 @@ void Request(const Settings& settings) {
     g_hasPending = true;
 }
 
+#if defined(__ANDROID__)
+// On 90/120 Hz panels the compositor and the panel otherwise run at the high rate for a 60 fps game.
+// ANativeWindow_setFrameRate (API 30) asks for 60; with frame interpolation on (120-240 fps
+// output) the preference is cleared so the panel can go high. Checked once a second because the
+// window behind the SDL window changes when the surface is recreated. BASARA_SURFACE_FPS=0: off.
+void ApplySurfaceFrameRate() {
+    static int s_frames = 0;
+    if (++s_frames < 60) {
+        return;
+    }
+    s_frames = 0;
+    using SetFrameRateFn = int32_t (*)(ANativeWindow*, float, int8_t);
+    static const SetFrameRateFn s_set = [] {
+        const char* env = std::getenv("BASARA_SURFACE_FPS");
+        if (env != nullptr && std::strcmp(env, "0") == 0) {
+            return static_cast<SetFrameRateFn>(nullptr);
+        }
+        void* lib = dlopen("libandroid.so", RTLD_NOW);
+        return lib ? reinterpret_cast<SetFrameRateFn>(dlsym(lib, "ANativeWindow_setFrameRate")) : nullptr;
+    }();
+    if (s_set == nullptr) {
+        return;
+    }
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    SDL_Window* sdlWindow = windows != nullptr && count > 0 ? windows[0] : nullptr;
+    SDL_free(windows);
+    auto* window = sdlWindow != nullptr ? static_cast<ANativeWindow*>(SDL_GetPointerProperty(
+                                              SDL_GetWindowProperties(sdlWindow),
+                                              SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr))
+                                        : nullptr;
+    const float want = aurora_get_frame_interpolation_fps() != 0 ? 0.0f : 60.0f;
+    static ANativeWindow* s_window = nullptr;
+    static float s_want = -1.0f;
+    if (window == nullptr || (window == s_window && want == s_want)) {
+        return;
+    }
+    const int32_t result = s_set(window, want, 1 /* ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE */);
+    s_window = window;
+    s_want = want;
+    RT_LOGF(RT_TAG_VI, "display: surface frame rate %s (%d)\n", want > 0.0f ? "60 Hz" : "free", result);
+}
+#endif
+
 void OnFrameBoundary(uint32_t surfaceWidth, uint32_t surfaceHeight) {
+#if defined(__ANDROID__)
+    ApplySurfaceFrameRate();
+#endif
     // BASARA_TEX_FILTER_FILE=path (test): the digit in that file (0-2) is the Texture Detail mode,
     // read every 10 frames, so one scene can be compared with and without it.
     static const char* s_texFilterFile = std::getenv("BASARA_TEX_FILTER_FILE");

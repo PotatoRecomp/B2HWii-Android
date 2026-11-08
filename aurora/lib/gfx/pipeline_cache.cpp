@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <limits>
@@ -77,6 +78,18 @@ constexpr size_t BuildPipelinesPerFrame = 1;
 static std::vector<std::thread> g_pipelineThreads;
 static bool g_pipelineThreadEnd = false;
 static size_t g_activeBackgroundPipelineWorkers = 0;
+// While playing (after the boot prewarm), compiles take at most this many cores so they do not
+// take CPU time from the game thread, like Dolphin's 1-thread compiler next to its all-core
+// precompiler. A burst (a stage load queues dozens) still gets the whole pool.
+// AURORA_PIPELINE_PLAY_WORKERS overrides it (0 = whole pool).
+#if defined(__ANDROID__)
+constexpr size_t DefaultPlayPipelineWorkers = 2;
+#else
+constexpr size_t DefaultPlayPipelineWorkers = 0;
+#endif
+constexpr size_t PlayPipelineBurst = 8;
+static size_t g_playPipelineWorkers = DefaultPlayPipelineWorkers;
+static size_t g_activePipelineCompiles = 0;
 static std::condition_variable g_pipelineCv;
 static absl::flat_hash_map<PipelineRef, CachedPipeline> g_pipelines;
 static std::deque<PendingPipeline> g_priorityPipelines;
@@ -950,6 +963,14 @@ static std::atomic_bool g_prewarmActive{false};
 static std::chrono::steady_clock::time_point g_prewarmStart{};
 static uint32_t g_prewarmCount = 0;
 
+// Called under g_pipelineMutex.
+static bool pipeline_compile_slot_free() {
+  if (g_playPipelineWorkers == 0 || g_prewarmActive.load(std::memory_order_acquire)) {
+    return true;
+  }
+  return g_activePipelineCompiles < g_playPipelineWorkers || g_priorityPipelines.size() > PlayPipelineBurst;
+}
+
 static void note_pipeline_queue_drained() {
   if (!g_prewarmActive.exchange(false, std::memory_order_acq_rel)) {
     return;
@@ -998,10 +1019,15 @@ static void pipeline_worker() {
     {
       std::unique_lock lock{g_pipelineMutex};
       g_pipelineCv.wait(lock, [] {
+        if (g_pipelineThreadEnd) {
+          return true;
+        }
+        if (!pipeline_compile_slot_free()) {
+          return false;
+        }
         return !g_priorityPipelines.empty() ||
                (!g_backgroundPipelines.empty() &&
-                g_activeBackgroundPipelineWorkers < MaxBackgroundPipelineWorkers) ||
-               g_pipelineThreadEnd;
+                g_activeBackgroundPipelineWorkers < MaxBackgroundPipelineWorkers);
       });
       if (g_pipelineThreadEnd) {
         return;
@@ -1013,15 +1039,17 @@ static void pipeline_worker() {
       if (background) {
         ++g_activeBackgroundPipelineWorkers;
       }
+      ++g_activePipelineCompiles;
     }
     compile_pending_pipeline(std::move(pending));
-    if (background) {
-      {
-        std::lock_guard lock{g_pipelineMutex};
+    {
+      std::lock_guard lock{g_pipelineMutex};
+      --g_activePipelineCompiles;
+      if (background) {
         --g_activeBackgroundPipelineWorkers;
       }
-      g_pipelineCv.notify_all();
     }
+    g_pipelineCv.notify_all();
   }
 }
 
@@ -1168,6 +1196,7 @@ void initialize_pipeline_cache() {
   g_pipelineFrameActive = false;
   g_pipelineThreadEnd = false;
   g_activeBackgroundPipelineWorkers = 0;
+  g_activePipelineCompiles = 0;
 
   if (webgpu::g_backendType == wgpu::BackendType::OpenGL || webgpu::g_backendType == wgpu::BackendType::OpenGLES ||
       webgpu::g_backendType == wgpu::BackendType::WebGPU) {
@@ -1179,8 +1208,11 @@ void initialize_pipeline_cache() {
     for (size_t i = 0; i < workerCount; ++i) {
       g_pipelineThreads.emplace_back(pipeline_worker);
     }
-    Log.info("Enabled {} priority pipeline compilation workers ({} background prewarm)",
-             workerCount, MaxBackgroundPipelineWorkers);
+    if (const char* env = std::getenv("AURORA_PIPELINE_PLAY_WORKERS")) {
+      g_playPipelineWorkers = static_cast<size_t>(std::strtoul(env, nullptr, 10));
+    }
+    Log.info("Enabled {} priority pipeline compilation workers ({} background prewarm, {} while playing)",
+             workerCount, MaxBackgroundPipelineWorkers, g_playPipelineWorkers);
   }
 
   load_pipeline_cache();
@@ -1203,6 +1235,7 @@ void shutdown_pipeline_cache() {
   g_pipelineThreads.clear();
   g_hasPipelineThread = false;
   g_activeBackgroundPipelineWorkers = 0;
+  g_activePipelineCompiles = 0;
 
   stop_pipeline_cache_writer();
   pipeline_cache_abort();

@@ -1,7 +1,7 @@
 #pragma once
 
 // Android 12+: the system's thermal headroom (AThermal_getThermalHeadroom), polled on a background
-// thread every two seconds. 1.0 is the "severe" level where the device throttles hard; the value is
+// thread every ten seconds (asked more often it answers NaN), or the battery temperature without it. 1.0 is the "severe" level where the device throttles hard; the value is
 // a forecast ten seconds ahead, so work can be shed before the clocks fall. Elsewhere, and when the
 // API is missing, Headroom() is negative (unknown).
 namespace Thermal {
@@ -22,6 +22,12 @@ bool Hot();
 // one-minute hold in the frame loop (kThermalHoldSeconds) already keeps it from flapping.
 constexpr float kWarmHeadroom = 0.82f;
 constexpr float kWarmCoolHeadroom = 0.80f;
+// Without a valid headroom (no API, or a thermal HAL without skin sensors): the battery
+// temperature in C, which reaches ~41 when the phone is hot in the hand.
+constexpr float kWarmBatteryC = 41.0f;
+constexpr float kWarmCoolBatteryC = 40.0f;
+constexpr float kHotBatteryC = 44.0f;
+constexpr float kCoolBatteryC = 42.5f;
 bool Warm();
 void SetEnabled(bool enabled);
 

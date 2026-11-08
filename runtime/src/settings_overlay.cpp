@@ -1490,7 +1490,7 @@ ImVec4 LoadColor(float percent) {
 // FPS = the game's own frames drawn a second (what the player sees move; repeated presents and
 // skipped draws don't count), CPU = how busy the game thread is (100% = the CPU limits the game),
 // GPU = the GPU's busy share, then battery, and the details for diagnosis.
-void DrawPerformanceStats(bool& first, float presentedFps) {
+void DrawPerformanceStats(bool& first, float presentedFps, float worstFrameMs) {
     static const ImVec4 kValue(0.95f, 0.96f, 0.98f, 1.0f);
     static const ImVec4 kSoft(0.72f, 0.77f, 0.84f, 1.0f);
     static const ImVec4 kFpsLabel(0.55f, 0.95f, 0.60f, 1.0f);
@@ -1503,11 +1503,23 @@ void DrawPerformanceStats(bool& first, float presentedFps) {
     const GameFrameStats& game = SampleGameFrameStats();
     const SystemStats sys = SampleSystemStats();
     if (items & kOverlayFps) {
-        const float fps = game.fps >= 0.0f ? std::min(game.fps, presentedFps > 0.0f ? presentedFps : game.fps)
-                                           : presentedFps;
+        // New frames that reached the screen in the last second (aurora snapshot_present_timing),
+        // then the longest gap between two of them: 33+ ms there is a visible hitch at any FPS.
+        // Capped by the game's drawn frames: after a frameskip the presenter repeats the last
+        // picture as a fresh present, which this count alone would take for new motion.
+        const float fps = presentedFps < 0.0f ? game.fps
+                          : game.fps >= 0.0f  ? std::min(game.fps, presentedFps)
+                                              : presentedFps;
         if (fps >= 0.0f) std::snprintf(v, sizeof(v), "%.0f", fps);
         else std::snprintf(v, sizeof(v), "--");
         StatGroup(first, "FPS", kFpsLabel, fps >= 0.0f ? FpsColor(fps) : kSoft, v);
+        if (worstFrameMs > 0.0f) {
+            std::snprintf(v, sizeof(v), "%.0f ms", worstFrameMs);
+            const ImVec4 hitch = worstFrameMs > 50.0f   ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+                                 : worstFrameMs > 25.0f ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f)
+                                                        : ImVec4(0.45f, 1.0f, 0.45f, 1.0f);
+            StatGroup(first, "MAX", kSoft, hitch, v);
+        }
     }
     if (items & kOverlayCpu) {
         const float cpu = game.fps >= 0.0f ? std::min(game.loadPercent, 100.0f) : sys.processCpuPercent;
@@ -1582,9 +1594,10 @@ void DrawFpsOverlay() {
             if (s_window >= 2.0f) {
                 const float mean = s_window * 1000.0f / s_frames;
                 RT_LOGF(RT_TAG_RUNTIME,
-                        "graph: %d frames, mean %.2f ms, jitter %.2f ms, worst %.1f ms, %d over 20 ms, %d under 12 ms\n",
+                        "graph: %d frames, mean %.2f ms, jitter %.2f ms, worst %.1f ms, %d over 20 ms, %d under 12 ms; "
+                        "overlay %.0f fps, max %.0f ms\n",
                         s_frames, mean, std::sqrt(std::max(0.0f, s_sumSq / s_frames - mean * mean)), s_worst, s_long,
-                        s_short);
+                        s_short, presentTiming.effectiveFramesPerSecond, presentTiming.worstFrameTimeMs);
                 s_window = s_worst = s_sumSq = 0;
                 s_frames = s_long = s_short = 0;
             }
@@ -1618,9 +1631,11 @@ void DrawFpsOverlay() {
         if (g_showFps) {
             // One FPS: the game's own frames, capped by what reached the screen (the effective
             // present rate leaves out repeated slots).
-            DrawPerformanceStats(first, presentTiming.sampleCount == 0
-                                            ? -1.0f
-                                            : static_cast<float>(presentTiming.effectiveFramesPerSecond));
+            DrawPerformanceStats(first,
+                                 presentTiming.sampleCount == 0
+                                     ? -1.0f
+                                     : static_cast<float>(presentTiming.effectiveFramesPerSecond),
+                                 static_cast<float>(presentTiming.worstFrameTimeMs));
         }
         if (g_frameGraph) {
             DrawFrameGraph(first);

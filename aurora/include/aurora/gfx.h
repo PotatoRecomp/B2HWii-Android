@@ -42,6 +42,8 @@ typedef struct {
   // framesPerSecond with duplicated presentation slots scaled out, so this is the rate of frames
   // that carried new motion. Equal to framesPerSecond when every slot replayed real interpolation.
   double effectiveFramesPerSecond;
+  // Longest gap between two frames with new motion in the last second (what a stutter feels like).
+  double worstFrameTimeMs;
 } AuroraPresentTiming;
 
 const AuroraStats* aurora_get_stats();

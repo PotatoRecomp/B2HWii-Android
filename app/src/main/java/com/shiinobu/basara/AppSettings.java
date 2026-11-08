@@ -73,18 +73,20 @@ final class AppSettings {
         prefs.edit().putBoolean("gx_thread_off_1", true).putBoolean("gx_thread", false).commit();
     }
 
-    /** The flicker is fixed (BP registers through the FIFO): GX Thread goes back on once on CPU-bound phones. */
-    void gxThreadOnOnce(boolean cpuBound) {
-        if (prefs.getBoolean("gx_thread_on_1", false)) return;
-        final SharedPreferences.Editor e = prefs.edit().putBoolean("gx_thread_on_1", true);
-        if (cpuBound) e.putBoolean("gx_thread", true);
-        e.commit();
+    /**
+     * 1.2 turned GX Thread on for CPU-bound phones; battles then ran less evenly (frame jitter 5.5 ms
+     * against 3.1 ms without it, Redmi Adreno 618, 2026-11-08) and players found 1.0 smoother. Off
+     * again once on every install; the player can still turn it on in Performance.
+     */
+    void gxThreadOffAgainOnce() {
+        if (prefs.getBoolean("gx_thread_off_2", false)) return;
+        prefs.edit().putBoolean("gx_thread_off_2", true).putBoolean("gx_thread", false).commit();
     }
 
     /** The device profile's picks, for the settings the player never set; runs once. */
     void applyDeviceProfile(float scale, boolean frameskip, boolean gxThread) {
         final SharedPreferences.Editor e = prefs.edit().putBoolean("device_profile_1", true)
-                .putBoolean("gx_thread_off_1", true).putBoolean("gx_thread_on_1", true)
+                .putBoolean("gx_thread_off_1", true).putBoolean("gx_thread_off_2", true)
                 .putBoolean("thermal_off_1", true);
         if (!prefs.contains("resolution_scale")) e.putFloat("resolution_scale", scale);
         if (!prefs.contains("frameskip")) e.putBoolean("frameskip", frameskip);
@@ -340,22 +342,13 @@ final class AppSettings {
     }
 
     /**
-     * Whether the system reports a thermal headroom (Android 12+, and a thermal HAL that has the
-     * skin sensors it is computed from). Asked once a process: Android answers NaN to calls less
-     * than a second apart.
+     * Thermal Control works on every phone: the native side reads the system's thermal headroom
+     * where there is one and the battery temperature otherwise. Not probed here: Android answers
+     * NaN to headroom calls less than 10 s apart, and a probe right before the game spent its call.
      */
     static boolean thermalSupported(android.content.Context context) {
-        if (thermalSupported == null) {
-            boolean ok = false;
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                final android.os.PowerManager pm = context.getSystemService(android.os.PowerManager.class);
-                ok = pm != null && !Float.isNaN(pm.getThermalHeadroom(10));
-            }
-            thermalSupported = ok;
-        }
-        return thermalSupported;
+        return true;
     }
-    private static Boolean thermalSupported;
 
     /** Replacement textures (Dolphin-style tex1_*.png) from /sdcard/Basara2Heroes[-Beta]/Textures. */
     boolean customTextures() { return prefs.getBoolean("custom_textures", false); }

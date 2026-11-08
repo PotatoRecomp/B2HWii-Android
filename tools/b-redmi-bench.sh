@@ -22,7 +22,7 @@ LOG=$("${A[@]}" shell "ls -d /sdcard/${HOMEDIR:-Basara2Heroes}/Logs/2*/ | tail -
 echo "log: $LOG"
 for ((t=0; t<60; t+=5)); do
   sleep 5
-  if [ -z "$PASSED" ] && "${A[@]}" shell "grep 'draws' $LOG | tail -n 1" | grep -q " 79 draws"; then
+  if [ -z "$PASSED" ] && "${A[@]}" shell "grep '\[vi\] fps' $LOG | tail -n 1" | grep -q " 79 draws"; then
     "${A[@]}" shell input keyevent --longpress 21; sleep 1; "${A[@]}" shell input swipe 2250 540 2250 540 200
     PASSED=1; echo "t=$t dialog: left + A"
   fi

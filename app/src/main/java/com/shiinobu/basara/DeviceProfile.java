@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
  * <p>Tiers come from tester logs: Mali-G52 MC2 / G57 MP1 hold 60 fps only at 0.5-0.75x, G57 MC2 /
  * G615 MC2 hold 1-1.5x (then the CPU limits), Mali-G720 MC7 at 4x was GPU-bound but has room for 2x.
  * Frameskip goes on unless the fastest core reaches 3 GHz: every phone below that was CPU-bound in
- * crowded battles, and GX Thread goes on for them too.
+ * crowded battles. GX Thread stays off (1.0's default).
  */
 final class DeviceProfile {
     private static final String TAG = "Basara";
@@ -40,7 +40,7 @@ final class DeviceProfile {
         final boolean cpuBound = maxMhz <= 0 || maxMhz < 3000;
         if (!first && !settings.needsLowEndProfile()) {
             settings.resetGxThreadOnce();
-            settings.gxThreadOnOnce(cpuBound);
+            settings.gxThreadOffAgainOnce();
             settings.resetThermalOnce();
             return false;
         }
@@ -51,16 +51,14 @@ final class DeviceProfile {
         if (ramMb > 0 && ramMb < 4608) scale = Math.min(scale, 0.75f);
         final boolean frameskip = cpuBound;
         if (first) {
-            // The same phones are CPU-bound: the GX thread takes the GX work off the game thread
-            // (S9 Exynos 9810: game thread 30-40 ms a battle frame, GPU half idle). Its battle flicker is
-            // fixed (BP registers through the FIFO, 2026-11-04). The GL backend turns it off by itself.
-            final boolean gxThread = cpuBound;
+            // GX Thread stays off as in 1.0: on, battles ran less evenly (AppSettings.gxThreadOffAgainOnce).
+            final boolean gxThread = false;
             settings.applyDeviceProfile(scale, frameskip, gxThread);
             Log.i(TAG, "device profile: gpu '" + gpu + "', cpu max " + maxMhz + " MHz, ram " + ramMb
                     + " MB -> resolution " + scale + "x, frameskip " + frameskip + ", gx thread " + gxThread);
         } else {
             settings.resetGxThreadOnce();
-            settings.gxThreadOnOnce(cpuBound);
+            settings.gxThreadOffAgainOnce();
             settings.resetThermalOnce();
         }
         settings.markLowEndProfile();

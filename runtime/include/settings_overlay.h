@@ -22,6 +22,8 @@ void SetFrameGraph(bool show) noexcept;
 // What the FPS overlay shows: kOverlay* bits (Android: Settings > Display > Performance Overlay).
 constexpr uint32_t kOverlayFps = 1u << 0, kOverlayCpu = 1u << 1, kOverlayGpu = 1u << 2,
                    kOverlayBattery = 1u << 3, kOverlayTemps = 1u << 4, kOverlayDetails = 1u << 5,
+                   // Not an item: Settings > Display > Overlay Style = Minimal (no bar, FPS large top left).
+                   kOverlayMinimal = 1u << 6,
                    kOverlayDefault = kOverlayFps | kOverlayCpu | kOverlayGpu | kOverlayBattery | kOverlayTemps;
 void SetOverlayItems(uint32_t items) noexcept;
 bool FrameGraph() noexcept;

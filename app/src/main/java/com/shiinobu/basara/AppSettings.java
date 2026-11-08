@@ -204,6 +204,10 @@ final class AppSettings {
     static final float[] CAMERA_DISTANCES = {1f, 1.5f, 2f};
     int cameraDistance() { return Math.max(0, Math.min(CAMERA_DISTANCES.length - 1, prefs.getInt("camera_distance", 0))); }
     void setCameraDistance(int which) { prefs.edit().putInt("camera_distance", which).commit(); }
+    boolean disableFog() { return prefs.getBoolean("disable_fog", false); }
+    void setDisableFog(boolean on) { prefs.edit().putBoolean("disable_fog", on).commit(); }
+    boolean reduceEffects() { return prefs.getBoolean("reduce_effects", false); }
+    void setReduceEffects(boolean on) { prefs.edit().putBoolean("reduce_effects", on).commit(); }
     float cameraDistanceFactor() { return CAMERA_DISTANCES[cameraDistance()]; }
     int aspectMode() { return prefs.getInt("aspect_mode", ASPECT_FILL); }
     void setAspectMode(int mode) { prefs.edit().putInt("aspect_mode", mode).commit(); }
@@ -263,8 +267,15 @@ final class AppSettings {
     /** What the performance overlay shows: OVERLAY_* bits (the runtime's kOverlay* in settings_overlay.h). */
     static final int OVERLAY_FPS = 1, OVERLAY_CPU = 2, OVERLAY_GPU = 4, OVERLAY_BATTERY = 8, OVERLAY_TEMPS = 16,
             OVERLAY_DETAILS = 32, OVERLAY_DEFAULT = 31;
+    /** Not an item: the Minimal overlay style, sent to the runtime in the same bits (kOverlayMinimal). */
+    static final int OVERLAY_MINIMAL = 64;
     int overlayItems() { return prefs.getInt("overlay_items", OVERLAY_DEFAULT); }
     void setOverlayItems(int items) { prefs.edit().putInt("overlay_items", items).commit(); }
+    /** Settings > Display > Overlay Style: 0 = Bar (top centre), 1 = Minimal (top left, no bar). */
+    int overlayStyle() { return prefs.getInt("overlay_style", 0) == 1 ? 1 : 0; }
+    void setOverlayStyle(int style) { prefs.edit().putInt("overlay_style", style).commit(); }
+    /** The overlay items plus the style bit, as the runtime reads them. */
+    int overlayFlags() { return (overlayItems() & ~OVERLAY_MINIMAL) | (overlayStyle() == 1 ? OVERLAY_MINIMAL : 0); }
 
     boolean frameGraph() { return prefs.getBoolean("frame_graph", false); }
     void setFrameGraph(boolean on) { prefs.edit().putBoolean("frame_graph", on).commit(); }

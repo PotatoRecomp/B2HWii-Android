@@ -143,6 +143,12 @@ final class SettingsMenu {
                 which -> settings.setCameraDistance(which));
         heldToggle("show_fps", Tr.t("Performance Overlay"), Tr.t("A see-through bar at the top of the game with FPS and phone stats."),
                 settings.showFps(), on -> settings.setShowFps(on));
+        choiceRow(Tr.t("Overlay Style"), settings.showFps()
+                        ? Tr.t("Bar: one see-through bar at the top centre. Minimal: no bar, the FPS large in the "
+                                + "top left with the other items under it.")
+                        : Tr.t("Turn Performance Overlay on to choose."),
+                new String[] {Tr.t("Bar"), Tr.t("Minimal")}, settings.overlayStyle(), settings.showFps(),
+                which -> settings.setOverlayStyle(which));
         final String[] items = {Tr.t("FPS"), Tr.t("CPU %"), Tr.t("GPU %"), Tr.t("Battery"), Tr.t("Temperature °C"), Tr.t("Details (ms, draws, RAM)"),
                 Tr.t("Frametime Graph")};
         final int mask = settings.overlayItems();
@@ -726,6 +732,12 @@ final class SettingsMenu {
                         + "(never below 480 lines) and raises it again when there is room. Render Resolution stays the "
                         + "highest it goes."),
                 settings.dynamicResolution(), on -> settings.setDynamicResolution(on));
+        toggleRow(Tr.t("Disable Fog"), Tr.t("Removes the distance haze, so far scenery stays clear. "
+                        + "A small saving on slow GPUs."),
+                settings.disableFog(), on -> settings.setDisableFog(on));
+        toggleRow(Tr.t("Reduce Effects (Experimental)"), Tr.t("Skips glow and spark effects, such as the flashes of "
+                        + "special attacks, so slow GPUs keep up in busy battles. Some effects disappear."),
+                settings.reduceEffects(), on -> settings.setReduceEffects(on));
         restart(null);
         toggleRow(Tr.t("GX Thread"), Tr.t("Runs the graphics work on its own CPU core, so busy battles run faster on "
                         + "slower phones."),

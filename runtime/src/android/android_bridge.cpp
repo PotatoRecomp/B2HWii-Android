@@ -2,6 +2,7 @@
 #if defined(__ANDROID__)
 
 #include <aurora/aurora.h>
+#include <aurora/gfx.h>
 
 #include "cheats.h"
 #include "cpu_boost.h"
@@ -128,6 +129,18 @@ JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeApplyCheats(
 JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetCameraDistance(JNIEnv*, jclass, jfloat distance)
 {
     Cheats::SetCameraDistance(static_cast<float>(distance));
+}
+
+// GameActivity.nativeSetDisableFog: Settings > Performance > Disable Fog (aurora gx.cpp).
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetDisableFog(JNIEnv*, jclass, jboolean disabled)
+{
+    aurora_set_disable_fog(disabled == JNI_TRUE);
+}
+
+// GameActivity.nativeSetReduceEffects: Settings > Performance > Reduce Effects (aurora command_processor.cpp).
+JNIEXPORT void JNICALL Java_com_shiinobu_basara_GameActivity_nativeSetReduceEffects(JNIEnv*, jclass, jboolean on)
+{
+    aurora_set_reduce_effects(on == JNI_TRUE);
 }
 
 // GameActivity.nativeSetGamepadMap: Settings > Controls > Gamepad Buttons (virtual_remote.h).

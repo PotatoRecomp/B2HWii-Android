@@ -859,3 +859,11 @@ Graphics > Renderer: Auto, Vulkan, WebGPU 1.2, WebGPU 1.0 and OpenGL ES (Experim
 OpenGL ES (Experimental)	OpenGL ES (Eksperimental)
 Preset	Preset
 Button	Tombol
+Disable Fog	Matikan Kabut
+Removes the distance haze, so far scenery stays clear. A small saving on slow GPUs.	Menghilangkan kabut jarak jauh, pemandangan jauh tetap jernih. Sedikit lebih ringan di GPU lambat.
+Reduce Effects (Experimental)	Kurangi Efek (Eksperimental)
+Skips glow and spark effects, such as the flashes of special attacks, so slow GPUs keep up in busy battles. Some effects disappear.	Melewati efek cahaya dan percikan, misalnya kilatan serangan spesial, agar GPU lambat tetap lancar di pertempuran ramai. Sebagian efek hilang.
+Overlay Style	Gaya Overlay
+Bar: one see-through bar at the top centre. Minimal: no bar, the FPS large in the top left with the other items under it.	Bar: satu bar tembus pandang di tengah atas. Minimal: tanpa bar, FPS besar di kiri atas dengan item lain di bawahnya.
+Bar	Bar
+Minimal	Minimal

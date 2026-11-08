@@ -99,6 +99,7 @@ size_t g_presentTimingSampleCount = 0;
 std::optional<PresentClock::time_point> g_lastSuccessfulPresent;
 std::optional<PresentClock::time_point> g_lastNewMotionPresent;
 uint64_t g_totalPresentCount = 0;
+uint64_t g_totalNewMotionCount = 0;
 
 void wait_until_precise(PresentClock::time_point deadline) noexcept {
   // Busy-spin tail covering the waitable timer's wakeup jitter. 150 us was not enough in
@@ -170,6 +171,7 @@ void record_successful_present(bool, uint32_t,
         newMotionInterval = std::chrono::duration_cast<std::chrono::nanoseconds>(now - *g_lastNewMotionPresent);
       }
       g_lastNewMotionPresent = now;
+      ++g_totalNewMotionCount;
     }
     g_presentTimingSamples[g_presentTimingWriteIndex] = {
         .presentedAt = now,
@@ -188,11 +190,13 @@ AuroraPresentTiming snapshot_present_timing() noexcept {
   const auto cutoff = PresentClock::now() - kWindow;
   std::vector<double> milliseconds;
   uint64_t totalPresentCount = 0;
+  uint64_t totalNewMotionCount = 0;
   size_t newMotionSamples = 0;
   double worstNewMotionMs = 0.0;
   {
     std::lock_guard lock(g_presentTimingMutex);
     totalPresentCount = g_totalPresentCount;
+    totalNewMotionCount = g_totalNewMotionCount;
     milliseconds.reserve(g_presentTimingSampleCount);
     for (size_t i = 0; i < g_presentTimingSampleCount; ++i) {
       const auto& sample = g_presentTimingSamples[i];
@@ -211,6 +215,7 @@ AuroraPresentTiming snapshot_present_timing() noexcept {
   AuroraPresentTiming result{
       .totalPresentCount = totalPresentCount,
       .sampleCount = static_cast<uint32_t>(milliseconds.size()),
+      .totalNewMotionCount = totalNewMotionCount,
   };
   if (milliseconds.empty()) {
     return result;

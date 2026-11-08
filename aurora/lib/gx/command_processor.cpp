@@ -2483,6 +2483,57 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
   return true;
 }
 
+// Settings > Performance > Reduce Effects (Experimental): drop additive, no-depth-write 3D draws
+// (glows, sparks, ultimate flashes). 2D/HUD draws (orthographic) are kept.
+static std::atomic<bool> g_reduceEffects{false};
+static std::atomic<u64> g_fxSkippedTotal{0};
+
+// Logged while on, for tracing tester reports: each new kind of skipped draw once (up to 64), then
+// every 5 s a summary of how many draws/vertices were dropped.
+static void note_effect_skip(u16 vtxCount) noexcept {
+  static u64 windowDraws = 0;
+  static u64 windowVerts = 0;
+  static std::chrono::steady_clock::time_point windowStart = std::chrono::steady_clock::now();
+  static absl::flat_hash_set<u32> kinds;
+  ++windowDraws;
+  windowVerts += vtxCount;
+  const u64 total = g_fxSkippedTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (kinds.size() < 64) {
+    const u32 kind = static_cast<u32>(g_gxState.blendFacSrc) | static_cast<u32>(g_gxState.numTevStages) << 4 |
+                     static_cast<u32>(g_gxState.depthCompare) << 9 | static_cast<u32>(g_gxState.depthFunc) << 10 |
+                     static_cast<u32>(g_gxState.colorUpdate) << 13 | static_cast<u32>(g_gxState.alphaUpdate) << 14;
+    if (kinds.insert(kind).second) {
+      Log.info("Reduce Effects: skipping new draw kind src={} tev={} zcmp={} zfunc={} color={} alpha={} vtx={}",
+               static_cast<u32>(g_gxState.blendFacSrc), static_cast<u32>(g_gxState.numTevStages),
+               g_gxState.depthCompare, static_cast<u32>(g_gxState.depthFunc), g_gxState.colorUpdate,
+               g_gxState.alphaUpdate, vtxCount);
+    }
+  }
+  if ((windowDraws & 63) == 1) {
+    const auto now = std::chrono::steady_clock::now();
+    const double secs = std::chrono::duration<double>(now - windowStart).count();
+    if (secs >= 5.0) {
+      Log.info("Reduce Effects: skipped {} draws ({} vertices) in {:.1f}s, {} total", windowDraws, windowVerts, secs,
+               total);
+      windowDraws = 0;
+      windowVerts = 0;
+      windowStart = now;
+    }
+  }
+}
+
+static bool skip_effect_draw(u16 vtxCount) noexcept {
+  if (!g_reduceEffects.load(std::memory_order_relaxed)) LIKELY {
+    return false;
+  }
+  if (g_gxState.blendMode != GX_BM_BLEND || g_gxState.blendFacDst != GX_BL_ONE || g_gxState.depthUpdate ||
+      g_gxState.projType == GX_ORTHOGRAPHIC) {
+    return false;
+  }
+  note_effect_skip(vtxCount);
+  return true;
+}
+
 static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndian) {
   ZoneScoped;
   // Collect diagnostic draw counts only while profiling. In normal gameplay this
@@ -2518,7 +2569,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   }
 
 
-  if (!has_complete_primitive(prim, vtxCount)) {
+  if (!has_complete_primitive(prim, vtxCount) || skip_effect_draw(vtxCount)) {
     pos += totalVtxBytes;
     return true;
   }
@@ -2926,4 +2977,15 @@ extern "C" void AuroraSetFill2D(bool on) {
 
 extern "C" void AuroraSetWidePerspectiveAspect(float aspect) {
   aurora::gx::fifo::g_widePerspectiveAspect.store(aspect, std::memory_order_relaxed);
+}
+
+extern "C" void aurora_set_reduce_effects(bool on) {
+  namespace fx = aurora::gx::fifo;
+  if (fx::g_reduceEffects.exchange(on, std::memory_order_relaxed) != on) {
+    fx::Log.info("Reduce Effects: {} ({} draws skipped so far)", on ? "on" : "off",
+             fx::g_fxSkippedTotal.load(std::memory_order_relaxed));
+  }
+}
+extern "C" bool aurora_get_reduce_effects() {
+  return aurora::gx::fifo::g_reduceEffects.load(std::memory_order_relaxed);
 }

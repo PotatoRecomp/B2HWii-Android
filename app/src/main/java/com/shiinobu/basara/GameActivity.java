@@ -41,6 +41,8 @@ public final class GameActivity extends SDLActivity
 
     /** Settings > Display > Camera Distance (1 = the game's camera). */
     static native void nativeSetCameraDistance(float distance);
+    static native void nativeSetDisableFog(boolean disabled);
+    static native void nativeSetReduceEffects(boolean on);
 
     /** Settings > Controls > Gamepad Buttons (GamepadButtons): "a=b,b=a,...", "" = the default layout. */
     static native void nativeSetGamepadMap(String map);
@@ -573,7 +575,7 @@ public final class GameActivity extends SDLActivity
     private void applyNativeSettings() {
         if (!nativeReady) return;
         nativeApplyDisplaySettings(settings.aspectMode(), settings.resolutionScale(), settings.showFps(),
-                settings.dynamicResolution(), settings.overlayItems(), settings.frameGraph(),
+                settings.dynamicResolution(), settings.overlayFlags(), settings.frameGraph(),
                 settings.thermalControl(), settings.textureFilter());
         nativeApplyCheats(settings.cheatMoney(), settings.cheatMoneyAmount(), settings.cheatMoneySeq(),
                 settings.cheatInfiniteHp(), settings.cheatInfiniteBasara(), settings.cheatUnlockAll());
@@ -581,6 +583,16 @@ public final class GameActivity extends SDLActivity
             nativeSetCameraDistance(settings.cameraDistanceFactor());
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "camera distance bridge missing from libmain.so", e);
+        }
+        try {
+            nativeSetDisableFog(settings.disableFog());
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "fog bridge missing from libmain.so", e);
+        }
+        try {
+            nativeSetReduceEffects(settings.reduceEffects());
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "effects bridge missing from libmain.so", e);
         }
         try {
             nativeSetGamepadMap(settings.gamepadMap());

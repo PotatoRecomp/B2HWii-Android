@@ -44,6 +44,8 @@ typedef struct {
   double effectiveFramesPerSecond;
   // Longest gap between two frames with new motion in the last second (what a stutter feels like).
   double worstFrameTimeMs;
+  // Presents with new motion since start (not duplicated slots), for exact rates over any window.
+  uint64_t totalNewMotionCount;
 } AuroraPresentTiming;
 
 const AuroraStats* aurora_get_stats();
@@ -103,6 +105,12 @@ uint32_t aurora_get_queued_pipeline_count();
 // Controls whether display copies bypass the Wii's vertical copy filter.
 void aurora_set_disable_copy_filter(bool disabled);
 bool aurora_get_disable_copy_filter();
+// Settings > Performance > Disable Fog: draw without GX fog (Dolphin's Disable Fog).
+void aurora_set_disable_fog(bool disabled);
+bool aurora_get_disable_fog();
+// Settings > Performance > Reduce Effects (Experimental): skip additive 3D effect draws.
+void aurora_set_reduce_effects(bool on);
+bool aurora_get_reduce_effects();
 
 // Guest-RAM write tracking. `generation` changes whenever guest RAM covering a host range was
 // written (or returns AURORA_GUEST_WRITE_UNTRACKED); `notify` reports writes aurora made itself.

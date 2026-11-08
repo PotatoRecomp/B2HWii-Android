@@ -1,4 +1,5 @@
 #include "gx_thread.hpp"
+#include <atomic>
 #include <cstdlib>
 #include "gx.hpp"
 
@@ -2081,14 +2082,19 @@ static u8 index_attr_size(GXAttr attr, GXCompCnt cnt, GXAttrType type) noexcept 
   return indexSize;
 }
 
+// Settings > Performance > Disable Fog: shaders skip GX fog, as Dolphin's Disable Fog does.
+static std::atomic<bool> g_disableFog{false};
+
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept {
   ZoneScoped;
 
   const auto& vtxFmt = g_gxState.vtxFmts[fmt];
   // GX applies integer logic ops in the PE after fog.
-  config.shaderConfig.fogType = effective_pipeline_fog_type(
-      g_gxState.fog.type, g_gxState.zTextureOp, g_gxState.zCompLocBeforeTex,
-      g_gxState.blendMode, g_gxState.blendOp);
+  config.shaderConfig.fogType = g_disableFog.load(std::memory_order_relaxed)
+                                    ? static_cast<u8>(GX_FOG_NONE)
+                                    : effective_pipeline_fog_type(
+                                          g_gxState.fog.type, g_gxState.zTextureOp, g_gxState.zCompLocBeforeTex,
+                                          g_gxState.blendMode, g_gxState.blendOp);
   config.shaderConfig.fogRangeAdjust =
       config.shaderConfig.fogType != GX_FOG_NONE && (g_gxState.fogRange[0] & (1u << 10)) != 0;
   u8 vtxOffset = 0;
@@ -2518,3 +2524,8 @@ wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcep
       .maxAnisotropy = maxAnisotropy,
   };
 } // namespace aurora::gx
+
+extern "C" void aurora_set_disable_fog(bool disabled) {
+  aurora::gx::g_disableFog.store(disabled, std::memory_order_relaxed);
+}
+extern "C" bool aurora_get_disable_fog() { return aurora::gx::g_disableFog.load(std::memory_order_relaxed); }

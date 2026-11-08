@@ -446,7 +446,7 @@ final class AppFiles {
                 + "dynamic_resolution = " + settings.dynamicResolution() + "\n"
                 + "thermal_control = " + settings.thermalControl() + "\n"
                 + "frame_graph = " + settings.frameGraph() + "\n"
-                + "overlay_items = " + settings.overlayItems() + "\n"
+                + "overlay_items = " + settings.overlayFlags() + "\n"
                 + "vsync = " + settings.vsync() + "\n"
                 + "texture_replacements = " + settings.customTextures() + "\n"
                 + "texture_dumps = " + (settings.customTextures() && settings.dumpTextures()) + "\n"

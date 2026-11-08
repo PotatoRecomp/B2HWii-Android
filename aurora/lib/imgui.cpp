@@ -1,6 +1,8 @@
 #include "gx/gx_thread.hpp"
 #include "imgui.hpp"
 
+#include <imgui_internal.h>
+
 #include <cstddef>
 #include <cmath>
 #include <filesystem>
@@ -42,6 +44,32 @@ void remove_legacy_ini_file(const char* basePath) noexcept {
   std::filesystem::remove(fs_path_from_string(basePath) / "imgui.ini", ec);
 }
 
+// The runtime's performance overlay fonts (settings_overlay.cpp finds them by name): Roboto Medium from
+// the app's assets (SDL reads the APK there), baked large so the overlay draws it scaled down and sharp.
+// The default font stays first, so every other window is unchanged. Without the file nothing is added.
+static void add_overlay_fonts(ImGuiIO& io) noexcept {
+  io.Fonts->AddFontDefault();
+  static const ImWchar kDigits[] = {0x0020, 0x0020, 0x002D, 0x002D, 0x0030, 0x0039, 0x0046, 0x0046,
+                                    0x0050, 0x0050, 0x0053, 0x0053, 0};
+  const auto add = [&io](const char* name, float pixels, const ImWchar* ranges) {
+    size_t size = 0;
+    void* data = ImFileLoadToMemory("fonts/Roboto-Medium.ttf", "rb", &size);
+    if (data == nullptr || size == 0) {
+      if (data != nullptr) IM_FREE(data);
+      return false;
+    }
+    ImFontConfig config;
+    config.FontDataOwnedByAtlas = true;
+    config.OversampleH = 2;
+    config.OversampleV = 1;
+    ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "%s", name);
+    return io.Fonts->AddFontFromMemoryTTF(data, static_cast<int>(size), pixels, &config, ranges) != nullptr;
+  };
+  if (add("BasaraOverlay", 40.0f, io.Fonts->GetGlyphRangesDefault())) {
+    add("BasaraOverlayDigits", 96.0f, kDigits);
+  }
+}
+
 void create_context() noexcept {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -54,6 +82,7 @@ void create_context() noexcept {
   io.LogFilename = g_imguiLog.c_str();
   ImGui::LoadIniSettingsFromMemory("", 0);
   io.WantSaveIniSettings = false;
+  add_overlay_fonts(io);
 }
 
 void initialize() noexcept {

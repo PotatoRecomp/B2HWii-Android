@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <iostream>
 #include <string>
@@ -1340,6 +1341,65 @@ constexpr int kFrameTimeCount = 180;
 float g_frameTimes[kFrameTimeCount] = {};
 int g_frameTimeNext = 0;
 
+// The overlay's fonts, added by aurora's imgui.cpp from the app's fonts/Roboto-Medium.ttf and baked
+// large: drawn scaled down they stay sharp, unlike the 13 px default font blown up 2-3x. Without the
+// file (as on Windows) the default font stands in.
+ImFont* FindOverlayFont(const char* name) {
+    ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+    for (ImFont* font : atlas->Fonts) {
+        if (std::strcmp(font->GetDebugName(), name) == 0) return font;
+    }
+    return atlas->Fonts[0];  // the default font, added first
+}
+
+ImFont* OverlayTextFont() {
+    static ImFont* const font = FindOverlayFont("BasaraOverlay");
+    return font;
+}
+
+ImFont* OverlayDigitFont() {
+    static ImFont* const font = FindOverlayFont("BasaraOverlayDigits");
+    return font;
+}
+
+// Selects a font at a height in pixels for what follows in the current window; PopOverlayFonts
+// before the window ends.
+int s_overlayFontsPushed = 0;
+
+void UseOverlayFont(ImFont* font, float pixels) {
+    ImGui::PushFont(font);
+    ++s_overlayFontsPushed;
+    ImGui::SetWindowFontScale(pixels / font->FontSize);
+}
+
+void PopOverlayFonts() {
+    for (; s_overlayFontsPushed > 0; --s_overlayFontsPushed) ImGui::PopFont();
+    ImGui::SetWindowFontScale(1.0f);
+}
+
+// Text drawn twice a pixel apart, a heavier stroke that reads at a glance; with a shadow under it when
+// it has no background behind it (the Minimal style).
+void BoldText(const ImVec4& color, const char* text, bool shadow = false) {
+    ImDrawList* list = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize();
+    const float o = std::max(1.0f, size / 30.0f);
+    if (shadow) {
+        const ImU32 dark = IM_COL32(0, 0, 0, static_cast<int>(190 * color.w));
+        list->AddText(font, size, ImVec2(pos.x + o * 1.8f, pos.y + o * 1.8f), dark, text);
+        list->AddText(font, size, ImVec2(pos.x + o * 2.6f, pos.y + o * 1.8f), dark, text);
+    }
+    list->AddText(font, size, ImVec2(pos.x + o, pos.y), ImGui::GetColorU32(color), text);
+    ImGui::TextColored(color, "%s", text);
+}
+
+// Settings > Display > Overlay Style (kOverlayMinimal): Minimal draws no bar, the FPS large in the
+// top left and every other item a line of its own under it.
+bool s_minimalLayout = false;
+float s_rowPixels = 13.0f;
+float s_bigPixels = 30.0f;
+
 // One item of the stats bar: a dim label (if any) and its value, after a dim divider.
 void StatItem(bool& first, const char* label, const ImVec4& color, const char* value) {
     static const ImVec4 kDim(0.70f, 0.74f, 0.80f, 1.0f);
@@ -1351,10 +1411,10 @@ void StatItem(bool& first, const char* label, const ImVec4& color, const char* v
     }
     first = false;
     if (label != nullptr) {
-        ImGui::TextColored(kDim, "%s", label);
+        BoldText(kDim, label, s_minimalLayout);
         ImGui::SameLine(0.0f, gap * 0.6f);
     }
-    ImGui::TextColored(color, "%s", value);
+    BoldText(color, value, s_minimalLayout);
 }
 
 // The frame graph as an item of the stats bar: the last frame's time, then the recent frames as a
@@ -1389,7 +1449,7 @@ void DrawFrameGraph(bool& first) {
     }
 }
 
-// The game's side of the performance overlay over half a second: its own frames (the presented
+// The game's side of the performance overlay over one second: its own frames (the presented
 // count above includes interpolated ones), the emulation thread's busy time a frame (everything but
 // the scheduler's idle wait and waiting for the renderer), of which GX command processing, and draws.
 // The renderer's side: the frame worker's time a cycle, of which preparing the next frame (a GPU that
@@ -1417,7 +1477,7 @@ const GameFrameStats& SampleGameFrameStats() {
     static uint64_t s_lastIdle = 0, s_lastGx = 0, s_lastDraws = 0;
     static AuroraFrameWorkerTotals s_lastWorker{};
     const Clock::time_point now = Clock::now();
-    if (s_last != Clock::time_point{} && now - s_last < std::chrono::milliseconds(500)) {
+    if (s_last != Clock::time_point{} && now - s_last < std::chrono::seconds(1)) {
         return s_stats;
     }
     const uint32_t frames = VI_HLE_PresentedFramesTotal();
@@ -1461,14 +1521,32 @@ ImVec4 FpsColor(double fps) {
 
 // One coloured group of the stats bar: a tinted label, then its value (and an optional second value,
 // a temperature, coloured by how hot it is).
+// In the Minimal style each group is a line of its own, and FPS is the large number at the top.
 void StatGroup(bool& first, const char* label, const ImVec4& labelColor, const ImVec4& valueColor,
                const char* value, float tempC = -1.0f) {
+    const bool minimal = s_minimalLayout;
+    if (minimal && std::strcmp(label, "FPS") == 0) {
+        first = false;
+        ImFont* digits = OverlayDigitFont();
+        UseOverlayFont(digits, s_bigPixels);
+        const float top = ImGui::GetCursorPosY();
+        BoldText(valueColor, value, true);
+        // "FPS" after the number, on the same baseline.
+        const float bigAscent = digits->Ascent * s_bigPixels / digits->FontSize;
+        ImGui::SameLine(0.0f, s_rowPixels * 0.3f);
+        ImFont* text = OverlayTextFont();
+        UseOverlayFont(text, s_rowPixels);
+        ImGui::SetCursorPosY(top + bigAscent - text->Ascent * s_rowPixels / text->FontSize);
+        BoldText(valueColor, "FPS", true);
+        return;
+    }
+    if (minimal) UseOverlayFont(OverlayTextFont(), s_rowPixels);
     const float gap = ImGui::GetFontSize() * 0.45f;
-    if (!first) ImGui::SameLine(0.0f, gap * 2.2f);
+    if (!first && !minimal) ImGui::SameLine(0.0f, gap * 2.2f);
     first = false;
-    ImGui::TextColored(labelColor, "%s", label);
+    BoldText(labelColor, label, minimal);
     ImGui::SameLine(0.0f, gap);
-    ImGui::TextColored(valueColor, "%s", value);
+    BoldText(valueColor, value, minimal);
     if (tempC >= 0.0f) {
         char t[16];
         std::snprintf(t, sizeof(t), "%.0f\xC2\xB0" "C", tempC);
@@ -1476,7 +1554,7 @@ void StatGroup(bool& first, const char* label, const ImVec4& labelColor, const I
                             : tempC >= 60.0f ? ImVec4(1.0f, 0.78f, 0.35f, 1.0f)
                                              : ImVec4(0.80f, 0.85f, 0.90f, 1.0f);
         ImGui::SameLine(0.0f, gap);
-        ImGui::TextColored(heat, "%s", t);
+        BoldText(heat, t, minimal);
     }
 }
 
@@ -1490,7 +1568,48 @@ ImVec4 LoadColor(float percent) {
 // FPS = the game's own frames drawn a second (what the player sees move; repeated presents and
 // skipped draws don't count), CPU = how busy the game thread is (100% = the CPU limits the game),
 // GPU = the GPU's busy share, then battery, and the details for diagnosis.
-void DrawPerformanceStats(bool& first, float presentedFps, float worstFrameMs) {
+// The FPS shown: frames with new motion that reached the screen, counted over a fixed one-second
+// window and shown once per window (as RTSS and Dolphin do), so the number holds still for a second
+// and is that second's exact rate (count / elapsed), not a sliding count that flickers by one every
+// frame. Capped by the game's own frames in the same window: after a frameskip the presenter repeats
+// the last picture as a fresh present, which the present count alone would take for new motion.
+// MAX is the longest gap between two new pictures in that same second.
+struct ShownFps {
+    float fps = -1.0f;
+    float worstMs = 0.0f;
+};
+
+const ShownFps& SampleShownFps(const AuroraPresentTiming& timing) {
+    using Clock = std::chrono::steady_clock;
+    static ShownFps s_shown;
+    static Clock::time_point s_start{};
+    static uint64_t s_startMotion = 0;
+    static uint32_t s_startGame = 0;
+    const Clock::time_point now = Clock::now();
+    const uint32_t game = VI_HLE_PresentedFramesTotal();
+    if (s_start == Clock::time_point{} || now - s_start > std::chrono::seconds(3)) {
+        // First call, or the overlay was hidden or the app paused: start a fresh window.
+        s_start = now;
+        s_startMotion = timing.totalNewMotionCount;
+        s_startGame = game;
+        return s_shown;
+    }
+    if (now - s_start < std::chrono::seconds(1)) {
+        return s_shown;
+    }
+    const double secs = std::chrono::duration<double>(now - s_start).count();
+    const double gameFps = (game - s_startGame) / secs;
+    const double motionFps = static_cast<double>(timing.totalNewMotionCount - s_startMotion) / secs;
+    // No presents counted (a backend without present timing): the game's frames alone.
+    s_shown.fps = static_cast<float>(timing.totalNewMotionCount == 0 ? gameFps : std::min(gameFps, motionFps));
+    s_shown.worstMs = static_cast<float>(timing.worstFrameTimeMs);
+    s_start = now;
+    s_startMotion = timing.totalNewMotionCount;
+    s_startGame = game;
+    return s_shown;
+}
+
+void DrawPerformanceStats(bool& first, const AuroraPresentTiming& presentTiming) {
     static const ImVec4 kValue(0.95f, 0.96f, 0.98f, 1.0f);
     static const ImVec4 kSoft(0.72f, 0.77f, 0.84f, 1.0f);
     static const ImVec4 kFpsLabel(0.55f, 0.95f, 0.60f, 1.0f);
@@ -1503,13 +1622,10 @@ void DrawPerformanceStats(bool& first, float presentedFps, float worstFrameMs) {
     const GameFrameStats& game = SampleGameFrameStats();
     const SystemStats sys = SampleSystemStats();
     if (items & kOverlayFps) {
-        // New frames that reached the screen in the last second (aurora snapshot_present_timing),
-        // then the longest gap between two of them: 33+ ms there is a visible hitch at any FPS.
-        // Capped by the game's drawn frames: after a frameskip the presenter repeats the last
-        // picture as a fresh present, which this count alone would take for new motion.
-        const float fps = presentedFps < 0.0f ? game.fps
-                          : game.fps >= 0.0f  ? std::min(game.fps, presentedFps)
-                                              : presentedFps;
+        // SampleShownFps: exact rate over a fixed second; MAX 33+ ms is a visible hitch at any FPS.
+        const ShownFps& shown = SampleShownFps(presentTiming);
+        const float fps = shown.fps;
+        const float worstFrameMs = shown.worstMs;
         if (fps >= 0.0f) std::snprintf(v, sizeof(v), "%.0f", fps);
         else std::snprintf(v, sizeof(v), "--");
         StatGroup(first, "FPS", kFpsLabel, fps >= 0.0f ? FpsColor(fps) : kSoft, v);
@@ -1597,7 +1713,7 @@ void DrawFpsOverlay() {
                         "graph: %d frames, mean %.2f ms, jitter %.2f ms, worst %.1f ms, %d over 20 ms, %d under 12 ms; "
                         "overlay %.0f fps, max %.0f ms\n",
                         s_frames, mean, std::sqrt(std::max(0.0f, s_sumSq / s_frames - mean * mean)), s_worst, s_long,
-                        s_short, presentTiming.effectiveFramesPerSecond, presentTiming.worstFrameTimeMs);
+                        s_short, SampleShownFps(presentTiming).fps, SampleShownFps(presentTiming).worstMs);
                 s_window = s_worst = s_sumSq = 0;
                 s_frames = s_long = s_short = 0;
             }
@@ -1607,14 +1723,25 @@ void DrawFpsOverlay() {
         return;
     }
 
-    // A single bar centred at the top of the screen; the frame graph, when on, sits under it.
+    // Bar: a single bar centred at the top of the screen, the frame graph (when on) beside it.
+    // Minimal: no bar, top left, the FPS large and one line an item under it.
     const ImGuiIO& io = ImGui::GetIO();
+    const bool minimal = (g_overlayItems.load(std::memory_order_relaxed) & kOverlayMinimal) != 0;
+    s_minimalLayout = minimal;
     constexpr float kMargin = 6.0f;
     const float top = g_topBarVisible ? ImGui::GetFrameHeight() + kMargin : kMargin;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, top), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.42f);  // the game shows through
     const float ui = std::clamp(io.DisplaySize.y * 0.03f / 13.0f, 1.0f, 3.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * ui, 4.0f * ui));
+    if (minimal) {
+        ImGui::SetNextWindowPos(ImVec2(kMargin * ui, top), ImGuiCond_Always, ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.0f);
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, top), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.42f);  // the game shows through
+    }
+    s_rowPixels = 13.0f * ui * 0.85f;
+    s_bigPixels = 13.0f * ui * 2.3f;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        minimal ? ImVec2(4.0f * ui, 2.0f * ui) : ImVec2(12.0f * ui, 4.0f * ui));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f * ui);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize |
@@ -1626,20 +1753,20 @@ void DrawFpsOverlay() {
                                          ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("FPS Overlay", nullptr, kFlags)) {
         // Readable on a phone: text about 3% of the screen's height (ui above).
-        ImGui::SetWindowFontScale(ui);
+        UseOverlayFont(OverlayTextFont(), minimal ? s_rowPixels : 13.0f * ui);
         bool first = true;
         if (g_showFps) {
-            // One FPS: the game's own frames, capped by what reached the screen (the effective
-            // present rate leaves out repeated slots).
-            DrawPerformanceStats(first,
-                                 presentTiming.sampleCount == 0
-                                     ? -1.0f
-                                     : static_cast<float>(presentTiming.effectiveFramesPerSecond),
-                                 static_cast<float>(presentTiming.worstFrameTimeMs));
+            // One FPS: the game's own frames, capped by what reached the screen (SampleShownFps).
+            DrawPerformanceStats(first, presentTiming);
         }
         if (g_frameGraph) {
+            if (minimal) {
+                UseOverlayFont(OverlayTextFont(), s_rowPixels);
+                first = true;  // a line of its own
+            }
             DrawFrameGraph(first);
         }
+        PopOverlayFonts();
     }
     ImGui::End();
     ImGui::PopStyleVar(3);

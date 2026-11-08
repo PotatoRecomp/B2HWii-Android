@@ -60,12 +60,8 @@ PPC_NATIVE_OVERRIDE_VOID(80384de8, GX__SetDstAlpha_8017295c, (uint32_t en, uint3
 // Fog and Alpha Compare
 // ============================================================================
 
-extern "C" void GX__SetFog_801722cc(uint32_t t, float sz, float ez, float nz, float fz, uint32_t cp) {
-    GXSetFog((GXFogType)t, sz, ez, nz, fz, DecodeGxColor(Memory::Read32(cp)));
-}
-#if 0
-PPC_NATIVE_OVERRIDE_VOID(801c8920, GX__SetFog_801722cc, (uint32_t t, float sz, float ez, float nz, float fz, uint32_t cp), (t, sz, ez, nz, fz, cp));
-#endif
+// GXSetFog (0x803848b8 in RBSJ08) is not overridden: the game's own code writes the fog BP
+// registers through the FIFO. Settings > Performance > Disable Fog is handled in aurora (gx.cpp).
 
 extern "C" void GX__SetAlphaCompare_80172088(uint32_t c0, uint32_t r0, uint32_t op, uint32_t c1, uint32_t r1) {
     g_alphaCompareValid = true;

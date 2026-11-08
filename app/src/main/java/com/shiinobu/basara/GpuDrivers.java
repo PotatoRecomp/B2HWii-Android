@@ -68,6 +68,9 @@ final class GpuDrivers {
 
     private static File failedFile(Context context) { return new File(root(context), "trying.failed"); }
 
+    /** Left by a start with a Renderer other than Auto, removed after 20 s of running (rendererStarted). */
+    private static File rendererMarker(Context context) { return new File(context.getFilesDir(), "renderer_trying"); }
+
     /** Phones the loader works on: arm64 with Android 9+ (this app needs 11 anyway). */
     static boolean supported() {
         for (String abi : Build.SUPPORTED_64_BIT_ABIS) {
@@ -172,6 +175,23 @@ final class GpuDrivers {
      * back to the system driver. Returns why, for a message, or null.
      */
     static String checkLastStart(Context context, AppSettings settings) {
+        // A Renderer choice that closed the game while it started goes back to Auto, so a renderer that
+        // cannot run on this phone never locks the player out of the menu that changes it.
+        String rendererOff = null;
+        if (rendererMarker(context).isFile()) {
+            rendererMarker(context).delete();
+            if (settings.renderer() != 0) {
+                rendererOff = Tr.t("Renderer ") + AppSettings.rendererName(settings.renderer())
+                        + Tr.t(" closed the game while it was starting, so it is back to Auto.");
+                settings.setRenderer(0);
+            }
+        }
+        final String driverOff = checkDriverLastStart(context, settings);
+        if (rendererOff == null) return driverOff;
+        return driverOff == null ? rendererOff : rendererOff + '\n' + driverOff;
+    }
+
+    private static String checkDriverLastStart(Context context, AppSettings settings) {
         String reason = null;
         final File failed = failedFile(context);
         if (failed.isFile()) {
@@ -195,6 +215,7 @@ final class GpuDrivers {
     /** The game was ended on purpose (Quit, Restart, a new game file): not the driver's fault. */
     static void endedOnPurpose(Context context) {
         marker(context).delete();
+        rendererMarker(context).delete();
     }
 
     /**
@@ -216,15 +237,81 @@ final class GpuDrivers {
         }
     }
 
+    /**
+     * What a driver offered on its last start: caps.txt beside it, written by the game
+     * (aurora/lib/webgpu/custom_driver.cpp): the probe's guess (vulkan=, dawn=) and how each renderer
+     * that was tried on it went (vulkan_run=, dawn_run=, and dawn10_run= for WebGPU 1.0: ok or fail).
+     */
+    static Map<String, String> caps(Driver driver) {
+        final Map<String, String> caps = new HashMap<>();
+        try {
+            final String text = new String(readAll(new FileInputStream(new File(driver.dir, "caps.txt"))),
+                    StandardCharsets.UTF_8);
+            for (String line : text.split("\n")) {
+                final int eq = line.indexOf('=');
+                if (eq > 0) caps.put(line.substring(0, eq), line.substring(eq + 1).trim());
+            }
+        } catch (IOException ignored) {
+            // Not started with it yet: nothing known.
+        }
+        return caps;
+    }
+
+    /** A renderer runs on the driver: a real start decides, the probe's guess otherwise. */
+    private static boolean runs(Map<String, String> caps, String run, String probe, boolean unknown) {
+        final String outcome = caps.get(run);
+        if (outcome != null) return outcome.equals("ok");
+        final String guess = caps.get(probe);
+        return guess != null ? guess.equals("1") : unknown;
+    }
+
+    /**
+     * Whether Renderer `which` (AppSettings.RENDERER_ORDER values) can run with the GPU driver chosen in
+     * the settings. A player driver is Vulkan only, so OpenGL ES never runs on it, and each Vulkan
+     * renderer is offered only when it runs on that driver: the game works on the active driver alone.
+     * Before the first start with a driver, malisx2 (Mali) is known not to pass Dawn's adapter rules.
+     */
+    static boolean rendererRuns(Context context, AppSettings settings, int which) {
+        if (which == 4 && !renderer10Usable(settings)) return false;
+        final Driver driver = find(context, settings.gpuDriver());
+        if (driver == null || which == 0) return true;
+        if (which == 2) return false;
+        final Map<String, String> caps = caps(driver);
+        final boolean dawnGuess = !driver.library.toLowerCase(Locale.ROOT).contains("mali");
+        if (which == 1) return runs(caps, "vulkan_run", "vulkan", true);
+        if (which == 3) return runs(caps, "dawn_run", "dawn", dawnGuess);
+        return runs(caps, "dawn10_run", "dawn", dawnGuess);
+    }
+
+    /** The renderer this start uses: the setting, or Auto when it cannot run on the chosen driver. */
+    static int effectiveRenderer(Context context, AppSettings settings) {
+        final int which = renderer(settings);
+        return rendererRuns(context, settings, which) ? which : 0;
+    }
+
     /** True when the game should load libmain10.so (Renderer WebGPU 1.0, and the APK has it). */
     static boolean useRenderer10(Context context, AppSettings settings) {
-        return renderer(settings) == 4 && renderer10Usable(settings)
+        return effectiveRenderer(context, settings) == 4
                 && new File(context.getApplicationInfo().nativeLibraryDir, "libmain10.so").exists();
     }
 
     /** In the game process, before SDL loads the runtime: the driver it should load, if any. */
     static void applyToGame(Context context, AppSettings settings) {
-        final int renderer = renderer(settings) == 4 && !renderer10Usable(settings) ? 0 : renderer(settings);
+        final int renderer = effectiveRenderer(context, settings);
+        if (renderer != renderer(settings)) {
+            Log.i(TAG, "renderer " + AppSettings.rendererName(renderer(settings)) + " does not run on the GPU "
+                    + "driver " + settings.gpuDriver() + ": using Auto");
+        }
+        final File rendererMarker = rendererMarker(context);
+        if (renderer != 0) {
+            try {
+                AppFiles.writeText(rendererMarker, Integer.toString(renderer));
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(rendererMarker::delete,
+                        20_000);
+            } catch (Exception e) {
+                Log.e(TAG, "could not mark the renderer start", e);
+            }
+        }
         if (renderer >= 1 && renderer <= 4) {
             try {
                 // WebGPU 1.0 runs the 1.0 renderer, which starts on Dawn as 1.0 did.

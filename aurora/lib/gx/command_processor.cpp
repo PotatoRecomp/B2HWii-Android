@@ -1695,10 +1695,11 @@ static void handle_cp(u8 addr, u32 value, bool bigEndian) {
       vf.attrs[GX_VA_POS].type = static_cast<GXCompType>(bp_get(value, 3, 1));
       vf.attrs[GX_VA_POS].frac = static_cast<u8>(bp_get(value, 5, 4));
       vf.attrs[GX_VA_NRM].type = static_cast<GXCompType>(bp_get(value, 3, 10));
-      if (bp_get(value, 1, 31) != 0) {
-        vf.attrs[GX_VA_NRM].cnt = GX_NRM_NBT3;
+      // NormalIndex3 (bit 31) only matters for NBT normals (bit 9), as in Dolphin's loader.
+      if (bp_get(value, 1, 9) == 0) {
+        vf.attrs[GX_VA_NRM].cnt = GX_NRM_XYZ;
       } else {
-        vf.attrs[GX_VA_NRM].cnt = bp_get(value, 1, 9) != 0 ? GX_NRM_NBT : GX_NRM_XYZ;
+        vf.attrs[GX_VA_NRM].cnt = bp_get(value, 1, 31) != 0 ? GX_NRM_NBT3 : GX_NRM_NBT;
       }
       vf.attrs[GX_VA_NRM].frac = normal_frac_bits(vf.attrs[GX_VA_NRM].type);
       vf.attrs[GX_VA_CLR0].cnt = static_cast<GXCompCnt>(bp_get(value, 1, 13));
@@ -2054,6 +2055,51 @@ static void handle_draw_overrun(u8 cmd, u16 vtxCount, u32 vtxSize, u32 totalVtxB
 }
 
 // Draw command handler - parses vertices inline and caches results
+static bool is_plausible_fifo_opcode(u8 cmd) {
+  if (cmd >= CP_PRIMITIVE_START && cmd <= CP_PRIMITIVE_END) return true;
+  switch (cmd & CP_OPCODE_MASK) {
+  case CP_CMD_NOP:
+  case CP_CMD_LOAD_CP_REG:
+  case CP_CMD_LOAD_XF_REG:
+  case CP_CMD_LOAD_INDX_A:
+  case CP_CMD_LOAD_INDX_B:
+  case CP_CMD_LOAD_INDX_C:
+  case CP_CMD_LOAD_INDX_D:
+  case CP_CMD_CALL_DL:
+  case CP_CMD_INVAL_VTX:
+  case GX_LOAD_AURORA:
+  case CP_CMD_LOAD_BP_REG:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Some display lists (Basara HUD and result screens after long sessions) leave NRMCNT=NBT in the
+// VAT but send a single direct normal per vertex. Reading 3 normals then desyncs the FIFO: vertex
+// floats become BP/XF writes that wreck TEV state (blank screen, wrong HUD colours). When the NBT
+// stride cannot be right (overruns the buffer or ends on an invalid opcode) and the single-normal
+// stride ends cleanly, use a single normal for this format until the game writes its VAT again.
+static bool fix_direct_nbt_stride(GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, const u8* data, u32 pos, u32 size) {
+  auto& nrm = g_gxState.vtxFmts[fmt].attrs[GX_VA_NRM];
+  if (vtxCount == 0 || g_gxState.vtxDesc[GX_VA_NRM] != GX_DIRECT || nrm.cnt != GX_NRM_NBT) return false;
+  const u32 extra = 6u * comp_type_size(GX_VA_NRM, nrm.type);
+  if (extra == 0 || vtxSize <= extra) return false;
+  const auto endsClean = [&](u64 end) { return end == size || (end < size && is_plausible_fifo_opcode(data[end])); };
+  if (endsClean(static_cast<u64>(pos) + static_cast<u64>(vtxCount) * vtxSize)) return false;
+  if (!endsClean(static_cast<u64>(pos) + static_cast<u64>(vtxCount) * (vtxSize - extra))) return false;
+  nrm.cnt = GX_NRM_XYZ;
+  mark_pipeline_state_dirty();
+  g_gxState.clearVtxSizeCache();
+  static u32 logged = 0;
+  if (logged < 4) {
+    ++logged;
+    Log.warn("VAT fmt {} says NBT normals but the data has one normal per vertex; using {} bytes a vertex",
+             static_cast<u32>(fmt), vtxSize - extra);
+  }
+  return true;
+}
+
 static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
   u32 vtxSize = 0;
   const auto& vtxFmt = g_gxState.vtxFmts[fmt];
@@ -2462,6 +2508,9 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     vtxSize = calculate_last_vtx_size(fmt);
   }
 
+  if (fix_direct_nbt_stride(fmt, vtxCount, vtxSize, data, pos, size)) UNLIKELY {
+    vtxSize = calculate_last_vtx_size(fmt);
+  }
   u32 totalVtxBytes = vtxCount * vtxSize;
   if (pos + totalVtxBytes > size) UNLIKELY {
     handle_draw_overrun(cmd, vtxCount, vtxSize, totalVtxBytes, data, pos, size);

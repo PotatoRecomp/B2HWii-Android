@@ -49,7 +49,7 @@ final class Ui {
     static final int ACCENT = BUTTON_ON;
     static final int ACCENT_PRESSED = GRAB_ON;
     static final int ACCENT_SUBTLE = BUTTON_ON;
-    static final int WARNING = 0xFFE0C070;
+    static final int WARNING = 0xFFFF6B6B;  // red, as the warning frames (Sheet.WARNING_TEXT)
     static final int SUCCESS = 0xFF6CC070;
     static final int DANGER_TEXT = 0xFFFF8080;
     static final int DANGER_FILL = BUTTON;
@@ -198,7 +198,7 @@ final class Ui {
             super(context);
             this.steps = Math.max(steps, 1);
             this.step = Math.max(0, Math.min(step, this.steps));
-            grab = dp(context, 10);
+            grab = dp(context, 24);  // a wide handle, easy to find and hold with a thumb
             paint.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 13,
                     context.getResources().getDisplayMetrics()));
             paint.setTextAlign(Paint.Align.CENTER);

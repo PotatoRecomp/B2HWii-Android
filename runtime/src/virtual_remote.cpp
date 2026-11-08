@@ -94,6 +94,9 @@ constexpr MapButton kMapButtons[] = {
 };
 constexpr size_t kMapCount = sizeof(kMapButtons) / sizeof(kMapButtons[0]);
 constexpr int kAxisSource = 100;
+// kJoySource + n = raw joystick button n: generic USB pads send BUTTON_1..16, which SDL's Android
+// joystick numbers 20..35 and its automatic gamepad mapping leaves out (GitHub issue #7).
+constexpr int kJoySource = 200;
 std::array<std::atomic<int>, kMapCount> g_map{};
 std::atomic<bool> g_mapOn{false};
 
@@ -313,7 +316,12 @@ void ApplyGamepadMap(SDL_Gamepad* gamepad, Intent& intent) {
             continue;
         }
         uint8_t level = 0;
-        if (source >= kAxisSource) {
+        if (source >= kJoySource) {
+            SDL_Joystick* joystick = SDL_GetGamepadJoystick(gamepad);
+            if (joystick != nullptr && SDL_GetJoystickButton(joystick, source - kJoySource)) {
+                level = 255;
+            }
+        } else if (source >= kAxisSource) {
             const int value = SDL_GetGamepadAxis(gamepad, static_cast<SDL_GamepadAxis>(source - kAxisSource));
             level = static_cast<uint8_t>(std::clamp(value * 255 / 32767, 0, 255));
         } else if (SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(source))) {
@@ -456,7 +464,10 @@ void SetGamepadMap(const char* map) {
             }
             const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(value.c_str());
             const SDL_GamepadAxis axis = SDL_GetGamepadAxisFromString(value.c_str());
-            if (button != SDL_GAMEPAD_BUTTON_INVALID) {
+            if (value.size() > 3 && value.compare(0, 3, "joy") == 0 &&
+                value.find_first_not_of("0123456789", 3) == std::string::npos && value.size() <= 6) {
+                sources[i] = kJoySource + std::stoi(value.substr(3));
+            } else if (button != SDL_GAMEPAD_BUTTON_INVALID) {
                 sources[i] = static_cast<int>(button);
             } else if (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
                 sources[i] = kAxisSource + static_cast<int>(axis);

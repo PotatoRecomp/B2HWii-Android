@@ -1155,6 +1155,16 @@ bool present_presentation_job(const PresentationJob& job) {
              std::chrono::duration<double, std::milli>(presentDuration).count(),
              rebuildRequested ? "; rebuilding the surface" : "");
     if (rebuildRequested) {
+      // itel A666LN (Mali-G57 MP1, Vulkan 1.3.225, 2026-11-08): with V-Sync on, vkQueuePresentKHR
+      // blocked 250-700 ms again and again and the game looked frozen; rebuilding the swapchain did
+      // not help. If a second stall rebuild is needed while V-Sync is on, drop to the non-blocking
+      // present mode for the rest of the session.
+      static int s_vsyncStallRebuilds = 0;
+      if (webgpu::vsync_enabled() && ++s_vsyncStallRebuilds >= 2) {
+        s_vsyncStallRebuilds = 0;
+        Log.warn("V-Sync present keeps stalling on this device; turning V-Sync off for this session");
+        webgpu::request_vsync(false);
+      }
       request_surface_reconfigure();
     }
   } else {

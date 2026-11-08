@@ -622,7 +622,7 @@ This phone's GPU or RAM is below what the game needs for a steady 60 fps. The Lo
 On: 480p, Texture Detail Original, no upscaler, Frameskip Auto, Dynamic Resolution, HD Textures off. These stay as set until it is off; Render Resolution can still be changed.	Aktif: 480p, Detail Tekstur Asli, tanpa upscaler, Frameskip Auto, Resolusi Dinamis, Tekstur HD mati. Setelan ini terkunci sampai preset dimatikan; Resolusi Render tetap bisa diubah.
 Off: every setting is yours to change.	Mati: semua setelan bebas diubah.
 Applies when the game starts again.	Berlaku saat game dimulai lagi.
-Set by the Low-End Preset: turn the preset off to change it.	Diatur oleh Preset Low-End: matikan preset untuk mengubahnya.
+Set by the Preset: turn the preset off to change it.	Diatur oleh Preset: matikan preset untuk mengubahnya.
 Sustained Performance	Performa Stabil
 Keeps the CPU and GPU at speeds the phone can hold for hours: a little slower at the start, but no sudden drop once it gets hot in a long session. The game no longer asks for the fastest cores.	Menjaga CPU dan GPU di kecepatan yang bisa ditahan HP berjam-jam: sedikit lebih lambat di awal, tapi tidak tiba-tiba turun saat HP panas di sesi panjang. Game tidak lagi meminta inti tercepat.
 Not available: this phone does not offer it.	Tidak tersedia: HP ini tidak mendukungnya.
@@ -753,7 +753,7 @@ Restarting the game…	Memulai ulang game…
 Starting…	Memulai…
 Choose Another File	Pilih File Lain
 Choose your own ISO or RVZ of the game (Japan, RBSJ08). It is unpacked once, about 4 GB; afterwards the app goes straight into the game.	Pilih ISO atau RVZ game milikmu (Jepang, RBSJ08). Diekstrak sekali, sekitar 4 GB; setelah itu aplikasi langsung masuk ke game.
-This phone now uses the Low-End preset: steadier, a bit blurrier. Undo it in the game's menu: Performance > Low-End Preset.	HP ini kini memakai preset Low-End: lebih stabil, sedikit lebih buram. Batalkan di menu game: Performa > Preset Low-End.
+This phone now uses the Low-End preset: steadier, a bit blurrier. Undo it in the game's menu: Performance > Preset.	HP ini kini memakai preset Low-End: lebih stabil, sedikit lebih buram. Batalkan di menu game: Performa > Preset.
 The menus' language. Auto follows the phone's region: Indonesian in Indonesia, English elsewhere.	Bahasa menu. Otomatis mengikuti wilayah HP: Indonesia di Indonesia, Inggris di tempat lain.
 Restart the game?	Mulai ulang game?
 Progress since your last save will be lost, so save in the game first if you need to. Settings marked Restart needed will apply.	Progres sejak save terakhir akan hilang, jadi simpan dulu lewat menu game kalau perlu. Setting bertanda Perlu restart akan langsung dipakai.
@@ -803,5 +803,59 @@ Changing Render Resolution with the slider while playing closed the app.	Menguba
 The Restart button in the menu could close the app.	Tombol Restart di menu bisa menutup aplikasi.
 In heavy battles a frame can briefly show wrong colours or missing textures. Please send Share Log if you see it.	Di pertempuran berat satu frame bisa sesaat berwarna salah atau kehilangan tekstur. Kirim Share Log bila melihatnya.
 Weak GPUs (Mali-G52 MC2, PowerVR) still slow down in Basara arts and ultimates: use Ultra Low.	GPU lemah (Mali-G52 MC2, PowerVR) masih melambat saat jurus Basara dan ulti: pakai Ultra Low.
-Auto picks one for this phone (the Vulkan renderer on most). Dawn: the WebGPU renderer of this version. WebGPU 1.0: the renderer of version 1.0, which some phones run smoother; it has none of the renderer changes made after 1.0, so Graphics Compatibility and the GPU-time Dynamic Resolution do nothing there (not on PowerVR, Adreno 5xx or Android 10: they use Auto). Vulkan: the game talks to the Vulkan driver directly. OpenGL ES: Dawn on OpenGL ES, for phones whose Vulkan driver shows a black screen or closes the game.	Auto memilih untuk HP ini (renderer Vulkan di kebanyakan HP). Dawn: renderer WebGPU versi ini. WebGPU 1.0: renderer versi 1.0, yang di sebagian HP terasa lebih mulus; tanpa perubahan renderer setelah 1.0, jadi Graphics Compatibility dan Dynamic Resolution berbasis waktu GPU tidak berpengaruh di sana (tidak di PowerVR, Adreno 5xx atau Android 10: di sana memakai Auto). Vulkan: game langsung memakai driver Vulkan. OpenGL ES: Dawn di atas OpenGL ES, untuk HP yang driver Vulkan-nya layar hitam atau menutup game.
-Graphics > Renderer: Auto, Dawn, WebGPU 1.0, Vulkan and OpenGL ES. WebGPU 1.0 is the renderer of version 1.0, for phones that ran 1.0 smoother.	Graphics > Renderer: Auto, Dawn, WebGPU 1.0, Vulkan dan OpenGL ES. WebGPU 1.0 adalah renderer versi 1.0, untuk HP yang lebih mulus di 1.0.
+With an installed GPU driver, only the renderers that run on it are listed (never OpenGL ES: the driver is Vulkan only).	Dengan driver GPU terpasang, hanya renderer yang jalan di driver itu yang ditampilkan (OpenGL ES tidak pernah: driver itu hanya Vulkan).
+Renderer 	Renderer 
+ closed the game while it was starting, so it is back to Auto.	 menutup game saat mulai, jadi dikembalikan ke Auto.
+Mod Tools	Alat Mod
+Tap a mod to tick it, i for what was found in it. The higher mod wins when two change the same texture.	Ketuk mod untuk mencentangnya, i untuk melihat isinya. Mod yang lebih atas menang bila dua mod mengubah tekstur yang sama.
+Tick all	Centang semua
+Untick all	Hapus centang
+Checking the mods…	Memeriksa mod…
+Off: the game uses its own textures.	Mati: game memakai tekstur aslinya.
+No mod ticked: the game uses its own textures.	Tidak ada mod dicentang: game memakai tekstur aslinya.
+%d mods on, %d textures, %s	%d mod aktif, %d tekstur, %s
+ is still packed: unpack it into its own folder in 	 masih terkompres: ekstrak ke foldernya sendiri di
+, then Rescan.	, lalu Pindai Ulang.
+⚠ A ticked mod has no texture the game can use: tap i on it.	⚠ Ada mod dicentang tanpa tekstur yang bisa dipakai game: ketuk i di mod itu.
+⚠ A ticked mod matches none of the textures in Dump: it may be for another game or version (this one is RBSJ08).	⚠ Ada mod dicentang yang tidak cocok dengan tekstur mana pun di Dump: mungkin untuk game atau versi lain (game ini RBSJ08).
+%d textures are in more than one ticked mod: the higher mod's are used.	%d tekstur ada di lebih dari satu mod dicentang: yang dipakai milik mod paling atas.
+⚠ The ticked mods are large for this phone's RAM: loading can stutter, or the system can close the game. Untick some, or use a smaller pack.	⚠ Mod yang dicentang terlalu besar untuk RAM HP ini: loading bisa tersendat, atau sistem bisa menutup game. Hapus centang sebagian, atau pakai pack yang lebih kecil.
+⚠ not this game?	⚠ bukan untuk game ini?
+%d files, %d covered	%d file, %d tertimpa
+%d textures the game can use (%s), %d of them .dds.	%d tekstur yang bisa dipakai game (%s), %d di antaranya .dds.
+%d of them were seen in Dump (textures the game has shown on this phone).	%d di antaranya ada di Dump (tekstur yang sudah tampil di HP ini).
+%d are also in a mod above this one, so that mod's are used. Move this mod up to use its own.	%d juga ada di mod di atasnya, jadi milik mod itu yang dipakai. Naikkan mod ini untuk memakai miliknya.
+%d textures are in this mod twice (a .png and a .dds, or two folders): only one of each is used.	%d tekstur ada dua kali di mod ini (.png dan .dds, atau dua folder): hanya satu yang dipakai.
+%d images with names the game cannot match	%d gambar dengan nama yang tidak dikenali game
+Names must look like tex1_64x64_1a2b3c4d5e6f7a8b_5.png (Dolphin style, made by Dump Textures). For example:	Nama harus seperti tex1_64x64_1a2b3c4d5e6f7a8b_5.png (gaya Dolphin, hasil Dump Tekstur). Contoh:
+Not seen in this game	Tidak terlihat di game ini
+None of its names are in Dump. Maybe it is made for another game or version (this one is Wii NTSC-J RBSJ08), or Dump only has a few textures yet.	Tidak ada namanya di Dump. Mungkin dibuat untuk game atau versi lain (game ini Wii NTSC-J RBSJ08), atau Dump baru berisi sedikit tekstur.
+On a GPU without BC textures (most Mali) the .dds files are unpacked while loading: they work, with more loading time.	Di GPU tanpa tekstur BC (kebanyakan Mali) file .dds dibuka saat dimuat: tetap jalan, loading lebih lama.
+Credits	Kredit
+Port by xu@shiinobu, continuing the work of WitherBlitz with the help of WiiCompiled's code.	Port oleh xu@shiinobu, melanjutkan karya WitherBlitz dengan bantuan kode WiiCompiled.
+Menu and touch button design, and the Unlock All idea, by hikki@datfooldive.	Desain menu dan tombol sentuh, serta ide Unlock All, oleh hikki@datfooldive.
+Based on NSMB-Wii-Multiplayer-Recompilation and WiiCompiled (GPLv3). Renderer techniques studied from Dolphin (GPLv2+).	Berbasis NSMB-Wii-Multiplayer-Recompilation dan WiiCompiled (GPLv3). Teknik renderer dipelajari dari Dolphin (GPLv2+).
+Touch control icons from game-icons.net by Lorc, Delapouite and contributors (CC BY 3.0).	Ikon kontrol sentuh dari game-icons.net oleh Lorc, Delapouite dan kontributor (CC BY 3.0).
+✓ In game now: %d textures replaced so far.	✓ Di game sekarang: %d tekstur sudah diganti.
+✓ Last time in game: %d textures replaced.	✓ Terakhir main: %d tekstur diganti.
+In game now: no texture replaced yet (they load when the game shows them).	Di game sekarang: belum ada tekstur yang diganti (dimuat saat game menampilkannya).
+Not used in game yet: start the game, and the mods' textures load as they show.	Belum dipakai di game: mulai game, tekstur mod dimuat saat muncul.
+⚠ %d textures could not be read by the game, for example %s: tap i on its mod.	⚠ %d tekstur gagal dibaca game, contohnya %s: ketuk i pada mod-nya.
+⚠ %d files are neither PNG nor DDS inside (often a JPEG renamed): the game skips them.	⚠ %d file isinya bukan PNG atau DDS (sering JPEG yang diganti nama): game melewatinya.
+⚠ unreadable files	⚠ file tak terbaca
+⚠ %d failed	⚠ %d gagal
+✓ %d in use	✓ %d dipakai
+%d of them are in use in the game now.	%d di antaranya sedang dipakai di game.
+%d of them were used the last time in game.	%d di antaranya dipakai saat terakhir main.
+None used in game yet: a texture loads when the game shows it.	Belum ada yang dipakai di game: tekstur dimuat saat game menampilkannya.
+Not ticked, so the game does not use it.	Tidak dicentang, jadi game tidak memakainya.
+%d could not be read by the game	%d gagal dibaca game
+The file is damaged or not a real PNG or DDS. For example:	File rusak atau bukan PNG/DDS asli. Contohnya:
+%d files are neither PNG nor DDS inside	%d file isinya bukan PNG atau DDS
+Often a JPEG renamed to .png or .dds. Save it again as PNG. For example:	Biasanya JPEG yang diganti nama jadi .png atau .dds. Simpan ulang sebagai PNG. Contohnya:
+%d .dds files are PNG images inside (renamed): they are read as PNG, which is fine.	%d file .dds isinya gambar PNG (diganti nama): dibaca sebagai PNG, tidak masalah.
+Auto picks one for this phone (the Vulkan renderer on most). Vulkan: the game talks to the Vulkan driver directly. WebGPU 1.2: the WebGPU (Dawn) renderer of this version. WebGPU 1.0: the renderer of version 1.0, which some phones run smoother; it has none of the renderer changes made after 1.0, so Graphics Compatibility and the GPU-time Dynamic Resolution do nothing there (not on PowerVR, Adreno 5xx or Android 10: they use Auto). OpenGL ES (Experimental): WebGPU on OpenGL ES, for phones whose Vulkan driver shows a black screen or closes the game.	Auto memilih untuk HP ini (renderer Vulkan di kebanyakan HP). Vulkan: game langsung memakai driver Vulkan. WebGPU 1.2: renderer WebGPU (Dawn) versi ini. WebGPU 1.0: renderer versi 1.0, yang di sebagian HP terasa lebih mulus; tanpa perubahan renderer setelah 1.0, jadi Graphics Compatibility dan Dynamic Resolution berbasis waktu GPU tidak berpengaruh di sana (tidak di PowerVR, Adreno 5xx atau Android 10: di sana memakai Auto). OpenGL ES (Eksperimental): WebGPU di atas OpenGL ES, untuk HP yang driver Vulkan-nya layar hitam atau menutup game.
+Graphics > Renderer: Auto, Vulkan, WebGPU 1.2, WebGPU 1.0 and OpenGL ES (Experimental). WebGPU 1.0 is the renderer of version 1.0, for phones that ran 1.0 smoother.	Grafis > Renderer: Auto, Vulkan, WebGPU 1.2, WebGPU 1.0 dan OpenGL ES (Eksperimental). WebGPU 1.0 adalah renderer versi 1.0, untuk HP yang lebih mulus di 1.0.
+OpenGL ES (Experimental)	OpenGL ES (Eksperimental)
+Preset	Preset
+Button	Tombol

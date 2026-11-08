@@ -286,6 +286,12 @@ std::atomic<uint64_t> g_producerWaitNanos{0};
 
 bool frame_worker_requested() noexcept {
 #ifdef AURORA_ENABLE_GX
+  // Dawn's GL backend has one EGL context, current on one thread at a time; encode, submit and
+  // present from worker threads fail with EGL_BAD_ACCESS (Adreno 512, Android 10). Keep it on one.
+  if (webgpu::g_backendType == wgpu::BackendType::OpenGLES ||
+      webgpu::g_backendType == wgpu::BackendType::OpenGL) {
+    return false;
+  }
   static const bool enabled = [] {
 #if defined(__APPLE__)
     // ImGui's SDL backend may raise an SDL window from ImGui::NewFrame(). On

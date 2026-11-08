@@ -3,6 +3,9 @@
 #include "../internal.hpp"
 #include "../gx/gx.hpp"
 #include "../webgpu/gpu.hpp"
+#include <cstdio>
+#include <fstream>
+
 #include "dds_io.hpp"
 #include "texture_convert.hpp"
 
@@ -533,12 +536,22 @@ std::optional<RuntimeTextureKey> parse_replacement_filename(std::string_view fil
   };
 }
 
+// Picks the decoder from the file's first bytes, not its extension: many Dolphin packs ship PNG
+// files renamed to .dds (Dolphin decodes by content), and an upper-case .PNG is still a PNG.
 static std::optional<ConvertedTexture> load_texture_file(const std::filesystem::path& path) {
-  if (path.extension() == ".png") {
+  unsigned char magic[4]{};
+  {
+    std::ifstream file(path, std::ios::binary);
+    file.read(reinterpret_cast<char*>(magic), sizeof(magic));
+  }
+  if (magic[0] == 0x89 && magic[1] == 'P' && magic[2] == 'N' && magic[3] == 'G') {
     return png::load_png_file(path);
-  } else {
+  }
+  if (magic[0] == 'D' && magic[1] == 'D' && magic[2] == 'S' && magic[3] == ' ') {
     return dds::load_dds_file(path);
   }
+  Log.warn("texture replacement is neither PNG nor DDS (JPEG?), skipped: {}", fs_path_to_string(path));
+  return std::nullopt;
 }
 
 constexpr bool isUnsupportedTextureFormat(const ConvertedTexture& texture) {
@@ -959,6 +972,24 @@ std::thread s_loadThread;
 absl::flat_hash_set<RuntimeTextureKey> s_loadPending;  // renderer thread only
 constexpr size_t kMaxUploadsPerLookup = 2;
 
+// Textures/Loaded.txt: one line per replacement the game loaded this session ("ok" or "fail", a tab,
+// the file's path under the texture folder). The launcher's Textures tab reads it to show what is
+// really in use. Loader thread only; rewritten at the first load of each session.
+void note_loaded(const std::filesystem::path& path, bool ok) noexcept {
+  static FILE* s_file = nullptr;
+  static bool s_tried = false;
+  if (!s_tried) {
+    s_tried = true;
+    s_file = std::fopen(fs_path_to_string(s_replacementRoot / "Loaded.txt").c_str(), "w");
+  }
+  if (s_file == nullptr) return;
+  std::error_code ec;
+  const auto rel = std::filesystem::relative(path, s_replacementRoot, ec);
+  const std::string name = ec || rel.empty() ? fs_path_to_string(path) : fs_path_to_string(rel);
+  std::fprintf(s_file, "%s\t%s\n", ok ? "ok" : "fail", name.c_str());
+  std::fflush(s_file);
+}
+
 void load_worker() noexcept {
   for (;;) {
     LoadJob job;
@@ -970,6 +1001,7 @@ void load_worker() noexcept {
       s_loadQueue.pop_front();
     }
     auto converted = load_replacement(job.entry);
+    note_loaded(job.entry.path, converted.has_value());
     {
       std::lock_guard lock(s_loadMutex);
       s_loadDone.emplace_back(job.key, std::move(converted));

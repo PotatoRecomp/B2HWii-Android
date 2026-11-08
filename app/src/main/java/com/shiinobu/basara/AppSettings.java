@@ -320,13 +320,13 @@ final class AppSettings {
      * (libmain10.so: the 1.0 renderer, GpuDrivers.useRenderer10).
      */
     int renderer() { return prefs.getInt("renderer", 0); }
-    /** The Renderer choice in menu order: Auto, Dawn, WebGPU 1.0, Vulkan, OpenGL ES. */
-    static final int[] RENDERER_ORDER = {0, 3, 4, 1, 2};
+    /** The Renderer choice in menu order: Auto, Vulkan, WebGPU 1.2 (Dawn), WebGPU 1.0, OpenGL ES. */
+    static final int[] RENDERER_ORDER = {0, 1, 3, 4, 2};
     static String rendererName(int which) {
         switch (which) {
             case 1: return "Vulkan";
-            case 2: return "OpenGL ES";
-            case 3: return "Dawn";
+            case 2: return "OpenGL ES (Experimental)";
+            case 3: return "WebGPU 1.2";
             case 4: return "WebGPU 1.0";
             default: return "Auto";
         }

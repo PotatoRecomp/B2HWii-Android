@@ -10,6 +10,9 @@
 //                             has run for a while, so a start that crashes leaves it behind and the
 //                             launcher goes back to the system driver the next time.
 // A failure here falls back to the system driver, and the reason is written to <marker>.failed.
+// What the driver offers is written to caps.txt beside it (GpuDrivers.java reads it for the Renderer
+// menu): its device and version, whether Dawn's adapter rules and aurora's Vulkan backend's minimum
+// pass on it, and how each renderer that was tried on it went.
 #include "custom_driver.hpp"
 
 #include "../internal.hpp"
@@ -20,12 +23,15 @@
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vulkan/vulkan.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -35,6 +41,130 @@ aurora::Module Log("aurora::gpu::driver");
 std::atomic<void*> g_loader{nullptr};
 bool g_tried = false;
 std::string g_marker;
+
+// caps.txt beside the driver: key=value lines, rewritten whole on each change.
+std::mutex g_capsMutex;
+std::string g_capsPath;
+std::map<std::string, std::string> g_caps;
+
+void SaveCapsLocked() {
+  if (g_capsPath.empty()) return;
+  std::string text;
+  for (const auto& [key, value] : g_caps) {
+    text += key + "=" + value + "\n";
+  }
+  const std::string tmp = g_capsPath + ".tmp";
+  if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+    std::fwrite(text.data(), 1, text.size(), f);
+    std::fclose(f);
+    std::rename(tmp.c_str(), g_capsPath.c_str());
+  }
+}
+
+void LoadCaps(const std::string& path) {
+  std::lock_guard lock(g_capsMutex);
+  g_capsPath = path;
+  g_caps.clear();
+  if (FILE* f = std::fopen(path.c_str(), "r")) {
+    char line[512];
+    while (std::fgets(line, sizeof line, f) != nullptr) {
+      std::string s{line};
+      while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+      const size_t eq = s.find('=');
+      if (eq != std::string::npos) g_caps[s.substr(0, eq)] = s.substr(eq + 1);
+    }
+    std::fclose(f);
+  }
+}
+
+void SetCaps(std::initializer_list<std::pair<const char*, std::string>> values) {
+  std::lock_guard lock(g_capsMutex);
+  for (const auto& [key, value] : values) g_caps[key] = value;
+  SaveCapsLocked();
+}
+
+std::string VersionText(uint32_t v) {
+  return std::to_string(VK_API_VERSION_MAJOR(v)) + "." + std::to_string(VK_API_VERSION_MINOR(v)) + "." +
+         std::to_string(VK_API_VERSION_PATCH(v));
+}
+
+// What the driver offers, read once per start through its own loader copy (a few ms). Dawn refuses an
+// adapter without 1x and 4x MSAA for colour and depth, robustBufferAccess, fragmentStoresAndAtomics,
+// fullDrawIndexUint32, BC or ETC2 + ASTC, or Vulkan 1.1 (malisx2 has 1x MSAA only); aurora's Vulkan
+// backend needs Vulkan 1.1 (tier 0). The launcher trusts a renderer's real outcome over this guess.
+void Probe(void* loader) {
+  const auto gipa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(loader, "vkGetInstanceProcAddr"));
+  const auto createInstance = reinterpret_cast<PFN_vkCreateInstance>(gipa(nullptr, "vkCreateInstance"));
+  if (createInstance == nullptr) return;
+  const VkApplicationInfo app{
+      .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+      .pApplicationName = "basara-driver-probe",
+      .apiVersion = VK_API_VERSION_1_1,
+  };
+  const VkInstanceCreateInfo info{
+      .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+      .pApplicationInfo = &app,
+  };
+  VkInstance instance = VK_NULL_HANDLE;
+  if (createInstance(&info, nullptr, &instance) != VK_SUCCESS) {
+    Log.warn("Custom Vulkan driver: no Vulkan instance for the probe");
+    SetCaps({{"probe", "no instance"}, {"vulkan", "0"}, {"dawn", "0"}});
+    return;
+  }
+#define PROBE_FN(name) const auto name = reinterpret_cast<PFN_##name>(gipa(instance, #name))
+  PROBE_FN(vkDestroyInstance);
+  PROBE_FN(vkEnumeratePhysicalDevices);
+  PROBE_FN(vkGetPhysicalDeviceProperties);
+  PROBE_FN(vkGetPhysicalDeviceProperties2);
+  PROBE_FN(vkGetPhysicalDeviceFeatures);
+#undef PROBE_FN
+  uint32_t count = 1;
+  VkPhysicalDevice gpu = VK_NULL_HANDLE;
+  const VkResult listed = vkEnumeratePhysicalDevices(instance, &count, &gpu);
+  if ((listed != VK_SUCCESS && listed != VK_INCOMPLETE) || count == 0 || gpu == VK_NULL_HANDLE) {
+    Log.warn("Custom Vulkan driver: it lists no GPU");
+    SetCaps({{"probe", "no gpu"}, {"vulkan", "0"}, {"dawn", "0"}});
+    vkDestroyInstance(instance, nullptr);
+    return;
+  }
+  VkPhysicalDeviceProperties props{};
+  vkGetPhysicalDeviceProperties(gpu, &props);
+  std::string driverText = VersionText(props.driverVersion);
+  if (props.apiVersion >= VK_API_VERSION_1_2 && vkGetPhysicalDeviceProperties2 != nullptr) {
+    VkPhysicalDeviceDriverProperties driver{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 props2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &driver};
+    vkGetPhysicalDeviceProperties2(gpu, &props2);
+    driverText = std::string{driver.driverName} + " " + driver.driverInfo;
+  }
+  VkPhysicalDeviceFeatures f{};
+  vkGetPhysicalDeviceFeatures(gpu, &f);
+  const VkSampleCountFlags msaa = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
+  std::string missing;
+  const auto need = [&](bool ok, const char* what) {
+    if (!ok) missing += missing.empty() ? what : std::string{", "} + what;
+  };
+  const bool vulkan = props.apiVersion >= VK_API_VERSION_1_1;
+  need(vulkan, "Vulkan 1.1");
+  need((props.limits.framebufferColorSampleCounts & msaa) == msaa &&
+           (props.limits.framebufferDepthSampleCounts & msaa) == msaa,
+       "4x MSAA");
+  need(f.robustBufferAccess, "robustBufferAccess");
+  need(f.fragmentStoresAndAtomics, "fragmentStoresAndAtomics");
+  need(f.fullDrawIndexUint32, "fullDrawIndexUint32");
+  need(f.textureCompressionBC || (f.textureCompressionETC2 && f.textureCompressionASTC_LDR), "BC or ETC2+ASTC");
+  const bool dawn = missing.empty();
+  SetCaps({{"probe", "ok"},
+           {"device", props.deviceName},
+           {"driver", driverText},
+           {"api", VersionText(props.apiVersion)},
+           {"vulkan", vulkan ? "1" : "0"},
+           {"dawn", dawn ? "1" : "0"},
+           {"dawn_missing", missing}});
+  Log.info("Custom Vulkan driver: {} | {} | Vulkan {} | Dawn {}{} | Vulkan renderer {}", props.deviceName,
+           driverText, VersionText(props.apiVersion), dawn ? "yes" : "no", dawn ? "" : " (missing " + missing + ")",
+           vulkan ? "yes" : "no");
+  vkDestroyInstance(instance, nullptr);
+}
 
 bool IsVulkanLoaderName(const char* filename) {
   if (filename == nullptr) return false;
@@ -137,7 +267,14 @@ bool begin() {
   if (const char* tu = std::getenv("TU_DEBUG"); tu != nullptr && *tu != '\0') {
     Log.info("Custom Vulkan driver: TU_DEBUG={}", tu);
   }
+  LoadCaps(dir + "caps.txt");
+  Probe(loader);
   return true;
+}
+
+void outcome(bool vulkanBackend, bool ok) {
+  if (!active()) return;
+  SetCaps({{vulkanBackend ? "vulkan_run" : "dawn_run", ok ? "ok" : "fail"}});
 }
 
 bool active() { return g_loader.load(std::memory_order_acquire) != nullptr; }
@@ -171,6 +308,7 @@ bool begin() { return false; }
 bool active() { return false; }
 void fail(const std::string&) {}
 void running(std::function<bool()>) {}
+void outcome(bool, bool) {}
 } // namespace aurora::webgpu::custom_driver
 
 #endif

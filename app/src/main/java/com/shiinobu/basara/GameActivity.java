@@ -174,6 +174,10 @@ public final class GameActivity extends SDLActivity
             if (settings.uploadMemory() != 0) {
                 Os.setenv("AURORA_VK_CACHED_STAGING", settings.uploadMemory() == 2 ? "1" : "0", false);
             }
+            // WebGPU 1.0 (aurora10/) was never made safe for the 1.2 GX overlap (frame sync 0: the game's
+            // next frame runs while the GX thread still draws the last), so it keeps the 1.1 sync: the
+            // frame waits for the GX thread at its top. env.txt wins.
+            if (GpuDrivers.useRenderer10(this, settings)) Os.setenv("BASARA_GX_FRAME_SYNC", "2", false);
             try {
                 // For the log's device line: the screen's refresh rate.
                 Os.setenv("BASARA_DISPLAY_HZ", String.valueOf(Math.round((android.os.Build.VERSION.SDK_INT >= 30 ? getDisplay()
@@ -429,6 +433,17 @@ public final class GameActivity extends SDLActivity
         rows.actionRow(Tr.t("What's New"), Tr.t("What each version brought."), Tr.t("Open"),
                 () -> ReleaseNotes.showAll(this));
         rows.reportRows(true);
+        rows.valueRow(Tr.t("Credits"), "xu@shiinobu · hikki@datfooldive", Tr.t("Open"), () ->
+                new Sheet(this, Tr.t("Credits"), null)
+                        .paragraph(Tr.t("Port by xu@shiinobu, continuing the work of WitherBlitz with the help of "
+                                + "WiiCompiled's code."))
+                        .paragraph(Tr.t("Menu and touch button design, and the Unlock All idea, by hikki@datfooldive."))
+                        .paragraph(Tr.t("Based on NSMB-Wii-Multiplayer-Recompilation and WiiCompiled (GPLv3). "
+                                + "Renderer techniques studied from Dolphin (GPLv2+)."))
+                        .note(Tr.t("Touch control icons from game-icons.net by Lorc, Delapouite and contributors "
+                                + "(CC BY 3.0)."))
+                        .action(Tr.t("Close"), null, true, false, null)
+                        .show());
         rows.actionRow(Tr.t("Project page on GitHub"), LauncherActivity.PROJECT_URL.replace("https://", ""),
                 Tr.t("Open"), () -> {
                     try {
@@ -640,7 +655,8 @@ public final class GameActivity extends SDLActivity
             window.setOrientation(android.widget.LinearLayout.VERTICAL);
             window.setBackground(Ui.box(a, Ui.WINDOW, Ui.BORDER, 0));
             window.setPadding(1, 1, 1, 1);
-            window.addView(Ui.titleBar(a, Tr.t("Settings"), "designed by hikki@datfooldive"), Ui.matchWidth(0));
+            window.addView(Ui.titleBar(a, Tr.t("Settings"),
+                    "port by xu@shiinobu · designed by hikki@datfooldive"), Ui.matchWidth(0));
 
             final android.widget.LinearLayout root = new android.widget.LinearLayout(a);
             root.setOrientation(android.widget.LinearLayout.VERTICAL);
@@ -689,12 +705,20 @@ public final class GameActivity extends SDLActivity
 
             menu = new SettingsMenu(a, rows, true, GameActivity.this::applyLiveSettings);
             menu.systemRows = GameActivity.this::systemRows;
+            // A new language: the window is made again around the same tab (the game stays paused).
+            menu.languageChanged = () -> tabs.post(() -> {
+                final int open = menu.section();
+                PauseMenu.this.dialog.dismiss();
+                final PauseMenu again = new PauseMenu(inSession);
+                again.select(open);
+                again.show();
+            });
 
             // The game shows dimmed around the window, as DefJam's panel (most of the screen's height).
             final android.widget.FrameLayout backdrop = new android.widget.FrameLayout(a);
             backdrop.setBackgroundColor(android.graphics.Color.argb(166, 0, 0, 0));
             final android.util.DisplayMetrics screen = getResources().getDisplayMetrics();
-            final int width = Math.min(dp(720), Math.round(screen.widthPixels * 0.74f));
+            final int width = Math.min(dp(800), Math.round(screen.widthPixels * 0.84f));  // wide enough for eight tabs at full size
             final int height = Math.round(screen.heightPixels * 0.9f);
             backdrop.addView(window, new android.widget.FrameLayout.LayoutParams(width, height,
                     android.view.Gravity.CENTER));
@@ -726,14 +750,16 @@ public final class GameActivity extends SDLActivity
         private android.widget.TextView action(String label, boolean primary, android.view.View.OnClickListener onClick) {
             final android.widget.TextView button = Ui.chip(GameActivity.this,
                     label.toUpperCase(java.util.Locale.ROOT), primary, true, onClick);
-            button.setPadding(dp(6), 0, dp(6), 0);
+            button.setPadding(dp(8), 0, dp(8), 0);
+            button.setMinWidth(dp(78));
             button.setContentDescription(label);
             return button;
         }
 
         private android.widget.LinearLayout.LayoutParams actionParams() {
+            // At least 78 dp, wider when the label needs it ("MULAI ULANG"): the note beside them shrinks.
             final android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
-                    dp(78), dp(30));
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, dp(30));
             params.leftMargin = dp(4);
             return params;
         }
@@ -748,7 +774,16 @@ public final class GameActivity extends SDLActivity
                         SettingsMenu.name(id).toUpperCase(java.util.Locale.ROOT), id == section,
                         !SettingsMenu.disabled(id), v -> select(id));
                 tab.setPadding(dp(2), 0, dp(2), 0);
-                tab.setAutoSizeTextTypeUniformWithConfiguration(8, 11, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+                // 11 sp, smaller once laid out when the name is wider than its tab (eight tabs share a row).
+                tab.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
+                tab.post(() -> {
+                    final float room = tab.getWidth() - tab.getPaddingLeft() - tab.getPaddingRight();
+                    float sp = 11;
+                    while (sp > 7 && tab.getPaint().measureText(tab.getText().toString()) > room) {
+                        sp -= 0.5f;
+                        tab.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, sp);
+                    }
+                });
                 final android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
                         0, dp(28), 1f);
                 if (tabs.getChildCount() > 0) params.leftMargin = dp(2);

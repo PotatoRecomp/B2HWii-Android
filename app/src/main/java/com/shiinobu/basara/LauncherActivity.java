@@ -101,7 +101,7 @@ public final class LauncherActivity extends Activity {
         Tr.init(this);
         if (DeviceProfile.applyOnce(this, settings)) {
             Toast.makeText(this, Tr.t("This phone now uses the Low-End preset: steadier, a bit blurrier. "
-                    + "Undo it in the game's menu: Performance > Low-End Preset."), Toast.LENGTH_LONG).show();
+                    + "Undo it in the game's menu: Performance > Preset."), Toast.LENGTH_LONG).show();
         }
         setContentView(page());
 

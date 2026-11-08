@@ -1113,10 +1113,12 @@ bool initialize(AuroraBackend auroraBackend) {
     Log.info("Renderer: {}{}", vk ? "aurora Vulkan" : "Dawn", custom_driver::active() ? " (custom driver)" : "");
     if (initialize_once(auroraBackend)) {
       if (custom_driver::active()) {
+        custom_driver::outcome(vk, true);
         custom_driver::running([] { return g_deviceLost.load(std::memory_order_acquire); });
       }
       return true;
     }
+    custom_driver::outcome(vk, false);
     reset_instance();
   }
   set_vulkan_backend(false);

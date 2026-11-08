@@ -3314,7 +3314,9 @@ WGPUWaitStatus wgpuInstanceWaitAny(WGPUInstance, size_t futureCount, WGPUFutureW
         continue;
       }
       const uint64_t id = futures[i].future.id;
-      Retire(dev);
+      // Timeline devices: the known serial (KnownCompleted); WaitSerial below raises it. A zero-timeout
+      // query blocks until the GPU is idle on Turnip's KGSL before Mesa MR 44838 (2026-10-08).
+      Retire(dev, dev->legacy);
       const size_t fired = FireReady(dev, [id](const FutureRec& f) { return f.id == id; });
       bool pending = false;
       {

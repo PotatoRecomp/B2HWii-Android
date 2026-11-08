@@ -74,13 +74,14 @@ final class GamepadButtons {
             sheet.dismiss();
         };
         sheet.onGamepad((dialog, keyCode, event) -> {
-            if (!fromGamepad(event.getSource())) return false;
+            if (!fromGamepad(event.getSource()) && !fromGamepad(deviceSources(event.getDevice()))) return false;
             final String source = keySource(keyCode);
             if (source == null) return false;
             if (event.getAction() == KeyEvent.ACTION_DOWN) pick.accept(source);
             return true;
         }, event -> {
-            if (!fromGamepad(event.getSource()) || event.getAction() != MotionEvent.ACTION_MOVE) return false;
+            if ((!fromGamepad(event.getSource()) && !fromGamepad(deviceSources(event.getDevice())))
+                    || event.getAction() != MotionEvent.ACTION_MOVE) return false;
             final String source = motionSource(event);
             if (source != null) pick.accept(source);
             return true;
@@ -128,6 +129,11 @@ final class GamepadButtons {
         return classic[2] == null ? classic[1] : classic[1] + "  ·  " + classic[2];
     }
 
+    /** Cheap USB pads are joysticks whose key events arrive with the keyboard source (as SDLActivity notes). */
+    private static int deviceSources(InputDevice device) {
+        return device == null ? 0 : device.getSources();
+    }
+
     private static boolean fromGamepad(int source) {
         return (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
                 || (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
@@ -154,7 +160,12 @@ final class GamepadButtons {
             case KeyEvent.KEYCODE_DPAD_DOWN: return "dpdown";
             case KeyEvent.KEYCODE_DPAD_LEFT: return "dpleft";
             case KeyEvent.KEYCODE_DPAD_RIGHT: return "dpright";
-            default: return null;
+            default:
+                // Generic HID pads report BUTTON_1..16; SDL numbers them as joystick buttons 20..35.
+                if (keyCode >= KeyEvent.KEYCODE_BUTTON_1 && keyCode <= KeyEvent.KEYCODE_BUTTON_16) {
+                    return "joy" + (20 + keyCode - KeyEvent.KEYCODE_BUTTON_1);
+                }
+                return null;
         }
     }
 
@@ -194,7 +205,14 @@ final class GamepadButtons {
             case "dpdown": return "D-pad Down";
             case "dpleft": return "D-pad Left";
             case "dpright": return "D-pad Right";
-            default: return source;
+            default:
+                if (source.startsWith("joy")) {
+                    try {
+                        return Tr.t("Button") + " " + (Integer.parseInt(source.substring(3)) - 19);
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                return source;
         }
     }
 }

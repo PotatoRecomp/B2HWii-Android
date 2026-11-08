@@ -43,7 +43,7 @@ final class ReleaseNotes {
                     "Display Resolution, V-Sync and Sustained Performance now apply at once while playing, without a restart.",
                     "Settings > System in the game: change the game file, check for updates, Share Log, Device Info, language and Reset and Clear.",
                     "New Vulkan renderer: the game now talks to the phone's Vulkan driver directly on every Vulkan phone. Older drivers without the newest Vulkan features get a mode made for them.",
-                    "Graphics > Renderer: Auto, Dawn, WebGPU 1.0, Vulkan and OpenGL ES. WebGPU 1.0 is the renderer of version 1.0, for phones that ran 1.0 smoother.",
+                    "Graphics > Renderer: Auto, Vulkan, WebGPU 1.2, WebGPU 1.0 and OpenGL ES (Experimental). WebGPU 1.0 is the renderer of version 1.0, for phones that ran 1.0 smoother.",
                     "Custom GPU drivers: Settings > Graphics > Install GPU Driver takes a Turnip driver zip for Adreno phones. On Adreno 6xx it usually takes much of the GPU's load off.",
                     "Low-End Preset now has two levels: Low-End (480p) and Ultra Low (Display Resolution 360p, Render Resolution 0.75x, the 30 FPS Lock and GX Thread) for phones that drop in the heaviest effects.",
                     "Display Resolution 360p: a new step below 480p for the slowest GPUs.",

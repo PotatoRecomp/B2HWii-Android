@@ -12,4 +12,7 @@ bool active();
 void fail(const std::string& reason);
 // After the device is up: once it has run 20 s without `lost()`, the launcher keeps it for next time.
 void running(std::function<bool()> lost);
+// Whether a renderer (aurora's Vulkan backend or Dawn) started on the driver, kept in its caps.txt so the
+// launcher's Renderer menu offers only what runs on it.
+void outcome(bool vulkanBackend, bool ok);
 } // namespace aurora::webgpu::custom_driver

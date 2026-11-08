@@ -39,11 +39,11 @@ final class SettingsMenu {
     static boolean disabled(int section) { return section == CHEATS && !BuildConfig.CHEATS; }
 
     /**
-     * The game's menu holds every setting, System last; Textures is a group at the end of Graphics so
-     * the tabs fit one row. Cheats is listed in every build, greyed out without BuildConfig.CHEATS.
+     * The game's menu holds every setting, System last; the tabs shrink their text to fit one row.
+     * Cheats is listed in every build, greyed out without BuildConfig.CHEATS.
      */
     static int[] gameSections() {
-        return new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, SYSTEM};
+        return new int[] {DISPLAY, GRAPHICS, PERFORMANCE, CONTROLS, SAVE_DATA, CHEATS, TEXTURES, SYSTEM};
     }
 
     /** The game's own rows for System (game file, updates). */
@@ -56,6 +56,8 @@ final class SettingsMenu {
     private AppSettings settings;
     private int section = DISPLAY;
     SystemRows systemRows;
+    /** The owner draws its own frame (tabs, title, buttons) again in the new language. */
+    Runnable languageChanged;
 
     SettingsMenu(Activity activity, LinearLayout rows, boolean inGame, Runnable onChanged) {
         this.activity = activity;
@@ -84,17 +86,13 @@ final class SettingsMenu {
 
     /** Draws `index` again in place (the views swap before the next frame, so nothing jumps). */
     void show(int index) {
-        if ((index == TEXTURES || index == GRAPHICS) && section != index && !hdBusy) hdCacheBytes = -1;  // count again on entry
+        if (index == TEXTURES && section != index && !hdBusy) hdCacheBytes = -1;  // count again on entry
         section = index;
         settings = new AppSettings(activity);  // the other process may have written it
         rows.removeAllViews();
         switch (index) {
             case DISPLAY: showDisplay(); break;
-            case GRAPHICS:
-                showGraphics();
-                group(Tr.t("Textures"));
-                showTextures();
-                break;
+            case GRAPHICS: showGraphics(); break;
             case PERFORMANCE: showPerformance(); break;
             case CONTROLS: showControls(); break;
             case SAVE_DATA: showSaveData(); break;
@@ -122,7 +120,8 @@ final class SettingsMenu {
                 new String[] {Tr.t("Auto"), "English", "Bahasa Indonesia"}, settings.language(), true, which -> {
                     settings.setLanguage(which);
                     Tr.init(activity);
-                    changed();  // drawn again in the new language (the side list on the next open)
+                    changed();  // drawn again in the new language
+                    if (languageChanged != null) languageChanged.run();  // the tabs, title and buttons too
                 });
         choiceRow(Tr.t("Aspect Ratio"), Tr.t("The shape of the picture."),
                 new String[] {Tr.t("Original 4:3"), "16:9", Tr.t("Fill Screen")}, settings.aspectMode(), true,
@@ -177,7 +176,7 @@ final class SettingsMenu {
 
     /** `about`, plus why it cannot be changed while the Low-End preset holds it. */
     private String held(String key, String about) {
-        return free(key) ? about : about + "\n" + Tr.t("Set by the Low-End Preset: turn the preset off to change it.");
+        return free(key) ? about : about + "\n" + Tr.t("Set by the Preset: turn the preset off to change it.");
     }
 
     /** A toggle the Low-End preset may hold: then it shows its value, dimmed, and cannot be tapped. */
@@ -258,20 +257,30 @@ final class SettingsMenu {
                 new String[] {Tr.t("Auto"), Tr.t("On"), Tr.t("Off")}, settings.gpuCompat(), true,
                 which -> settings.setGpuCompat(which));
         restart(null);
+        // Only the renderers that run on the GPU driver chosen below (GpuDrivers.rendererRuns): with a
+        // driver the player installed, the game works on that driver alone.
+        final java.util.List<Integer> renderers = new java.util.ArrayList<>();
+        final java.util.List<String> rendererNames = new java.util.ArrayList<>();
         int rendererIndex = 0;
-        for (int i = 0; i < AppSettings.RENDERER_ORDER.length; i++) {
-            if (AppSettings.RENDERER_ORDER[i] == settings.renderer()) rendererIndex = i;
+        for (int which : AppSettings.RENDERER_ORDER) {
+            if (!GpuDrivers.rendererRuns(activity, settings, which)) continue;
+            if (which == GpuDrivers.effectiveRenderer(activity, settings)) rendererIndex = renderers.size();
+            renderers.add(which);
+            rendererNames.add(Tr.t(AppSettings.rendererName(which)));
         }
-        choiceRow(Tr.t("Renderer"), Tr.t("Auto picks one for this phone (the Vulkan renderer on most). Dawn: the "
-                        + "WebGPU renderer of this version. WebGPU 1.0: the renderer of version 1.0, which some "
-                        + "phones run smoother; it has none of the renderer changes made after 1.0, so Graphics Compatibility "
-                        + "and the GPU-time Dynamic Resolution do nothing there (not on PowerVR, Adreno 5xx or "
-                        + "Android 10: they use Auto). Vulkan: "
-                        + "the game talks to the Vulkan driver directly. OpenGL ES: Dawn on OpenGL ES, for phones "
-                        + "whose Vulkan driver shows a black screen or closes the game."),
-                new String[] {Tr.t("Auto"), "Dawn", "WebGPU 1.0", Tr.t("Vulkan"), Tr.t("OpenGL ES")}, rendererIndex,
+        final GpuDrivers.Driver activeDriver = GpuDrivers.find(activity, settings.gpuDriver());
+        choiceRow(Tr.t("Renderer"), Tr.t("Auto picks one for this phone (the Vulkan renderer on most). Vulkan: the game talks to the "
+                        + "Vulkan driver directly. WebGPU 1.2: the WebGPU (Dawn) renderer of this version. WebGPU 1.0: "
+                        + "the renderer of version 1.0, which some phones run smoother; it has none of the renderer "
+                        + "changes made after 1.0, so Graphics Compatibility and the GPU-time Dynamic Resolution do "
+                        + "nothing there (not on PowerVR, Adreno 5xx or Android 10: they use Auto). OpenGL ES "
+                        + "(Experimental): WebGPU on OpenGL ES, for phones whose Vulkan driver shows a black screen or "
+                        + "closes the game.")
+                        + (activeDriver == null ? "" : " " + Tr.t("With an installed GPU driver, only the renderers "
+                        + "that run on it are listed (never OpenGL ES: the driver is Vulkan only).")),
+                rendererNames.toArray(new String[0]), rendererIndex,
                 true, index -> {
-                    final int which = AppSettings.RENDERER_ORDER[index];
+                    final int which = renderers.get(index);
                     final int before = settings.renderer();
                     settings.setRenderer(which);
                     confirmRestart(Tr.t("Renderer"), AppSettings.rendererName(which), AppSettings.rendererName(before),
@@ -302,7 +311,9 @@ final class SettingsMenu {
     /** Everything about the game's textures: packs, dump, the key report and HD Textures. */
     private void showTextures() {
         showCustomTextures();
+        group(Tr.t("Mod Tools"));
         showTextureTools();
+        group(Tr.t("HD Textures"));
         showHdTextures();
     }
 
@@ -322,7 +333,7 @@ final class SettingsMenu {
             activity.runOnUiThread(() -> {
                 hdBusy = false;
                 hdCacheBytes = bytes;
-                if ((section == TEXTURES || section == GRAPHICS) && !activity.isFinishing()) show(section);
+                if (section == TEXTURES && !activity.isFinishing()) show(section);
             });
         }, "hd-cache-size").start();
     }
@@ -358,36 +369,141 @@ final class SettingsMenu {
                 used > 0 && !hdBusy && !inGame ? Tr.t("Clear") : null, this::confirmClearHdCache);
     }
 
-    /** Texture mods from the Textures folder: on or off, then each mod ticked and put in order. */
+    /** What the game loaded per mod (Textures/Loaded.txt), read each time the Textures tab is shown. */
+    private java.util.Map<String, TexturePacks.Used> used = new java.util.HashMap<>();
+
+    /** Texture mods from the Textures folder: on or off, what was found, then each mod ticked and put in order. */
     private void showCustomTextures() {
         final String folder = folderName("Textures");
         final boolean files = AppFiles.hasFileAccess(activity);
         restart(null);
-        toggleRow(Tr.t("Custom Textures"), files
-                        ? Tr.t("Uses your own textures (tex1_*.png or .dds, Dolphin-style names) from ") + folder
-                                + Tr.t(" in place of the game's. A very large pack uses more RAM.")
-                        : Tr.t("Needs \"All files access\" for this app, to read ") + folder + ".",
-                settings.customTextures(), files, on -> settings.setCustomTextures(on));
-        if (!files) return;
+        toggleRow(Tr.t("Custom Textures"), null, settings.customTextures(), files, on -> settings.setCustomTextures(on));
+        if (!files) {
+            note(Tr.t("Needs \"All files access\" for this app, to read ") + folder + ".", Ui.WARNING);
+            return;
+        }
         final java.io.File root = AppFiles.textureDir();
         final java.util.List<TexturePacks.Pack> packs = TexturePacks.load(settings, root);
+        final boolean enabled = settings.customTextures();
+        used = TexturePacks.used(root);
+        TexturePacks.countMissing(activity, root, packs, () -> {
+            if (section == TEXTURES) show(section);
+        });
+        final java.util.Map<String, Integer> overridden = TexturePacks.overridden(packs);
+        showTextureStatus(packs, overridden, enabled, folder);
+
         group(Tr.t("Mods") + (inGame ? " *" : ""));
         if (packs.isEmpty()) {
-            final TextView none = Ui.text(activity, Tr.t("No mods yet. Put each mod in its own folder in ") + folder
-                    + Tr.t(" (how: README.txt there)."), 12, Ui.SECONDARY);
-            none.setPadding(0, dp(2), 0, dp(4));
-            rows.addView(none, Ui.matchWidth(0));
+            note(Tr.t("No mods yet. Put each mod in its own folder in ") + folder + Tr.t(" (how: README.txt there)."),
+                    Ui.SECONDARY);
+        } else {
+            note(Tr.t("Tap a mod to tick it, i for what was found in it. The higher mod wins when two change the "
+                    + "same texture."), Ui.MUTED);
         }
-        final boolean enabled = settings.customTextures();
-        for (int i = 0; i < packs.size(); ++i) packRow(packs, i, enabled);
-        TexturePacks.countMissing(activity, root, packs, () -> {
-            if (section == TEXTURES || section == GRAPHICS) show(section);
-        });
+        for (int i = 0; i < packs.size(); ++i) packRow(packs, i, enabled, overridden);
+        if (packs.size() > 1) {
+            final LinearLayout bulk = new LinearLayout(activity);
+            for (int on = 1; on >= 0; --on) {
+                final boolean tick = on == 1;
+                final TextView chip = Ui.chip(activity, (tick ? Tr.t("Tick all") : Tr.t("Untick all"))
+                        .toUpperCase(java.util.Locale.ROOT), false, enabled, v -> {
+                    for (TexturePacks.Pack p : packs) p.on = tick;
+                    TexturePacks.save(settings, packs);
+                    changed();
+                });
+                final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(28), 1f);
+                if (!tick) params.leftMargin = dp(4);
+                bulk.addView(chip, params);
+            }
+            rows.addView(bulk, Ui.matchWidth(dp(4)));
+        }
         valueRow(Tr.t("Mods Folder"), folder, Tr.t("Rescan"), () -> TexturePacks.recount());
     }
 
-    /** One mod: its tick, name, valid file count, and arrows to move it up or down the order. */
-    private void packRow(java.util.List<TexturePacks.Pack> packs, int index, boolean enabled) {
+    /** A wrapped line of text between rows (cards do not show their descriptions in this menu). */
+    private void note(String text, int color) {
+        final TextView view = Ui.text(activity, text, 12, color);
+        view.setPadding(0, dp(2), 0, dp(4));
+        rows.addView(view, Ui.matchWidth(0));
+    }
+
+    /** One line of what the ticked mods add up to, then each problem found, in the warning colour. */
+    private void showTextureStatus(java.util.List<TexturePacks.Pack> packs, java.util.Map<String, Integer> overridden,
+                                   boolean enabled, String folder) {
+        int on = 0, textures = 0, conflicts = 0, empty = 0, notSeen = 0, unreadable = 0, loaded = 0, failed = 0;
+        String failedSample = null;
+        long bytes = 0;
+        boolean scanned = true;
+        for (TexturePacks.Pack p : packs) {
+            final TexturePacks.Info i = TexturePacks.info(p.name);
+            if (i == null) {
+                scanned = false;
+                continue;
+            }
+            if (!p.on) continue;
+            ++on;
+            textures += i.valid - i.duplicates;
+            bytes += i.bytes;
+            if (i.valid == 0) ++empty;
+            if (i.seen == 0 && i.valid > 0) ++notSeen;
+            unreadable += i.unreadable;
+            final TexturePacks.Used u = used.get(p.name);
+            if (u != null) {
+                loaded += u.ok;
+                failed += u.failed;
+                if (failedSample == null) failedSample = u.failedSample;
+            }
+            final Integer n = overridden.get(p.name);
+            if (n != null) conflicts += n;
+        }
+        final String summary;
+        if (!scanned) summary = Tr.t("Checking the mods…");
+        else if (!enabled) summary = Tr.t("Off: the game uses its own textures.");
+        else if (on == 0) summary = Tr.t("No mod ticked: the game uses its own textures.");
+        else summary = String.format(java.util.Locale.ROOT, Tr.t("%d mods on, %d textures, %s"), on,
+                    textures - conflicts, megabytes(bytes));
+        note(summary, Ui.SECONDARY);
+        if (!scanned) return;
+        if (enabled && on > 0) {
+            if (loaded > 0) {
+                note(String.format(java.util.Locale.ROOT, inGame ? Tr.t("✓ In game now: %d textures replaced so far.")
+                        : Tr.t("✓ Last time in game: %d textures replaced."), loaded), Ui.SUCCESS);
+            } else {
+                note(inGame ? Tr.t("In game now: no texture replaced yet (they load when the game shows them).")
+                        : Tr.t("Not used in game yet: start the game, and the mods' textures load as they show."),
+                        Ui.MUTED);
+            }
+        }
+        for (String zip : TexturePacks.archives()) {
+            note("⚠ " + zip + Tr.t(" is still packed: unpack it into its own folder in ") + folder
+                    + Tr.t(", then Rescan."), Ui.WARNING);
+        }
+        if (!enabled) return;
+        if (failed > 0) note(String.format(java.util.Locale.ROOT, Tr.t("⚠ %d textures could not be read by the game, "
+                + "for example %s: tap i on its mod."), failed, failedSample), Ui.WARNING);
+        if (unreadable > 0) note(String.format(java.util.Locale.ROOT, Tr.t("⚠ %d files are neither PNG nor DDS inside "
+                + "(often a JPEG renamed): the game skips them."), unreadable), Ui.WARNING);
+        if (empty > 0) note(Tr.t("⚠ A ticked mod has no texture the game can use: tap i on it."), Ui.WARNING);
+        if (notSeen > 0) note(Tr.t("⚠ A ticked mod matches none of the textures in Dump: it may be for another "
+                + "game or version (this one is RBSJ08)."), Ui.WARNING);
+        if (conflicts > 0) note(String.format(java.util.Locale.ROOT, Tr.t("%d textures are in more than one ticked "
+                + "mod: the higher mod's are used."), conflicts), Ui.MUTED);
+        final long ram = DeviceProfile.ramMb(activity);
+        if (ram > 0 && bytes / 1048576 > ram / 4) {
+            note(Tr.t("⚠ The ticked mods are large for this phone's RAM: loading can stutter, or the system can "
+                    + "close the game. Untick some, or use a smaller pack."), Ui.WARNING);
+        }
+    }
+
+    private static String megabytes(long bytes) {
+        return bytes >= 1024L * 1048576
+                ? String.format(java.util.Locale.ROOT, "%.1f GB", bytes / 1073741824.0)
+                : String.format(java.util.Locale.ROOT, "%.0f MB", Math.ceil(bytes / 1048576.0));
+    }
+
+    /** One mod: its tick, name, what was found, i for details, and arrows to move it up or down the order. */
+    private void packRow(java.util.List<TexturePacks.Pack> packs, int index, boolean enabled,
+                         java.util.Map<String, Integer> overridden) {
         final TexturePacks.Pack pack = packs.get(index);
         final LinearLayout row = new LinearLayout(activity);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -401,13 +517,37 @@ final class SettingsMenu {
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         nameParams.leftMargin = dp(8);
         row.addView(name, nameParams);
-        final int count = TexturePacks.count(pack.name);
-        final TextView files = Ui.text(activity, count < 0 ? "…"
-                : count == 0 ? Tr.t("⚠ no valid names")
-                : String.format(java.util.Locale.ROOT, Tr.t("%d files"), count), 12,
-                count == 0 ? Ui.WARNING : Ui.SECONDARY);
+        final TexturePacks.Info info = TexturePacks.info(pack.name);
+        final Integer lost = overridden.get(pack.name);
+        final String status;
+        int color = Ui.SECONDARY;
+        if (info == null) {
+            status = "…";
+        } else if (info.valid == 0) {
+            status = info.unreadable > 0 ? Tr.t("⚠ unreadable files") : Tr.t("⚠ no valid names");
+            color = Ui.WARNING;
+        } else if (pack.on && enabled && used.containsKey(pack.name) && used.get(pack.name).failed > 0) {
+            status = String.format(java.util.Locale.ROOT, Tr.t("⚠ %d failed"), used.get(pack.name).failed);
+            color = Ui.WARNING;
+        } else if (pack.on && enabled && used.containsKey(pack.name) && used.get(pack.name).ok > 0) {
+            status = String.format(java.util.Locale.ROOT, Tr.t("✓ %d in use"), used.get(pack.name).ok);
+            color = Ui.SUCCESS;
+        } else if (pack.on && enabled && info.seen == 0) {
+            status = Tr.t("⚠ not this game?");
+            color = Ui.WARNING;
+        } else if (pack.on && enabled && lost != null && lost > 0) {
+            status = String.format(java.util.Locale.ROOT, Tr.t("%d files, %d covered"), info.valid, lost);
+        } else {
+            status = String.format(java.util.Locale.ROOT, Tr.t("%d files"), info.valid);
+        }
+        final TextView files = Ui.text(activity, status, 12, color);
         files.setSingleLine(true);
         row.addView(files);
+        final TextView about = Ui.chip(activity, "i", false, info != null, v -> showPackInfo(pack, lost));
+        about.setPadding(0, 0, 0, 0);
+        final LinearLayout.LayoutParams aboutParams = new LinearLayout.LayoutParams(dp(30), dp(28));
+        aboutParams.leftMargin = dp(8);
+        row.addView(about, aboutParams);
         for (int dir = -1; dir <= 1; dir += 2) {
             final int to = index + dir;
             final boolean can = enabled && to >= 0 && to < packs.size();
@@ -418,7 +558,7 @@ final class SettingsMenu {
             });
             arrow.setPadding(0, 0, 0, 0);
             final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(30), dp(28));
-            params.leftMargin = dp(dir < 0 ? 8 : 2);
+            params.leftMargin = dp(2);
             row.addView(arrow, params);
         }
         if (enabled) {
@@ -429,9 +569,68 @@ final class SettingsMenu {
                 changed();
             });
         } else {
-            row.setAlpha(0.4f);
+            name.setAlpha(0.4f);
+            files.setAlpha(0.4f);
         }
         rows.addView(row, Ui.matchWidth(0));
+    }
+
+    /** What the scan found in one mod, and what each problem means. */
+    private void showPackInfo(TexturePacks.Pack pack, Integer lost) {
+        final TexturePacks.Info i = TexturePacks.info(pack.name);
+        if (i == null) return;
+        final boolean loose = pack.name.equals(TexturePacks.LOOSE);
+        final Sheet sheet = new Sheet(activity, loose ? Tr.t("(Loose files)") : pack.name, null);
+        sheet.paragraph(String.format(java.util.Locale.ROOT, Tr.t("%d textures the game can use (%s), %d of them .dds."),
+                i.valid, megabytes(i.bytes), i.dds));
+        final TexturePacks.Used u = used.get(pack.name);
+        if (u != null && u.ok > 0) {
+            sheet.paragraph(String.format(java.util.Locale.ROOT, inGame ? Tr.t("%d of them are in use in the game now.")
+                    : Tr.t("%d of them were used the last time in game."), u.ok));
+        } else if (pack.on && settings.customTextures()) {
+            sheet.paragraph(Tr.t("None used in game yet: a texture loads when the game shows it."));
+        } else {
+            sheet.paragraph(Tr.t("Not ticked, so the game does not use it."));
+        }
+        if (u != null && u.failed > 0) {
+            sheet.warning(String.format(java.util.Locale.ROOT, Tr.t("%d could not be read by the game"), u.failed),
+                    Tr.t("The file is damaged or not a real PNG or DDS. For example:") + " " + u.failedSample);
+        }
+        if (i.unreadable > 0) {
+            sheet.warning(String.format(java.util.Locale.ROOT, Tr.t("%d files are neither PNG nor DDS inside"),
+                    i.unreadable), Tr.t("Often a JPEG renamed to .png or .dds. Save it again as PNG. For example:")
+                    + " " + i.unreadableSample);
+        }
+        if (i.renamed > 0) {
+            sheet.note(String.format(java.util.Locale.ROOT, Tr.t("%d .dds files are PNG images inside (renamed): "
+                    + "they are read as PNG, which is fine."), i.renamed));
+        }
+        if (i.seen >= 0) {
+            sheet.paragraph(String.format(java.util.Locale.ROOT, Tr.t("%d of them were seen in Dump (textures the game "
+                    + "has shown on this phone)."), i.seen));
+        }
+        if (lost != null && lost > 0) {
+            sheet.paragraph(String.format(java.util.Locale.ROOT, Tr.t("%d are also in a mod above this one, so "
+                    + "that mod's are used. Move this mod up to use its own."), lost));
+        }
+        if (i.duplicates > 0) {
+            sheet.paragraph(String.format(java.util.Locale.ROOT, Tr.t("%d textures are in this mod twice (a .png and "
+                    + "a .dds, or two folders): only one of each is used."), i.duplicates));
+        }
+        if (i.bad > 0) {
+            sheet.warning(String.format(java.util.Locale.ROOT, Tr.t("%d images with names the game cannot match"),
+                    i.bad), Tr.t("Names must look like tex1_64x64_1a2b3c4d5e6f7a8b_5.png (Dolphin style, made by "
+                    + "Dump Textures). For example:") + " " + i.badSample);
+        }
+        if (i.valid > 0 && i.seen == 0) {
+            sheet.warning(Tr.t("Not seen in this game"), Tr.t("None of its names are in Dump. Maybe it is made for "
+                    + "another game or version (this one is Wii NTSC-J RBSJ08), or Dump only has a few textures yet."));
+        }
+        if (i.dds > 0) {
+            sheet.note(Tr.t("On a GPU without BC textures (most Mali) the .dds files are unpacked while loading: "
+                    + "they work, with more loading time."));
+        }
+        sheet.action(Tr.t("Close"), null, true, false, null).show();
     }
 
     /** Tools for pack makers and testers: texture dump and the texture key report. */
@@ -569,7 +768,7 @@ final class SettingsMenu {
         final String render = AppSettings.resolutionLabel((Float) DeviceProfile.lowEndValues(gpu, 1).get("resolution_scale"));
         final String ultraRender = AppSettings.resolutionLabel((Float) DeviceProfile.lowEndValues(gpu, 2).get("resolution_scale"));
         final String[] options = {Tr.t("Off"), Tr.t("Low-End"), Tr.t("Ultra Low")};
-        choiceRow(Tr.t("Low-End Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
+        choiceRow(Tr.t("Preset"), Tr.t("The lightest settings in one tap, for a phone that cannot hold "
                         + "60 fps: steadier, blurrier.") + "\n• " + Tr.t("Display Resolution") + " 480p\n• "
                         + Tr.t("Render Resolution") + " " + render + "\n• " + Tr.t("Texture Detail") + " "
                         + Tr.t("Original") + "\n• " + Tr.t("Upscaler") + " " + Tr.t("Off") + "\n• "

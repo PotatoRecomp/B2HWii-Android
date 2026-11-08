@@ -1004,6 +1004,14 @@ static bool initialize_once(AuroraBackend auroraBackend) {
         g_safeVertexFetch = false;
         Log.warn("GPU compatibility vertex fetch off: {} has no vertex storage buffers", g_adapterName);
       }
+      // Vertex pulling also reads storage buffers in the vertex stage, so every GX pipeline fails to
+      // link there ("vertex shader storage blocks (1) > maximum (0)", Mali-G57 OpenGL ES r54p1,
+      // 2026-11-08). Decode GX vertices on the CPU and use vertex inputs instead.
+      if (requiredCompatLimits.maxStorageBuffersInVertexStage == 0 && !g_vertexLoader) {
+        g_vertexLoader = true;
+        g_indexPulling = false;
+        Log.warn("GX vertex loader: CPU decode, vertex inputs ({} has no vertex storage buffers)", g_adapterName);
+      }
     }
     std::vector<wgpu::FeatureName> requiredFeatures;
     // Optional native sharing for MetalFX. Devices without either feature keep
@@ -1299,10 +1307,12 @@ bool initialize(AuroraBackend auroraBackend) {
     Log.info("Renderer: {}{}", vk ? "aurora Vulkan" : "Dawn", custom_driver::active() ? " (custom driver)" : "");
     if (initialize_once(auroraBackend)) {
       if (custom_driver::active()) {
+        custom_driver::outcome(vk, true);
         custom_driver::running([] { return g_deviceLost.load(std::memory_order_acquire); });
       }
       return true;
     }
+    custom_driver::outcome(vk, false);
     reset_instance();
   }
   set_vulkan_backend(false);

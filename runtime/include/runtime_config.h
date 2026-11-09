@@ -1314,8 +1314,13 @@ inline std::filesystem::path ResolveRelativeToConfig(const std::string& value) {
     return ResolveRelativeTo(ResolveConfigPath().parent_path(), value);
 }
 
-// The extracted DATA directory. Empty when nothing is configured.
+// The extracted DATA directory, or the ISO or RVZ the game reads in place. Empty when nothing is
+// configured. BASARA_DVD_IMAGE wins: the Android app's Read mode, the game file it opened for this
+// run (/proc/self/fd/N), which Config.toml can't name.
 inline std::filesystem::path ResolvedDvdRoot() {
+    if (const char* image = std::getenv("BASARA_DVD_IMAGE"); image != nullptr && *image != '\0') {
+        return PathFromUtf8(image);
+    }
     const std::string configured = DvdRoot();
     return configured.empty() ? std::filesystem::path{} : ResolveRelativeToConfig(configured);
 }

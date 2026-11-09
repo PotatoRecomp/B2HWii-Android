@@ -48,15 +48,17 @@ uint32_t g_surfaceHeight = 0;
 // game back and raised again once it has room. The player's choice stays the ceiling.
 constexpr float kDynSteps[] = {1.0f, 0.9f, 0.8f, 0.7f, 0.6f, 0.5f};
 constexpr int kDynStepCount = static_cast<int>(sizeof(kDynSteps) / sizeof(kDynSteps[0]));
-// Never below the Wii's own 480 lines: at 240 ("0.5x") the picture went visibly coarse on Mali
-// phones. At 1x and below dynamic resolution therefore saves nothing; the heat ladder sheds work
-// there with the 30 fps drawing of Thermal::Warm instead (basara_frameskip.cpp).
-constexpr float kDynMinLines = 480.0f;
+// Floor 240 lines (0.5x), as in 1.1. 1.2 raised it to 480 for a sharper picture on Mali, and that
+// left dynamic resolution with nothing to do at 1x, the most common setting on weak phones: ultimates
+// and cutscenes that 1.1 carried at 240-360 lines stayed at 480 and fell to 5-20 fps (1.2 reports,
+// Adreno 610/618, Mali-G52/G57). Coarse for a moment beats a slide show; the steps climb back.
+constexpr float kDynMinLines = 240.0f;
 // Emergency only: a GPU far past its budget (an ultimate's full-screen effects took a Mali-G52 MC2 to
 // 46-64 ms a frame at 480 lines under the 30 FPS Lock) may drop below the floor to this many lines,
 // in one jump, and climbs back to 480 the usual way once the GPU has room again.
 constexpr float kDynEmergencyLines = 336.0f;
 constexpr double kDynEmergencyGpuMs = 22.0;   // per 60 fps frame; doubled under the 30 FPS Lock
+constexpr uint64_t kDynEmergencyDrops = 6;    // presenter drops in one window (a tenth of the frames)
 // Under 480 lines already (Ultra Low: 360) the emergency floor is 70% of the player's lines, never
 // below 240: 336 sat above 360 x 0.9, so dynamic resolution could not move there at all.
 constexpr float kDynEmergencyMinLines = 240.0f;
@@ -132,7 +134,7 @@ void ApplyRenderer(const Settings& settings) {
     }
     const float lines = RenderLines(settings.renderScale, aspect);
     const float factor = kDynSteps[g_dynStep];  // 0 (100%) unless dynamic resolution or the heat lowered it
-    const float floorLines = g_dynEmergency ? EmergencyLines(lines) : kDynMinLines;
+    const float floorLines = g_dynEmergency ? std::min(EmergencyLines(lines), kDynMinLines) : kDynMinLines;
     const float dynLines = factor < 1.0f && lines > 0.0f ? std::max(std::min(lines, floorLines), lines * factor)
                                                          : lines;
     VISetFrameBufferLines(dynLines);
@@ -176,6 +178,11 @@ bool DynamicResolutionTick() {
     // lands on the next present, and a Mali-G57 MP1 then read 80-140 ms "a frame" and went to 50%.
     const uint64_t gpuDivisor = std::max<uint64_t>(gpuFrames, cycles);
     const double gpuMs = gpuFrames ? (now.gpuNanos - g_dynLast.gpuNanos) / 1e6 / gpuDivisor : 0.0;
+    // Signals that need no GPU timestamps (stock Adreno drivers give implausible ones, so 1.2 never
+    // saw its ultimates as a GPU spike): the worker held in prepare by a GPU that is frames behind
+    // (the in-flight bound waits there), and frames the presenter threw away.
+    const double prepareMs = cycles ? (now.prepareNanos - g_dynLast.prepareNanos) / 1e6 / cycles : 0.0;
+    const uint64_t dropped = now.droppedPresents - g_dynLast.droppedPresents;
     g_dynLast = now;
     g_dynFrames = 0;
     if (g_dynSinceUp < (1 << 20)) {
@@ -203,7 +210,9 @@ bool DynamicResolutionTick() {
         return v && *v == '2';
     }();
     const float curLines = RenderLines(g_current.renderScale, EffectiveAspect(g_current.aspect));
-    if (dynamic && !s_cycleTest && curLines > 0.0f && gpuMs > kDynEmergencyGpuMs * budget) {
+    const bool gpuSpike = gpuMs > kDynEmergencyGpuMs * budget || prepareMs > kDynEmergencyGpuMs * budget ||
+                          dropped >= kDynEmergencyDrops;
+    if (dynamic && !s_cycleTest && curLines > 0.0f && gpuSpike) {
         // GPU spike: jump straight to the deepest step that keeps the emergency lines.
         const float emergencyLines = EmergencyLines(curLines);
         int target = g_dynStep;
@@ -214,8 +223,11 @@ bool DynamicResolutionTick() {
             g_dynEmergency = true;
             g_dynCalm = 0;
             g_dynSinceChange = 0;
-            RT_LOGF(RT_TAG_VI, "dynamic resolution: %.0f%% -> %.0f%% (gpu spike %.2f ms a frame, emergency %.0f lines)\n",
-                    kDynSteps[g_dynStep] * 100.0f, kDynSteps[target] * 100.0f, gpuMs, curLines * kDynSteps[target]);
+            RT_LOGF(RT_TAG_VI,
+                    "dynamic resolution: %.0f%% -> %.0f%% (gpu spike: gpu %.2f ms, prepare %.2f ms a frame, %llu "
+                    "dropped, emergency %.0f lines)\n",
+                    kDynSteps[g_dynStep] * 100.0f, kDynSteps[target] * 100.0f, gpuMs, prepareMs,
+                    static_cast<unsigned long long>(dropped), curLines * kDynSteps[target]);
             g_dynStep = target;
             g_dynSkipWindow = true;
             return true;
@@ -262,7 +274,7 @@ bool DynamicResolutionTick() {
     // At the 480-line floor a step down changes nothing on screen: hold instead of stepping in the
     // dark (a step up from there would then wait out windows that bought nothing).
     if (step > g_dynStep && !s_cycleTest) {
-        const float floorLines = g_dynEmergency ? EmergencyLines(curLines) : kDynMinLines;
+        const float floorLines = g_dynEmergency ? std::min(EmergencyLines(curLines), kDynMinLines) : kDynMinLines;
         if (curLines > 0.0f && curLines * kDynSteps[g_dynStep] <= floorLines) {
             return false;
         }

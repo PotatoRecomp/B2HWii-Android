@@ -1,5 +1,7 @@
 #include "game_folder.h"
 
+#include "../disc/disc_extract.h"
+
 #include "runtime_config.h"
 #include "runtime_log.h"
 
@@ -150,6 +152,10 @@ fs::path Find(const fs::path& path) {
     if (path.empty()) {
         return {};
     }
+    std::error_code ec;
+    if (fs::is_regular_file(path, ec) || disc::IsOpenedFile(path)) {
+        return path;  // an ISO or RVZ, read in place
+    }
     if (IsExtractedDisc(path)) {
         return path;
     }
@@ -160,6 +166,23 @@ fs::path Find(const fs::path& path) {
 }
 
 std::string Problem(const fs::path& root) {
+    std::error_code ec;
+    if (fs::is_regular_file(root, ec) || disc::IsOpenedFile(root)) {
+        const disc::ReadAt read = disc::OpenFile(root);
+        uint8_t header[8] = {};
+        std::string message;
+        if (!read) {
+            return "Couldn't open the game file.";
+        }
+        if (!disc::ReadHeader(read, header, message)) {
+            return message;
+        }
+        const std::string id(reinterpret_cast<const char*>(header), 6);
+        if (id != "RBSJ08") {
+            return "That is " + id + ", not Sengoku Basara 2 Heroes (RBSJ08). This port runs only the Japanese disc.";
+        }
+        return {};
+    }
     if (!IsExtractedDisc(root)) {
         return "That folder isn't an extracted game: it needs the files and sys folders Dolphin's Extract "
                "Entire Disc makes.";

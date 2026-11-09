@@ -16,6 +16,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace controller_mapping_wizard {
@@ -307,9 +308,87 @@ void HandleAxisMotion(const SDL_JoyAxisEvent& event) {
     AdvanceStep(value);
 }
 
+// Generic Android HID pads (cheap PS-style "Twin USB Gamepad" and the like) report KEYCODE_BUTTON_1..16,
+// which SDL numbers as joystick buttons 20..35. SDL keeps only the low 16 bits of the button mask in the
+// GUID, so those buttons vanish from it, SDL makes up no gamepad mapping, and the pad is never opened.
+// Give such a pad a default mapping in the usual DirectInput PS order (1 triangle, 2 circle, 3 cross,
+// 4 square, 5/6 L2/R2, 7/8 L1/R1, 9 select, 10 start, 11/12 L3/R3); the hat arrives as buttons 11..14.
+// The player's own Gamepad Buttons map still overrides every button.
+void AutoMapGenericAndroidPad(SDL_JoystickID id) {
+#if defined(SDL_PLATFORM_ANDROID)
+    if (SDL_IsGamepad(id)) {
+        return;
+    }
+    SDL_Joystick* joystick = SDL_OpenJoystick(id);
+    if (joystick == nullptr) {
+        return;
+    }
+    const int buttons = SDL_GetNumJoystickButtons(joystick);
+    const int axes = SDL_GetNumJoystickAxes(joystick);
+    const int hats = SDL_GetNumJoystickHats(joystick);
+    SDL_CloseJoystick(joystick);
+    if (buttons <= 23) {
+        return; // no generic BUTTON_1..4 range: not this kind of pad
+    }
+    const char* rawName = SDL_GetJoystickNameForID(id);
+    std::string name = rawName != nullptr ? rawName : "Generic USB Gamepad";
+    std::replace(name.begin(), name.end(), ',', ' ');
+    std::string mapping = GuidString(id) + "," + name + ",";
+    static constexpr std::array<std::pair<const char*, int>, 12> kButtons = {{
+        {"y", 20}, {"b", 21}, {"a", 22}, {"x", 23}, {"lefttrigger", 24}, {"righttrigger", 25},
+        {"leftshoulder", 26}, {"rightshoulder", 27}, {"back", 28}, {"start", 29},
+        {"leftstick", 30}, {"rightstick", 31},
+    }};
+    for (const auto& [key, button] : kButtons) {
+        if (button < buttons) {
+            mapping += std::string(key) + ":b" + std::to_string(button) + ",";
+        }
+    }
+    // SDL's Android joystick lists AXIS_HAT_X/Y as a hat, and the axes sorted X, Y, RX, RY, Z, RZ, then
+    // the rest (SDLControllerManager RangeComparator). These PS-style DirectInput pads put the right
+    // stick on Z/RZ: a2/a3 with four axes, a4/a5 when RX/RY are there too. The vc46 guess of a2/a3 on
+    // an eight-axis "Twin USB Gamepad" left the right stick dead and the d-pad (a hat) unmapped.
+    if (hats > 0) {
+        mapping += "dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,";
+    } else {
+        mapping += "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,";
+    }
+    if (axes >= 2) mapping += "leftx:a0,lefty:a1,";
+    if (axes >= 6) {
+        mapping += "rightx:a4,righty:a5,";
+    } else if (axes >= 4) {
+        mapping += "rightx:a2,righty:a3,";
+    }
+    if (SDL_AddGamepadMapping(mapping.c_str()) < 0) {
+        RT_LOG(RT_TAG_CONFIG) << "generic pad: mapping rejected (" << SDL_GetError() << "): " << mapping
+                              << std::endl;
+        return;
+    }
+    RT_LOG(RT_TAG_CONFIG) << "generic pad: '" << name << "' (" << buttons << " buttons, " << axes
+                          << " axes, " << hats << " hats) mapped as a PS-style gamepad: " << mapping << std::endl;
+#else
+    (void)id;
+#endif
+}
+
+void AutoMapGenericAndroidPads() {
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetJoysticks(&count);
+    if (ids == nullptr) {
+        return;
+    }
+    for (int i = 0; i < count; ++i) {
+        AutoMapGenericAndroidPad(ids[i]);
+    }
+    SDL_free(ids);
+}
+
 } // namespace
 
 void LoadPersistedMappings() {
+    struct ScanAfter {
+        ~ScanAfter() { AutoMapGenericAndroidPads(); }
+    } scanAfter;
     std::ifstream in(MappingDbPath());
     if (!in) {
         return;
@@ -335,6 +414,9 @@ void LoadPersistedMappings() {
 }
 
 void HandleSdlEvent(const SDL_Event& event) {
+    if (event.type == SDL_EVENT_JOYSTICK_ADDED) {
+        AutoMapGenericAndroidPad(event.jdevice.which);
+    }
     if (!g_wizard.active) {
         return;
     }

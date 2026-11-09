@@ -211,7 +211,8 @@ final class Updater {
                 return x > y;
             }
         }
-        return false;
+        // Same numbers: the release "1.2.1-hotfix" is newer than a staging build "1.2.1-hotfix-staging1".
+        return local.contains("staging") && !remote.contains("staging");
     }
 
     /** May the app hand APKs to the installer? If not, the player turns it on in system settings. */

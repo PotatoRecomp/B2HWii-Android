@@ -515,7 +515,17 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
 
 static f32 tex_offset(GXTexOffset offs) noexcept {
   switch (offs) {
-    DEFAULT_FATAL("invalid tex offset {}", underlying(offs));
+  default: {
+    // Values 6/7 are not GX offsets but do reach here from game display lists (Mali-G615 at 3x,
+    // 2026-11-09): the 1.2 fatal stopped the game. Treat them as no offset, as the hardware's
+    // unused codes do, and say so once.
+    static bool s_warned = false;
+    if (!s_warned) {
+      s_warned = true;
+      Log.warn("invalid tex offset {}, using none", underlying(offs));
+    }
+    return 0.f;
+  }
   case GX_TO_ZERO:
     return 0.f;
   case GX_TO_SIXTEENTH:

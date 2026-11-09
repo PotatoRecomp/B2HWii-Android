@@ -165,7 +165,15 @@ static std::optional<size_t> RequiredTextureDataSize(u32 format, uint32_t width,
   uint32_t blockHeight = 1;
   uint32_t blockSize = 0;
   switch (format) {
-    DEFAULT_FATAL("RequiredTextureDataSize: unknown texture format {}", format);
+  default: {
+    // A desynced FIFO can load garbage texture registers. Skip the texture rather than stop the game.
+    static u32 logged = 0;
+    if (logged < 4) {
+      ++logged;
+      Log.warn("RequiredTextureDataSize: unknown texture format {}; skipping texture", format);
+    }
+    return std::nullopt;
+  }
   case GX_TF_R8_PC:
     blockSize = 1;
     break;

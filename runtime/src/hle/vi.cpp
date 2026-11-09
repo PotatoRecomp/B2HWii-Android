@@ -1247,6 +1247,39 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                 s_windowStart = now;
                 s_logged = 0;
             }
+            // Always on, every 10 s: the 1.2 logs had only slow frames, so a player's report could not
+            // say how fast the game ran. Shown pictures a second, frameskip skips, frame and thread-cpu
+            // averages, frames over 20 ms.
+            {
+                static Clock::time_point s_sumStart{};
+                static uint32_t s_sumFrames = 0, s_sumSlow = 0;
+                static double s_sumMs = 0, s_sumCpu = 0;
+                static uint64_t s_sumSkipBase = 0, s_sumStepBase = 0;
+                if (s_sumStart == Clock::time_point{}) {
+                    s_sumStart = now;
+                    BasaraFrameskip_Stats(&s_sumStepBase, &s_sumSkipBase);
+                }
+                ++s_sumFrames;
+                s_sumSlow += frame > 20.0 ? 1u : 0u;
+                s_sumMs += std::min(frame, 2000.0);
+                s_sumCpu += frameUser + frameKernel;
+                const double span = std::chrono::duration<double>(now - s_sumStart).count();
+                if (span >= 10.0) {
+                    uint64_t steps = 0, skipped = 0;
+                    BasaraFrameskip_Stats(&steps, &skipped);
+                    RT_LOGF(RT_TAG_VI,
+                            "summary %.0f s: %.1f fps shown, %.1f steps/s (%llu skipped), frame %.1f ms, "
+                            "thread cpu %.1f ms, %u frames over 20 ms\n",
+                            span, s_sumFrames / span, (steps - s_sumStepBase) / span,
+                            static_cast<unsigned long long>(skipped - s_sumSkipBase), s_sumMs / s_sumFrames,
+                            s_sumCpu / s_sumFrames, s_sumSlow);
+                    s_sumStart = now;
+                    s_sumFrames = s_sumSlow = 0;
+                    s_sumMs = s_sumCpu = 0;
+                    s_sumStepBase = steps;
+                    s_sumSkipBase = skipped;
+                }
+            }
             if (frame > 20.0 && frame < 2000.0 && s_logged++ < 30) {
                 RT_LOGF(RT_TAG_VI,
                         "slow frame %.1f ms: game %.2f (gx %.2f, disc %.2f in %u reads), present %.2f, "

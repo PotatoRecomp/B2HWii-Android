@@ -455,6 +455,17 @@ void Log(const char* fmt, ...) {
 
 [[noreturn]] void Fatal(const char* what, VkResult result) {
   Log("fatal: %s failed (VkResult %d)", what, static_cast<int>(result));
+  // A lost device (a GPU hang: 458 passes a frame at 3x on Turnip Adreno 650) cannot be recovered
+  // here. Leave a note for the launcher (AURORA_GPU_LOST_FILE), which lowers the Render Resolution a
+  // step and tells the player why the game closed.
+  if (result == VK_ERROR_DEVICE_LOST) {
+    if (const char* path = std::getenv("AURORA_GPU_LOST_FILE"); path != nullptr && *path != '\0') {
+      if (FILE* f = std::fopen(path, "w")) {
+        std::fprintf(f, "%s\n", what);
+        std::fclose(f);
+      }
+    }
+  }
   std::abort();
 }
 

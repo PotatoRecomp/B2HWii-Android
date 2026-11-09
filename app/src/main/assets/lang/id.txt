@@ -867,3 +867,46 @@ Overlay Style	Gaya Overlay
 Bar: one see-through bar at the top centre. Minimal: no bar, the FPS large in the top left with the other items under it.	Bar: satu bar tembus pandang di tengah atas. Minimal: tanpa bar, FPS besar di kiri atas dengan item lain di bawahnya.
 Bar	Bar
 Minimal	Minimal
+Choose your own ISO or RVZ of the game (Japan, RBSJ08). Unpack it once (about 4 GB), or play it straight from the file; afterwards the app goes straight into the game.	Pilih ISO atau RVZ game milikmu (Jepang, RBSJ08). Ekstrak sekali (sekitar 4 GB), atau mainkan langsung dari file-nya; setelah itu aplikasi langsung masuk ke game.
+How to load the game	Cara memuat game
+Both play the same game, and your saves stay.	Keduanya memainkan game yang sama, dan save tetap aman.
+Extract	Ekstrak
+Unpacks the game once, about 4 GB. The fastest loading.	Membongkar game sekali, sekitar 4 GB. Loading paling cepat.
+Read from File	Baca dari File
+Plays straight from the ISO or RVZ, which must stay where it is. Needs no space; the unpacked copy (4 GB) is deleted.	Main langsung dari ISO atau RVZ, yang harus tetap di tempatnya. Tidak butuh ruang; salinan hasil ekstrak (4 GB) dihapus.
+Plays straight from the ISO or RVZ, which must stay where it is. Needs no space.	Main langsung dari ISO atau RVZ, yang harus tetap di tempatnya. Tidak butuh ruang.
+This file's location can't be kept for later. Move it to the phone's storage (Download), or choose Extract.	Lokasi file ini tidak bisa diingat. Pindahkan ke memori HP (Download), atau pilih Ekstrak.
+The game file can't be opened: it was moved, renamed or deleted. Choose it again.	File game tidak bisa dibuka: sudah dipindah, diganti nama, atau dihapus. Pilih lagi.
+The GPU stopped responding and the game closed. A lower Render Resolution or Renderer may help.	GPU berhenti merespons dan game tertutup. Render Resolution atau Renderer yang lebih rendah mungkin membantu.
+The GPU stopped responding and the game closed. Render Resolution lowered to 	GPU berhenti merespons dan game tertutup. Render Resolution diturunkan ke 
+Hotfix: smoother menus, cutscenes and ultimates	Hotfix: menu, cutscene dan ultimate lebih lancar
+Choose how the game file is used: Extract (as before, about 4 GB) or Read, which plays the ISO or RVZ where it is, without extracting, for phones with little free space.	Pilih cara memakai file game: Extract (seperti dulu, sekitar 4 GB) atau Read, yang memainkan ISO atau RVZ langsung dari tempatnya tanpa diekstrak, untuk HP dengan ruang kosong sedikit.
+If the GPU stops responding and the game closes, Render Resolution is lowered one step for the next start, and the app tells you.	Bila GPU berhenti merespons dan game tertutup, Render Resolution diturunkan satu tingkat untuk start berikutnya, dan aplikasi memberi tahu.
+OpenGL ES on PowerVR phones now sends the 3D models the way their driver is made for.	OpenGL ES di HP PowerVR kini mengirim model 3D dengan cara yang sesuai untuk driver-nya.
+Menus, character select, cutscenes and ultimates could drop to about 5 fps on Vulkan: frames piled up behind the GPU and were thrown away. The renderer now keeps at most two frames waiting.	Menu, pilih karakter, cutscene dan ultimate bisa turun ke sekitar 5 fps di Vulkan: frame menumpuk di belakang GPU lalu dibuang. Renderer kini menahan paling banyak dua frame.
+Dynamic Resolution did nothing at 1x: it can go down to 240 lines again, as in 1.1, and now notices a GPU that falls behind even on phones that don't report GPU times.	Dynamic Resolution tidak berbuat apa-apa di 1x: kini bisa turun lagi sampai 240 baris seperti di 1.1, dan mengenali GPU yang tertinggal walau HP tidak melaporkan waktu GPU.
+Fewer full-screen GPU passes in effects that copy the picture (ultimates, cutscenes, smoke).	Lebih sedikit pass GPU layar penuh pada efek yang menyalin gambar (ultimate, cutscene, asap).
+Thermal Control could hold the game at 30 fps until the app was closed. The battery temperature no longer turns on the 30 fps drawing.	Thermal Control bisa menahan game di 30 fps sampai aplikasi ditutup. Suhu baterai tidak lagi menyalakan gambar 30 fps.
+The game could close with "invalid tex offset" on some Mali phones.	Game bisa tertutup dengan "invalid tex offset" di beberapa HP Mali.
+Generic gamepads: the right stick and the D-pad work (D-pad from the hat, right stick from the Z/RZ axes).	Gamepad generik: stik kanan dan D-pad berfungsi (D-pad dari hat, stik kanan dari sumbu Z/RZ).
+The log records the fps every 10 seconds again, so reports show where the game slowed down.	Log kembali mencatat fps tiap 10 detik, sehingga laporan menunjukkan di mana game melambat.
+Staging build: please send Share Log after playing a menu, a cutscene and an ultimate.	Build staging: kirim Share Log setelah memainkan menu, cutscene dan ultimate.
+A texture mod added to the Textures folder starts unticked: tick it in Settings > Textures to use it.	Mod tekstur yang baru ditaruh di folder Textures awalnya tidak dicentang: centang di Pengaturan > Tekstur untuk memakainya.
+Custom textures showed only after leaving and entering a screen again (Conquest character select). They now appear as soon as the file is loaded.	Tekstur kustom baru tampil setelah keluar lalu masuk lagi ke sebuah layar (pilih karakter Conquest). Kini langsung tampil begitu file selesai dimuat.
+PowerVR B-Series (BXM) with Graphics Compatibility Off drew a black game picture behind the on-screen buttons.	PowerVR B-Series (BXM) dengan Kompatibilitas Grafis Off menampilkan gambar game hitam di belakang tombol layar.
+The game could close in battle with "unknown texture format" on some Mali phones: the graphics data is now read with the right size.	Game bisa tertutup di pertempuran dengan "unknown texture format" di sebagian HP Mali: data grafis kini dibaca dengan ukuran yang benar.
+Crackling sound on phones whose audio takes large chunks at once (for example Helio G85 with Recording-Friendly Audio).	Suara kresek di HP yang mengambil audio dalam potongan besar sekaligus (misalnya Helio G85 dengan Audio Ramah Rekaman).
+The game could close right after an update with "No DVD root is configured".	Game bisa langsung tertutup setelah update dengan "No DVD root is configured".
+Some generic USB gamepads (for example "810 Twin USB Gamepad") were seen as a keyboard, so their Gamepad Buttons map did nothing. They now work as a gamepad.	Sebagian gamepad USB generik (misalnya "810 Twin USB Gamepad") terbaca sebagai keyboard, jadi pengaturan Gamepad Buttons tidak berpengaruh. Kini terbaca sebagai gamepad.
+Changes are saved as you make them. ⟳ Restart = applies after Restart.	Perubahan langsung tersimpan. ⟳ Restart = berlaku setelah Mulai Ulang.
+Waiting for Restart: 	Menunggu Mulai Ulang: 
+Applies after Restart, now still 	Berlaku setelah Mulai Ulang, sekarang masih 
+Restart the game? Progress since your last save is lost.	Mulai ulang game? Progres sejak save terakhir hilang.
+Will change:	Yang akan berubah:
+Settings and texture mods had no effect when the game's Config.toml had been copied in from a PC or a file manager.	Setting dan mod tekstur tidak berpengaruh bila Config.toml game disalin dari PC atau file manager.
+PowerVR B-Series phones with an older Vulkan driver (for example ADVAN S50) drew a black game picture even with Graphics Compatibility On.	HP PowerVR B-Series dengan driver Vulkan lama (misalnya ADVAN S50) menampilkan gambar game hitam walau Graphics Compatibility On.
+1 change waiting for Restart	1 perubahan menunggu Mulai Ulang
+ changes waiting for Restart	 perubahan menunggu Mulai Ulang
+Your save was restored from Basara2Heroes/Saves/Auto.	Save kamu dipulihkan dari Basara2Heroes/Saves/Auto.
+Your save is copied to Basara2Heroes/Saves/Auto whenever it changes, and comes back by itself after the app is uninstalled and installed again (needs "All files access").	Save kamu disalin ke Basara2Heroes/Saves/Auto setiap kali berubah, dan kembali sendiri setelah app di-uninstall lalu dipasang lagi (perlu "Akses semua file").
+Clearer Restart marks in the menu: settings that apply only after a restart carry a yellow "⟳ Restart" tag instead of *. Change one and its row turns yellow, the footer says how many changes wait for Restart, and the Restart button lights up.	Tanda Restart di menu lebih jelas: setting yang baru berlaku setelah restart diberi label kuning "⟳ Restart", bukan *. Ubah salah satunya, barisnya jadi kuning, footer menunjukkan berapa perubahan yang menunggu Mulai Ulang, dan tombol Mulai Ulang menyala.

@@ -40,6 +40,7 @@ void AudioStretcher::Reset(uint32_t sampleRate) {
     m_inputRate = 1.0f;
     m_pushedFrames = 0;
     m_burstPeak = 0.0f;
+    m_pullPeak = 0.0f;
     m_draining = false;
     m_out.clear();
     m_outPos = 0;
@@ -138,7 +139,7 @@ bool AudioStretcher::MakeSegment() {
         m_maxBacklog / 2,
         static_cast<int64_t>(std::max(base *
                                           std::clamp(1.0f + (1.0f - m_inputRate) * 1.5f, 1.0f, 2.0f),
-                                      m_burstPeak * 1.25f)));
+                                      std::max(m_burstPeak, m_pullPeak) * 1.25f)));
 
     if (!m_playing) {
         // Start (or restart after running dry) only with a full backlog, so a slow game does not
@@ -236,6 +237,10 @@ void AudioStretcher::Pull(int16_t* out, size_t frameCount) {
         std::fill(out, out + frameCount * 2, int16_t{0});
         return;
     }
+    // A device on the shared (non low-latency) path pulls a large burst at once (1365 frames = 43 ms
+    // at 32 kHz on a Helio G85 with Recording-Friendly Audio). A cushion smaller than one pull runs
+    // dry inside it and restarts from silence every few pulls: crackle. Size the cushion to it.
+    m_pullPeak = std::max(static_cast<float>(frameCount), m_pullPeak * kBurstDecay);
     while ((m_out.size() - m_outPos) / 2 < frameCount) {
         MakeSegment();
         Compact();

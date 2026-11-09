@@ -1489,9 +1489,23 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
         .depthStencilAttachment = &depthStencilAttachment,
     };
 
-    auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
-    render_pass_impl(pass, renderPasses, i, interpolatedFrame, debugFrame);
-    pass.End();
+    // A pass that only carries an EFB copy (no clear, no commands) changes nothing in its target:
+    // the pass before it stored the picture. Opening it anyway loads and stores the whole EFB on a
+    // tile-based GPU just to close it again, once per back-to-back copy (ultimates and cutscenes copy
+    // 20-30 times a frame). The copy reads the stored texture directly. Single-sample only (an MSAA
+    // pass resolves on End). AURORA_EFB_COPY_PASS=1 opens them as before.
+    static const bool skipCopyOnlyPasses = [] {
+      const char* v = std::getenv("AURORA_EFB_COPY_PASS");
+      return v == nullptr || v[0] != '1';
+    }();
+    const bool copyOnly = skipCopyOnlyPasses && !hasRenderWork && passInfo.resolveTarget &&
+                          i != renderPasses.size() - 1 && passInfo.msaaSamples <= 1 &&
+                          !passInfo.snapshotColorResolveSource;
+    if (!copyOnly) {
+      auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+      render_pass_impl(pass, renderPasses, i, interpolatedFrame, debugFrame);
+      pass.End();
+    }
 
     if (finalize && i == renderPasses.size() - 1) {
       depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView, passInfo.targetSize, passInfo.msaaSamples, depthMapping);

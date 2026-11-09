@@ -35,7 +35,36 @@ final class ReleaseNotes {
     }
 
     private static final Entry[] ALL = {
-        new Entry("1.2", "Straight into the game, settings while playing", "2026-11-07",
+        new Entry("1.2.1", "Hotfix: smoother menus, cutscenes and ultimates", "2026-11-09",
+                new String[] {
+                    "Choose how the game file is used: Extract (as before, about 4 GB) or Read, which plays the ISO or RVZ where it is, without extracting, for phones with little free space.",
+                    "If the GPU stops responding and the game closes, Render Resolution is lowered one step for the next start, and the app tells you.",
+                    "OpenGL ES on PowerVR phones now sends the 3D models the way their driver is made for.",
+                    "Clearer Restart marks in the menu: settings that apply only after a restart carry a yellow \"⟳ Restart\" tag instead of *. Change one and its row turns yellow, the footer says how many changes wait for Restart, and the Restart button lights up.",
+                    "A texture mod added to the Textures folder starts unticked: tick it in Settings > Textures to use it.",
+                    "Your save is copied to Basara2Heroes/Saves/Auto whenever it changes, and comes back by itself after the app is uninstalled and installed again (needs \"All files access\").",
+                },
+                new String[] {
+                    "Menus, character select, cutscenes and ultimates could drop to about 5 fps on Vulkan: frames piled up behind the GPU and were thrown away. The renderer now keeps at most two frames waiting.",
+                    "Dynamic Resolution did nothing at 1x: it can go down to 240 lines again, as in 1.1, and now notices a GPU that falls behind even on phones that don't report GPU times.",
+                    "Fewer full-screen GPU passes in effects that copy the picture (ultimates, cutscenes, smoke).",
+                    "Thermal Control could hold the game at 30 fps until the app was closed. The battery temperature no longer turns on the 30 fps drawing.",
+                    "The game could close with \"invalid tex offset\" on some Mali phones.",
+                    "Generic gamepads: the right stick and the D-pad work (D-pad from the hat, right stick from the Z/RZ axes).",
+                    "Some generic USB gamepads (for example \"810 Twin USB Gamepad\") were seen as a keyboard, so their Gamepad Buttons map did nothing. They now work as a gamepad.",
+                    "The log records the fps every 10 seconds again, so reports show where the game slowed down.",
+                    "Custom textures showed only after leaving and entering a screen again (Conquest character select). They now appear as soon as the file is loaded.",
+                    "PowerVR B-Series (BXM) with Graphics Compatibility Off drew a black game picture behind the on-screen buttons.",
+                    "Settings and texture mods had no effect when the game's Config.toml had been copied in from a PC or a file manager.",
+                    "PowerVR B-Series phones with an older Vulkan driver (for example ADVAN S50) drew a black game picture even with Graphics Compatibility On.",
+                    "The game could close in battle with \"unknown texture format\" on some Mali phones: the graphics data is now read with the right size.",
+                    "Crackling sound on phones whose audio takes large chunks at once (for example Helio G85 with Recording-Friendly Audio).",
+                    "The game could close right after an update with \"No DVD root is configured\".",
+                },
+                new String[] {
+                    "Staging build: please send Share Log after playing a menu, a cutscene and an ultimate.",
+                }),
+        new Entry("1.2","Straight into the game, settings while playing", "2026-11-07",
                 new String[] {
                     "No launcher: the app opens straight into the game. Your ISO or RVZ is chosen once, the first time; after that the icon goes right to the battlefield.",
                     "Every setting is in the game's menu (Back, or the gear): Display, Graphics, Textures, Performance, Controls, Save Data, Cheats and System.",

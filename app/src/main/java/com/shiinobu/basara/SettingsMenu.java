@@ -102,7 +102,11 @@ final class SettingsMenu {
                 if (systemRows != null) systemRows.fill(this);
                 break;
         }
+        if (pendingChanged != null) pendingChanged.run();
     }
+
+    /** Runs after each draw: the in-game footer shows the restart-only settings that wait (pendingRestarts). */
+    Runnable pendingChanged;
 
     /**
      * A setting read once when the game starts: the card already says so in red. It is saved now and
@@ -120,6 +124,8 @@ final class SettingsMenu {
                 new String[] {Tr.t("Auto"), "English", "Bahasa Indonesia"}, settings.language(), true, which -> {
                     settings.setLanguage(which);
                     Tr.init(activity);
+                    START_VALUES.clear();  // keyed by the translated names
+                    PENDING.clear();
                     changed();  // drawn again in the new language
                     if (languageChanged != null) languageChanged.run();  // the tabs, title and buttons too
                 });
@@ -398,7 +404,7 @@ final class SettingsMenu {
         final java.util.Map<String, Integer> overridden = TexturePacks.overridden(packs);
         showTextureStatus(packs, overridden, enabled, folder);
 
-        group(Tr.t("Mods") + (inGame ? " *" : ""));
+        group(Tr.t("Mods") + (inGame ? "  ⟳ Restart" : ""));
         if (packs.isEmpty()) {
             note(Tr.t("No mods yet. Put each mod in its own folder in ") + folder + Tr.t(" (how: README.txt there)."),
                     Ui.SECONDARY);
@@ -1031,7 +1037,7 @@ final class SettingsMenu {
     interface Toggle { void set(boolean on); }
     interface Choice { void pick(int which); }
 
-    /** The next row is only read at start: its name gets a "*" (the footer says what it means). */
+    /** The next row is only read at start: its name gets a "⟳ Restart" tag (restartName). */
     private boolean pendingRestart;
 
     /** Marks the next row as applying at the next start (`text` is not shown any more). */
@@ -1047,15 +1053,60 @@ final class SettingsMenu {
         rows.addView(Ui.line(activity));
     }
 
+    /**
+     * The row's name. A setting read only at start (in the game) carries a "⟳ Restart" tag; once it
+     * differs from the value the game started with, the row turns amber and the footer counts it
+     * (pendingRestarts) until it is set back or the game restarts.
+     */
+    private View restartName(String title, boolean restartOnly, LinearLayout row) {
+        final TextView name = Ui.text(activity, title.toUpperCase(java.util.Locale.ROOT), 13, Ui.TEXT);
+        if (!restartOnly) return name;
+        final LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout line = new LinearLayout(activity);
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        line.addView(name);
+        final TextView tag = Ui.text(activity, "⟳ Restart", 10, Ui.PENDING);
+        tag.setBackground(Ui.box(activity, 0, Ui.PENDING, 3));
+        tag.setPadding(dp(4), 0, dp(4), 0);
+        final LinearLayout.LayoutParams tagParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        tagParams.leftMargin = dp(6);
+        line.addView(tag, tagParams);
+        box.addView(line);
+        if (rowValue != null) {
+            final String before = START_VALUES.computeIfAbsent(title, k -> rowValue);
+            if (!before.equals(rowValue)) {
+                PENDING.put(title, before + " → " + rowValue);
+                row.setBackgroundColor(Ui.PENDING_BG);
+            } else {
+                PENDING.remove(title);
+            }
+        }
+        return box;
+    }
+
+    /** Values of the restart-only rows when this game started (the process lives as long as the game). */
+    private static final java.util.Map<String, String> START_VALUES = new java.util.HashMap<>();
+    private static final java.util.Map<String, String> PENDING = new java.util.LinkedHashMap<>();
+
+    /** Restart-only settings changed since the game started: name → "before → now". */
+    static java.util.Map<String, String> pendingRestarts() {
+        return java.util.Collections.unmodifiableMap(PENDING);
+    }
+
+    /** The value the next card shows, for the restart tracking (null: not tracked). */
+    private String rowValue;
+
     /** A row: the name, and `control` on the right (or under it, full width, when `underneath`). */
     LinearLayout card(String title, String about, View control, boolean underneath, boolean enabled) {
         final LinearLayout row = new LinearLayout(activity);
         row.setOrientation(underneath ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         row.setGravity(underneath ? Gravity.START : Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(3), 0, dp(3));
-        final TextView name = Ui.text(activity, title.toUpperCase(java.util.Locale.ROOT)
-                + (pendingRestart && inGame ? " *" : ""), 13, Ui.TEXT);
+        final View name = restartName(title, pendingRestart && inGame, row);
         pendingRestart = false;
+        rowValue = null;
         if (underneath) {
             row.addView(name, Ui.matchWidth(0));
             if (control != null) row.addView(control, Ui.matchWidth(dp(4)));
@@ -1088,6 +1139,7 @@ final class SettingsMenu {
 
     private void toggleRow(String title, String about, boolean on, boolean enabled, Toggle toggle, boolean redraw) {
         on = on && enabled;
+        rowValue = on ? Tr.t("On") : Tr.t("Off");
         final LinearLayout row = card(title, about, Ui.toggle(activity, on), false, enabled);
         if (!enabled) return;
         final boolean was = on;
@@ -1129,6 +1181,7 @@ final class SettingsMenu {
             params.leftMargin = dp(2);
             control.addView(arrow, params);
         }
+        rowValue = options[Math.max(0, Math.min(selected, options.length - 1))];
         card(title, about, control, false, enabled);
     }
 
@@ -1150,6 +1203,7 @@ final class SettingsMenu {
                 SettingsMenu.this.changed();
             }
         });
+        rowValue = options[selected];
         card(title, null, slider, false, enabled);
     }
 
@@ -1164,6 +1218,11 @@ final class SettingsMenu {
                 changed();
             }));
         }
+        final StringBuilder value = new StringBuilder();
+        for (int i = 0; i < options.length; ++i) {
+            if (lit[i]) value.append(value.length() > 0 ? ", " : "").append(options[i]);
+        }
+        rowValue = value.length() > 0 ? value.toString() : Tr.t("Off");
         card(title, about, chips, true, enabled);
     }
 

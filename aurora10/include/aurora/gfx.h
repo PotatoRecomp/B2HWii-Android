@@ -63,6 +63,8 @@ typedef struct {
   // on Dawn or with AURORA_VK_GPU_TIMING=0).
   uint64_t gpuNanos;
   uint64_t gpuFrames;
+  // Rendered frames the presenter threw away because Present() fell behind (any backend).
+  uint64_t droppedPresents;
 } AuroraFrameWorkerTotals;
 void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals);
 // One line: live host textures and the size of each texture cache.

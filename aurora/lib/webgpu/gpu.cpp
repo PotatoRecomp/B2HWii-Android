@@ -146,6 +146,19 @@ static std::atomic<wgpu::DeviceLostReason> g_deviceLostReason{wgpu::DeviceLostRe
 // The reason enum is almost always `Unknown`, while Dawn's message carries the real cause, so
 // keep a truncated copy. Written with a plain memcpy, published by the g_deviceLost store.
 static std::array<char, 256> g_deviceLostMessage{};
+
+// AURORA_GPU_LOST_FILE (set by the Android launcher): written when the GPU stops responding, so the
+// next start can lower the Render Resolution (GpuDrivers.checkGpuLost).
+static void note_gpu_lost(std::string_view what) {
+  const char* path = std::getenv("AURORA_GPU_LOST_FILE");
+  if (path == nullptr || *path == '\0') {
+    return;
+  }
+  if (FILE* f = std::fopen(path, "w")) {
+    std::fprintf(f, "%.*s\n", static_cast<int>(std::min<size_t>(what.size(), 200)), what.data());
+    std::fclose(f);
+  }
+}
 // Errors raised before initialize() completes must not be fatal: the backend fallback loop retries
 // the next backend, and a broken ICD can raise uncaptured errors mid-probe.
 static std::atomic_bool g_initialized{false};
@@ -284,12 +297,32 @@ static void choose_gpu_compat() {
   // PowerVR Rogue on Vulkan gets it by default: an OPPO CPH2209 (GM9446, Vulkan 1.1.131, Android 12,
   // 2026-11-08) drew a black game picture with vertex pulling (the ImGui overlay, which uses vertex
   // inputs, still showed) and the whole picture with AURORA_VERTEX_LOADER=1. B-Series (BXM) is fine
-  // with vertex pulling and keeps it.
+  // with vertex pulling and keeps it, but only with the safe vertex fetch.
+  const bool powervr = contains_ignore_case(text(g_adapterInfo.device), "powervr") ||
+                       contains_ignore_case(text(g_adapterInfo.vendor), "imagination") ||
+                       g_adapterInfo.vendorID == 0x1010;
   const bool powervrRogue = contains_ignore_case(text(g_adapterInfo.device), "rogue") &&
                             g_backendType == wgpu::BackendType::Vulkan;
+  // Every PowerVR on OpenGL ES too: vertex inputs are the path its GL driver is built for, the same
+  // Rogue shader compiler broke storage-buffer reads in the vertex stage on Vulkan, and the GM9446's
+  // OpenGL ES picture came out broken with vertex pulling (OPPO CPH2209, 1.1).
+  const bool powervrGles = powervr && (g_backendType == wgpu::BackendType::OpenGLES ||
+                                       g_backendType == wgpu::BackendType::OpenGL);
+  // PowerVR with the safe vertex fetch turned off: an ADVAN S50 (BXM-8-256, Vulkan 1.1.170, Android 15,
+  // 1.2) drew a black game picture under the on-screen controls with GPU Compatibility Off, while a
+  // Xiaomi with the same GPU (Auto, safe fetch on) drew it fine. Vertex inputs avoid the fetch.
+  const bool powervrUnsafeFetch = powervr && !g_safeVertexFetch;
+  // PowerVR on an old Vulkan driver (API below 1.3, aurora's tier 0): the same ADVAN S50 stayed black
+  // with GPU Compatibility On (safe fetch, 1.2.1-hotfix-staging1, 2026-11-09), as the Rogue GM9446 on
+  // Vulkan 1.1.131 did. The Xiaomi BXM that draws fine runs a Vulkan 1.3 driver. aurora's Vulkan
+  // backend puts the API version first in the description ("1.1.170 (native Vulkan)").
+  const std::string driverText(text(g_adapterInfo.description));
+  const bool powervrOldVulkan = powervr && g_backendType == wgpu::BackendType::Vulkan &&
+                                (driverText.rfind("1.0.", 0) == 0 || driverText.rfind("1.1.", 0) == 0 ||
+                                 driverText.rfind("1.2.", 0) == 0);
   {
     const char* env = std::getenv("AURORA_VERTEX_LOADER");
-    bool want = gfx_flag("vtxload") || powervrRogue;
+    bool want = gfx_flag("vtxload") || powervrRogue || powervrGles || powervrUnsafeFetch || powervrOldVulkan;
     if (env != nullptr && env[0] != '\0') want = env[0] == '1';
     g_vertexLoader = !g_indexPulling && !gfx_flag("novtxload") && want;
   }
@@ -298,9 +331,6 @@ static void choose_gpu_compat() {
   // multiple of 32 (PPSSPP #11743/#15773, ARMSX2 vk-powervr-old-swapchain-width); seen as a black
   // screen with sound on a GE8320 (driver 1.11@5425693) with a 1092-wide surface. Losing up to 31
   // columns at the edge costs nothing elsewhere, so every PowerVR gets it.
-  const bool powervr = contains_ignore_case(text(g_adapterInfo.device), "powervr") ||
-                       contains_ignore_case(text(g_adapterInfo.vendor), "imagination") ||
-                       g_adapterInfo.vendorID == 0x1010;
   g_alignSwapchainWidth32 = !gfx_flag("nopvralign") && (powervr || gfx_flag("pvralign"));
   if (g_alignSwapchainWidth32) {
     Log.info("Swapchain width rounded down to a multiple of 32 (PowerVR)");
@@ -1148,6 +1178,12 @@ static bool initialize_once(AuroraBackend auroraBackend) {
                                              g_deviceLostMessage[copied] = '\0';
                                              g_deviceLostReason.store(reason, std::memory_order_relaxed);
                                              g_deviceLost.store(true, std::memory_order_release);
+                                             // A GPU hang while playing (not a failed start, which
+                                             // falls back to the next backend): leave the launcher a
+                                             // note, as the Vulkan backend does (vk_webgpu.cpp Fatal).
+                                             if (reason == wgpu::DeviceLostReason::Unknown) {
+                                               note_gpu_lost(text);
+                                             }
                                            });
     const auto future =
         g_adapter.RequestDevice(&deviceDescriptor, wgpu::CallbackMode::WaitAnyOnly,

@@ -203,6 +203,62 @@ final class SaveData {
         }
     }
 
+    // --- the automatic copy: Android deletes Android/data with the app, the save with it -----------
+
+    private static final String AUTO_COPY = "latest.zip";
+
+    /** Basara2Heroes/Saves/Auto/latest.zip, outside the app's storage; null without "All files access". */
+    static File autoCopy() {
+        final File saves = AppFiles.homeSub("Saves");
+        return saves == null ? null : new File(new File(saves, "Auto"), AUTO_COPY);
+    }
+
+    /**
+     * Copies the save out when it changed since the last copy (two file checks when it did not), so an
+     * uninstall or "Clear data" does not take it. Called when the game starts and when it leaves the screen.
+     */
+    static void autoBackup(Context context) {
+        try {
+            final File copy = autoCopy();
+            if (copy == null) return;
+            final File dir = saveDir(context);
+            final File save = new File(dir, SAVE);
+            if (!save.isFile() || save.length() != SAVE_SIZE) return;
+            if (copy.isFile() && copy.lastModified() >= save.lastModified()) return;
+            final File parent = copy.getParentFile();
+            if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) return;
+            final File tmp = new File(parent, AUTO_COPY + ".tmp");
+            try (OutputStream out = new FileOutputStream(tmp)) {
+                zipSave(dir, out);
+            }
+            if (!tmp.renameTo(copy)) {
+                //noinspection ResultOfMethodCallIgnored
+                copy.delete();
+                if (!tmp.renameTo(copy)) throw new IOException("cannot replace " + copy);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "automatic save copy failed", e);
+        }
+    }
+
+    /**
+     * After a new install or "Clear data" (no save in the app's storage), the automatic copy comes back
+     * before the game starts. Returns true when it did.
+     */
+    static boolean autoRestore(Context context) {
+        try {
+            if (hasSave(context)) return false;
+            final File copy = autoCopy();
+            if (copy == null || !copy.isFile()) return false;
+            importFrom(context, Uri.fromFile(copy));
+            Log.i(TAG, "save restored from " + copy);
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "automatic save restore failed", e);
+            return false;
+        }
+    }
+
     /** basara2w.dat (and banner.bin when there) as a .zip at their own names. */
     private static void zipSave(File dir, OutputStream out) throws IOException {
         try (ZipOutputStream zip = new ZipOutputStream(out)) {

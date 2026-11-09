@@ -71,6 +71,31 @@ final class GpuDrivers {
     /** Left by a start with a Renderer other than Auto, removed after 20 s of running (rendererStarted). */
     private static File rendererMarker(Context context) { return new File(context.getFilesDir(), "renderer_trying"); }
 
+    /** Left by the Vulkan renderer when the GPU stopped responding (VK_ERROR_DEVICE_LOST). */
+    static File gpuLostFile(Context context) { return new File(context.getFilesDir(), "gpu_lost"); }
+
+    /**
+     * The last game closed because the GPU stopped responding (a hang under too much work a frame):
+     * Render Resolution one step lower, so the next start does not hang the same way. Null if not.
+     */
+    static String checkGpuLost(Context context, AppSettings settings) {
+        final File lost = gpuLostFile(context);
+        if (!lost.isFile()) return null;
+        lost.delete();
+        final float[] scales = AppSettings.RESOLUTION_SCALES;
+        final float scale = settings.resolutionScale();
+        float lower = scale;
+        for (float s : scales) {
+            if (s >= 0.5f && s < scale - 0.01f) lower = s;  // the largest step below, never Auto (0)
+        }
+        if (lower >= scale - 0.01f) {
+            return Tr.t("The GPU stopped responding and the game closed. A lower Render Resolution or Renderer may help.");
+        }
+        settings.setResolutionScale(lower);
+        return Tr.t("The GPU stopped responding and the game closed. Render Resolution lowered to ")
+                + (lower == (int) lower ? String.valueOf((int) lower) : String.valueOf(lower)) + "x.";
+    }
+
     /** Phones the loader works on: arm64 with Android 9+ (this app needs 11 anyway). */
     static boolean supported() {
         for (String abi : Build.SUPPORTED_64_BIT_ABIS) {

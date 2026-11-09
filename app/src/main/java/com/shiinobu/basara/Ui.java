@@ -51,6 +51,8 @@ final class Ui {
     static final int ACCENT_SUBTLE = BUTTON_ON;
     static final int WARNING = 0xFFFF6B6B;  // red, as the warning frames (Sheet.WARNING_TEXT)
     static final int SUCCESS = 0xFF6CC070;
+    static final int PENDING = 0xFFF5B942;     // amber: a setting that waits for Restart
+    static final int PENDING_BG = 0x24F5B942;
     static final int DANGER_TEXT = 0xFFFF8080;
     static final int DANGER_FILL = BUTTON;
     static final int DANGER_BORDER = BORDER;

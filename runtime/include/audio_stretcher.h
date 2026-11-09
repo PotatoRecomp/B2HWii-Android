@@ -50,6 +50,7 @@ private:
     int64_t m_pushedFrames = 0;  // since the last segment
     bool m_draining = false;     // a backlog left over from a load being played off at tempo > 1
     float m_burstPeak = 0.0f;    // largest input between two segments lately, frames
+    float m_pullPeak = 0.0f;     // largest output request lately (device burst), frames
 
     std::vector<int16_t> m_out;
     size_t m_outPos = 0;

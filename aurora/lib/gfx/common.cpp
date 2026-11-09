@@ -146,7 +146,22 @@ struct StreamInFlightBatch {
   uint64_t gpuSerial = UINT64_MAX;
   StagingSizes begin{};
   StagingSizes end{};
+  bool frameEnd = false;  // the batch that ended a frame (end_frame), not a mid-frame split
 };
+// Submitted frames the GPU may still be working on when a new one begins. The ring only waits when
+// its byte window overlaps older data, and a light frame uses a small part of the window, so dozens
+// of frames could queue on a GPU-bound phone: 1.2 showed 250-470 ms presents, the presenter dropping
+// 8-48 frames the GPU had already drawn, and 2-5 fps on screen (Mali-G52, Adreno 610/618). Dawn's
+// three staging slots (1.1) and ARMSX2's three command buffers bound it by count; this does too.
+// AURORA_VK_MAX_FRAMES=n (1-8) overrides it for tests.
+static size_t max_frames_in_flight() {
+  static const size_t value = [] {
+    const char* env = std::getenv("AURORA_VK_MAX_FRAMES");
+    const int n = env != nullptr ? std::atoi(env) : 0;
+    return n >= 1 && n <= 8 ? static_cast<size_t>(n) : size_t{2};
+  }();
+  return value;
+}
 static bool g_useStreamRing = false;
 static std::array<uint8_t*, 4> g_streamMapped{};
 static StagingSizes g_streamBase{};
@@ -1220,6 +1235,18 @@ static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
         }
         g_streamBase[i] = winBegin;
       }
+      // Count bound: at most max_frames_in_flight() submitted frames left running while this one
+      // records, so wait for the one before them.
+      size_t frames = 0;
+      for (auto it = g_streamInFlight.rbegin(); it != g_streamInFlight.rend(); ++it) {
+        if (!it->frameEnd || it->gpuSerial == UINT64_MAX) {
+          continue;
+        }
+        if (++frames > max_frames_in_flight()) {
+          waitSerial = std::max(waitSerial, it->gpuSerial);
+          break;
+        }
+      }
     }
     if (waitSerial != 0) {
       ZoneScopedN("Wait for stream ring serial");
@@ -1462,6 +1489,7 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
           .gpuSerial = UINT64_MAX,
           .begin = g_streamBase,
           .end = g_streamHead,
+          .frameEnd = advanceFrame,
       });
     }
   } else {
@@ -1691,9 +1719,23 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
         .depthStencilAttachment = &depthStencilAttachment,
     };
 
-    auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
-    render_pass_impl(pass, renderPasses, i, interpolatedFrame, debugFrame);
-    pass.End();
+    // A pass that only carries an EFB copy (no clear, no commands) changes nothing in its target:
+    // the pass before it stored the picture. Opening it anyway loads and stores the whole EFB on a
+    // tile-based GPU just to close it again, once per back-to-back copy (ultimates and cutscenes copy
+    // 20-30 times a frame). The copy reads the stored texture directly. Single-sample only (an MSAA
+    // pass resolves on End). AURORA_EFB_COPY_PASS=1 opens them as before.
+    static const bool skipCopyOnlyPasses = [] {
+      const char* v = std::getenv("AURORA_EFB_COPY_PASS");
+      return v == nullptr || v[0] != '1';
+    }();
+    const bool copyOnly = skipCopyOnlyPasses && !hasRenderWork && passInfo.resolveTarget &&
+                          i != renderPasses.size() - 1 && passInfo.msaaSamples <= 1 &&
+                          !passInfo.snapshotColorResolveSource;
+    if (!copyOnly) {
+      auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+      render_pass_impl(pass, renderPasses, i, interpolatedFrame, debugFrame);
+      pass.End();
+    }
 
     if (finalize && i == renderPasses.size() - 1) {
       depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView, passInfo.targetSize, passInfo.msaaSamples, depthMapping);

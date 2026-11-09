@@ -1,9 +1,12 @@
 package com.shiinobu.basara;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -326,11 +329,102 @@ final class AppFiles {
         return new File(dir, "sys/main.dol").isFile() && new File(dir, "files").isDirectory();
     }
 
-    static boolean hasGameData(Context context) { return isGameRoot(gameDir(context)); }
+    /** A game to play: unpacked into gameDir, or a game file read in place (gameSource). */
+    static boolean hasGameData(Context context) { return gameSource(context) != null || isGameRoot(gameDir(context)); }
 
     /** Imported, and the one game and revision this port runs. */
     static boolean gameReady(Context context) {
-        return hasGameData(context) && gameProblem(gameDir(context)) == null;
+        return hasGameData(context) && gameProblem(context) == null;
+    }
+
+    // --- Read mode: the player's ISO or RVZ, played where it is ---------------------------------
+
+    private static SharedPreferences sourcePrefs(Context context) {
+        return context.getSharedPreferences("game_source", Context.MODE_PRIVATE);
+    }
+
+    /**
+     * Read mode's game file (a file:// URI from the app's browser, or the system picker's content://
+     * URI with a kept grant), or null when the game is unpacked. GameActivity opens it for the game.
+     */
+    static Uri gameSource(Context context) {
+        final String uri = sourcePrefs(context).getString("uri", null);
+        return uri != null ? Uri.parse(uri) : null;
+    }
+
+    /** Read mode from now on, with the file's archive sizes (DISC_ARCHIVES' order) for discDifferences. */
+    static void setGameSource(Context context, Uri uri, long[] archiveSizes) {
+        final StringBuilder sizes = new StringBuilder();
+        for (long size : archiveSizes) sizes.append(size).append('/');
+        sourcePrefs(context).edit().putString("uri", uri.toString()).putString("sizes", sizes.toString()).commit();
+        checkedSource = null;
+    }
+
+    /** Back to the unpacked game: the old file's grant is given back. */
+    static void clearGameSource(Context context) {
+        final Uri old = gameSource(context);
+        sourcePrefs(context).edit().clear().commit();
+        checkedSource = null;
+        if (old != null && "content".equals(old.getScheme())) {
+            try {
+                context.getContentResolver().releasePersistableUriPermission(old,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    /** The game file checked last and what was wrong with it: opening it again on every refresh costs. */
+    private static String checkedSource;
+    private static String checkedProblem;
+
+    /** Why the game can't be played, or null when it can: the unpacked game, or Read mode's file. */
+    static String gameProblem(Context context) {
+        final Uri source = gameSource(context);
+        if (source == null) return gameProblem(gameDir(context));
+        if (source.toString().equals(checkedSource)) return checkedProblem;
+        String problem;
+        try (ParcelFileDescriptor file = context.getContentResolver().openFileDescriptor(source, "r")) {
+            problem = file == null ? Tr.t("Couldn't open that file.") : headerProblem(DiscImport.readHeader(file.getFd()));
+        } catch (Exception e) {
+            problem = Tr.t("The game file can't be opened: it was moved, renamed or deleted. Choose it again.");
+        }
+        checkedSource = source.toString();
+        checkedProblem = problem;
+        return problem;
+    }
+
+    /** The archive sizes of Read mode's file as saved when it was chosen, or null when the game is unpacked. */
+    private static long[] sourceArchiveSizes(Context context) {
+        if (gameSource(context) == null) return null;
+        final String[] parts = sourcePrefs(context).getString("sizes", "").split("/");
+        final long[] sizes = new long[DISC_ARCHIVES.length];
+        for (int i = 0; i < sizes.length; ++i) {
+            try {
+                sizes[i] = Long.parseLong(parts[i]);
+            } catch (RuntimeException e) {
+                sizes[i] = -1;
+            }
+        }
+        return sizes;
+    }
+
+    /** DISC_ARCHIVES' paths in the image, for DiscImport.fileSizes. */
+    static String[] archivePaths() {
+        final String[] paths = new String[DISC_ARCHIVES.length];
+        for (int i = 0; i < paths.length; ++i) paths[i] = "files/" + DISC_ARCHIVES[i];
+        return paths;
+    }
+
+    private static long[] archiveSizes(Context context) {
+        final long[] fromSource = sourceArchiveSizes(context);
+        if (fromSource != null) return fromSource;
+        final long[] sizes = new long[DISC_ARCHIVES.length];
+        for (int i = 0; i < sizes.length; ++i) {
+            final File file = new File(gameDir(context), "files/" + DISC_ARCHIVES[i]);
+            sizes[i] = file.isFile() ? file.length() : -1;
+        }
+        return sizes;
     }
 
     /** The game's archives and their sizes on the original RBSJ08 disc. */
@@ -338,14 +432,14 @@ final class AppFiles {
     private static final long[] DISC_ARCHIVE_SIZES = {944601088L, 1454065664L, 1879459840L};
 
     /**
-     * How the archives at `root` differ from the original disc's, one line each, or null when they
+     * How the game's archives differ from the original disc's, one line each, or null when they
      * match. A changed disc (a patch, a bad conversion) can still be played; this is only a warning.
      */
-    static String discDifferences(File root) {
+    static String discDifferences(Context context) {
+        final long[] sizes = archiveSizes(context);
         final StringBuilder out = new StringBuilder();
         for (int i = 0; i < DISC_ARCHIVES.length; ++i) {
-            final File file = new File(root, "files/" + DISC_ARCHIVES[i]);
-            final long size = file.isFile() ? file.length() : -1;
+            final long size = sizes[i];
             if (size == DISC_ARCHIVE_SIZES[i]) continue;
             if (out.length() > 0) out.append('\n');
             out.append(DISC_ARCHIVES[i]).append(": ")
@@ -355,10 +449,10 @@ final class AppFiles {
         return out.length() > 0 ? out.toString() : null;
     }
 
-    /** A key for the archive sizes at `root`, so a warning seen once is not shown again for them. */
-    static String discSignature(File root) {
+    /** A key for the archive sizes, so a warning seen once is not shown again for them. */
+    static String discSignature(Context context) {
         final StringBuilder out = new StringBuilder();
-        for (String name : DISC_ARCHIVES) out.append(new File(root, "files/" + name).length()).append('/');
+        for (long size : archiveSizes(context)) out.append(Math.max(size, 0)).append('/');
         return out.toString();
     }
 
@@ -472,7 +566,25 @@ final class AppFiles {
                 + "\n[discord]\nenabled = false\n"
                 + "\n[paths]\n"
                 + "dvd_root = '" + game + "'\n";
-        writeText(config, text + keptSections(config));
+        writeReplacing(config, text + keptSections(config));
+    }
+
+    /**
+     * Writes `file` through a temporary file renamed over it. A Config.toml copied in from a PC or a
+     * file manager can belong to another owner: the app reads it but cannot open it for writing (itel
+     * P661N, 2026-11-09: no setting reached the game, texture mods stayed off). Replacing the entry
+     * only needs the folder, which is the app's own; if the rename is refused, the old file goes first.
+     */
+    static void writeReplacing(File file, String text) throws IOException {
+        final File temp = new File(file.getParentFile(), file.getName() + ".tmp");
+        writeText(temp, text);
+        if (temp.renameTo(file)) return;
+        //noinspection ResultOfMethodCallIgnored
+        file.delete();
+        if (temp.renameTo(file)) return;
+        //noinspection ResultOfMethodCallIgnored
+        temp.delete();
+        writeText(file, text);  // throws with the system's reason
     }
 
     /** Tables of the old Config.toml the app doesn't write (the game's own: keyboard keybinds...). */

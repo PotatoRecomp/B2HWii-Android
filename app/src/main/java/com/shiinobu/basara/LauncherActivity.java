@@ -291,13 +291,13 @@ public final class LauncherActivity extends Activity {
     private void refresh() {
         if (status == null) return;
         final boolean present = AppFiles.hasGameData(this);
-        final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
+        final String problem = present ? AppFiles.gameProblem(this) : null;
         final boolean ready = present && problem == null;
         if (importing) {
             showState(Tr.t("Loading your game…"));
         } else if (!present) {
-            showState(Tr.t("Choose your own ISO or RVZ of the game (Japan, RBSJ08). It is unpacked once, "
-                    + "about 4 GB; afterwards the app goes straight into the game."));
+            showState(Tr.t("Choose your own ISO or RVZ of the game (Japan, RBSJ08). Unpack it once (about 4 GB), "
+                    + "or play it straight from the file; afterwards the app goes straight into the game."));
         } else if (problem != null) {
             showState(Tr.t("The game can't be played. ") + problem);
         } else if (updating) {
@@ -335,6 +335,8 @@ public final class LauncherActivity extends Activity {
         if (gameProcess() == 0) {
             final String driver = GpuDrivers.checkLastStart(this, new AppSettings(this));
             if (driver != null) Toast.makeText(this, driver, Toast.LENGTH_LONG).show();
+            final String lost = GpuDrivers.checkGpuLost(this, new AppSettings(this));
+            if (lost != null) Toast.makeText(this, lost, Toast.LENGTH_LONG).show();
         }
         // Back from "Allow from this source": carry on with the update that was waiting for it.
         if (waitingUpdate != null && Updater.canInstall(this)) {
@@ -417,11 +419,10 @@ public final class LauncherActivity extends Activity {
      * with Play Anyway running `play`. True when the warning is showing (so the caller waits for it).
      */
     private boolean warnChangedDisc(Runnable play) {
-        final File game = AppFiles.gameDir(this);
-        final String differences = AppFiles.discDifferences(game);
+        final String differences = AppFiles.discDifferences(this);
         if (differences == null) return false;
         final SharedPreferences prefs = getSharedPreferences("disc_check", MODE_PRIVATE);
-        final String signature = AppFiles.discSignature(game);
+        final String signature = AppFiles.discSignature(this);
         if (signature.equals(prefs.getString("warned", null))) return false;
         prefs.edit().putString("warned", signature).apply();
         new Sheet(this, Tr.t("This isn't the original disc"),
@@ -857,7 +858,7 @@ public final class LauncherActivity extends Activity {
 
     private void browseDisc() {
         // Download, where a downloaded dump lands.
-        FileBrowser.show(this, FileBrowser.downloads(), file -> loadGame(Uri.fromFile(file)));
+        FileBrowser.show(this, FileBrowser.downloads(), file -> chooseHow(Uri.fromFile(file)));
     }
 
     /**
@@ -878,8 +879,86 @@ public final class LauncherActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_DISC && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            loadGame(data.getData());
+            chooseHow(data.getData());
         }
+    }
+
+    /**
+     * Extract (the game unpacked once, about 4 GB: the fastest loading) or Read (straight from the ISO
+     * or RVZ, which stays where it is: no space needed, for phones without 4 GB to spare).
+     */
+    private void chooseHow(Uri disc) {
+        final boolean unpacked = AppFiles.isGameRoot(AppFiles.gameDir(this));
+        new Sheet(this, Tr.t("How to load the game"), Tr.t("Both play the same game, and your saves stay."))
+                .action(Tr.t("Extract"), Tr.t("Unpacks the game once, about 4 GB. The fastest loading."), true, false,
+                        () -> loadGame(disc))
+                .action(Tr.t("Read from File"), unpacked
+                                ? Tr.t("Plays straight from the ISO or RVZ, which must stay where it is. Needs no space; "
+                                        + "the unpacked copy (4 GB) is deleted.")
+                                : Tr.t("Plays straight from the ISO or RVZ, which must stay where it is. Needs no space."),
+                        false, false, () -> readInPlace(disc))
+                .action(Tr.t("Cancel"), null, false, false, this::refresh)
+                .onCancel(this::refresh)
+                .show();
+    }
+
+    /** Read mode: the file is checked and kept (its grant too), and the unpacked copy goes. */
+    private void readInPlace(Uri disc) {
+        endGame();  // a game still running from the old file must not carry on with the new one
+        final ProgressBar bar = progressBar();
+        bar.setIndeterminate(true);
+        final Sheet dialog = new Sheet(this, Tr.t("Loading your game"), Tr.t("Looking at the game file…"))
+                .view(progressBox(bar, text("", 14)))
+                .cancelable(false);
+        dialog.show();
+        importing = true;
+        refresh();
+        new Thread(() -> {
+            String result;
+            try {
+                result = useInPlace(disc);
+            } catch (Exception e) {
+                result = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final String failure = result;
+            main.post(() -> {
+                importing = false;
+                dialog.dismiss();
+                refresh();
+                if (failure != null) {
+                    message(Tr.t("Couldn't load the game"), failure + Tr.t("\n\nNothing was changed."), null);
+                } else {
+                    warned = false;
+                    launched = false;
+                    next();
+                }
+            });
+        }, "game-read").start();
+    }
+
+    /** Null, or what went wrong. */
+    private String useInPlace(Uri disc) throws IOException {
+        final long[] sizes;
+        try (ParcelFileDescriptor file = getContentResolver().openFileDescriptor(disc, "r")) {
+            if (file == null) throw new IOException(Tr.t("Couldn't open that file."));
+            final String problem = AppFiles.headerProblem(DiscImport.readHeader(file.getFd()));
+            if (problem != null) return problem;
+            sizes = DiscImport.fileSizes(file.getFd(), AppFiles.archivePaths());
+        }
+        if ("content".equals(disc.getScheme())) {
+            try {
+                // The system picker's grant, kept across restarts: the game opens the file every start.
+                getContentResolver().takePersistableUriPermission(disc, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException e) {
+                return Tr.t("This file's location can't be kept for later. Move it to the phone's storage "
+                        + "(Download), or choose Extract.");
+            }
+        }
+        final Uri old = AppFiles.gameSource(this);
+        if (old != null && !old.equals(disc)) AppFiles.clearGameSource(this);
+        AppFiles.setGameSource(this, disc, sizes);
+        AppFiles.deleteRecursively(AppFiles.gameDir(this));
+        return null;
     }
 
     private void loadGame(Uri disc) {
@@ -965,6 +1044,7 @@ public final class LauncherActivity extends Activity {
         final File game = AppFiles.gameDir(this);
         AppFiles.deleteRecursively(game);
         if (!root.renameTo(game)) throw new IOException(Tr.t("Couldn't move the game into place."));
+        AppFiles.clearGameSource(this);  // unpacked: Read mode's file is no longer needed
         return null;
     }
 

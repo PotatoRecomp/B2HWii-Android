@@ -2,7 +2,7 @@ package com.shiinobu.basara;
 
 import java.io.IOException;
 
-/** Unpacks the player's ISO or RVZ into the game folder (libbasara_disc.so, runtime/disc). */
+/** Unpacks the player's ISO or RVZ into the game folder, or looks into it (libbasara_disc.so, runtime/disc). */
 final class DiscImport {
     static {
         System.loadLibrary("basara_disc");
@@ -23,4 +23,7 @@ final class DiscImport {
 
     /** Null when the game is in `outDir`, CANCELLED, or why it failed. */
     static native String extract(int fd, String outDir, long freeBytes, Listener listener);
+
+    /** The sizes of the game's files at `paths` ("files/linkData.afs"), -1 for one it lacks; thrown as readHeader. */
+    static native long[] fileSizes(int fd, String[] paths) throws IOException;
 }

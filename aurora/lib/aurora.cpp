@@ -287,6 +287,7 @@ FrameWorkerState g_frameWorker;
 std::atomic<uint64_t> g_workerCycles{0};
 std::atomic<uint64_t> g_workerBusyNanos{0};
 std::atomic<uint64_t> g_workerPrepareNanos{0};
+std::atomic<uint64_t> g_droppedPresents{0};
 std::atomic<uint64_t> g_producerWaitNanos{0};
 
 bool frame_worker_requested() noexcept {
@@ -1294,6 +1295,7 @@ void enqueue_presentations(std::vector<PresentationJob>&& jobs) {
     const size_t dropped = g_presenter.jobs.size();
     g_presenter.jobs.clear();
     if (dropped != 0) {
+      g_droppedPresents.fetch_add(dropped, std::memory_order_relaxed);
       // A stuck Present can keep replacement mode active for a while.  Aggregate
       // the warning instead of turning a driver stall into a log flood.
       static size_t droppedSinceWarning = 0;
@@ -2237,6 +2239,7 @@ void aurora_get_frame_worker_totals(AuroraFrameWorkerTotals* totals) {
   totals->producerWaitNanos = aurora::g_producerWaitNanos.load(std::memory_order_relaxed);
   totals->gpuNanos = aurora::g_gpuNanos.load(std::memory_order_relaxed);
   totals->gpuFrames = aurora::g_gpuFrames.load(std::memory_order_relaxed);
+  totals->droppedPresents = aurora::g_droppedPresents.load(std::memory_order_relaxed);
 }
 bool aurora_wait_for_frame_worker_for(uint32_t timeoutMicros) {
   return aurora::wait_for_frame_worker_for(std::chrono::microseconds(timeoutMicros));

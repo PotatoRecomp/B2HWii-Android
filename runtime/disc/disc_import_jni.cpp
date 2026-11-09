@@ -5,7 +5,9 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -57,6 +59,30 @@ JNIEXPORT jstring JNICALL Java_com_shiinobu_basara_DiscImport_extract(JNIEnv* en
         case disc::Result::Status::Cancelled: return env->NewStringUTF("");
         default: return env->NewStringUTF(result.message.c_str());
     }
+}
+
+JNIEXPORT jlongArray JNICALL Java_com_shiinobu_basara_DiscImport_fileSizes(JNIEnv* env, jclass, jint fd,
+                                                                          jobjectArray paths) {
+    std::string message;
+    const std::unique_ptr<disc::GameDisc> disc = disc::GameDisc::Open(FileReader(fd), message);
+    if (!disc) {
+        env->ThrowNew(env->FindClass("java/io/IOException"), message.c_str());
+        return nullptr;
+    }
+    const jsize count = env->GetArrayLength(paths);
+    std::vector<jlong> sizes(static_cast<size_t>(count), -1);
+    for (jsize i = 0; i < count; ++i) {
+        auto* path = static_cast<jstring>(env->GetObjectArrayElement(paths, i));
+        const char* chars = env->GetStringUTFChars(path, nullptr);
+        for (const disc::DiscFile& file : disc->Files()) {
+            if (file.path == chars) sizes[static_cast<size_t>(i)] = static_cast<jlong>(file.size);
+        }
+        env->ReleaseStringUTFChars(path, chars);
+        env->DeleteLocalRef(path);
+    }
+    jlongArray result = env->NewLongArray(count);
+    if (result != nullptr) env->SetLongArrayRegion(result, 0, count, sizes.data());
+    return result;
 }
 
 }  // extern "C"

@@ -17,4 +17,8 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, uint64_t dig
 std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, const GXTlutObj_& tlut, uint64_t digest,
                                               uint32_t digestSize, uint64_t tlutDigest) noexcept;
 std::string build_texture_replacement_name(const GXTexObj_& obj) noexcept;
+// Replacement files load in the background while the game draws the original, which the GX texture
+// caches then keep. Once a frame, uploads finished files and returns true when there were any, so the
+// caller drops those caches and the textures on screen look their replacement up again.
+bool take_finished_loads() noexcept;
 } // namespace aurora::gfx::texture_replacement

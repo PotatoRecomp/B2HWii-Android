@@ -428,6 +428,8 @@ struct GXState {
   bool colorUpdate = true;
   bool alphaUpdate = true;
   u8 numChans = 0;
+  // Normals per vertex from XF vertex specs (0x1008): 1 = normal only, 2 = NBT, 0xFF = not written yet.
+  u8 xfNumNormals = 0xFF;
   u8 numIndStages = 0;
   u8 numTevStages = 0;
   u8 numTexGens = 0;

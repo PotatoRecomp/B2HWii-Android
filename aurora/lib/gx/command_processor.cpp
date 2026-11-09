@@ -1816,7 +1816,9 @@ static void handle_xf(const u8* data, u32& pos, u32 size, bool bigEndian) {
         g_gxState.xfError = val;
         break;
       case 0x08:
-        // XF vertex specs (numColors, numNormals, numTexCoords) - informational
+        // XF vertex specs (numColors, numNormals, numTexCoords). numNormals backs up the VAT NBT bit
+        // when a direct-normal stride is ambiguous (fix_direct_nbt_stride).
+        g_gxState.xfNumNormals = static_cast<u8>((val >> 2) & 3);
         break;
       case 0x09:
         // numChans
@@ -2080,13 +2082,17 @@ static bool is_plausible_fifo_opcode(u8 cmd) {
 // floats become BP/XF writes that wreck TEV state (blank screen, wrong HUD colours). When the NBT
 // stride cannot be right (overruns the buffer or ends on an invalid opcode) and the single-normal
 // stride ends cleanly, use a single normal for this format until the game writes its VAT again.
+// The NBT end can also land on a byte that merely looks like an opcode (Mali-G57 log 2026-11-09:
+// 0x30 = LOAD_INDX_C inside a CP write), so when XF vertex specs say one normal, trust them.
 static bool fix_direct_nbt_stride(GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, const u8* data, u32 pos, u32 size) {
   auto& nrm = g_gxState.vtxFmts[fmt].attrs[GX_VA_NRM];
   if (vtxCount == 0 || g_gxState.vtxDesc[GX_VA_NRM] != GX_DIRECT || nrm.cnt != GX_NRM_NBT) return false;
   const u32 extra = 6u * comp_type_size(GX_VA_NRM, nrm.type);
   if (extra == 0 || vtxSize <= extra) return false;
   const auto endsClean = [&](u64 end) { return end == size || (end < size && is_plausible_fifo_opcode(data[end])); };
-  if (endsClean(static_cast<u64>(pos) + static_cast<u64>(vtxCount) * vtxSize)) return false;
+  if (g_gxState.xfNumNormals != 1 && endsClean(static_cast<u64>(pos) + static_cast<u64>(vtxCount) * vtxSize)) {
+    return false;
+  }
   if (!endsClean(static_cast<u64>(pos) + static_cast<u64>(vtxCount) * (vtxSize - extra))) return false;
   nrm.cnt = GX_NRM_XYZ;
   mark_pipeline_state_dirty();

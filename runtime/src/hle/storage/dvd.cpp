@@ -9,6 +9,7 @@
 // layer's caches must be notified explicitly that these bytes changed.
 extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #include "hle/storage/riivolution.h"
+#include "../../../disc/disc_extract.h"
 #include "ppc_runtime.h"
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
@@ -59,6 +60,28 @@ namespace fs = std::filesystem;
 // it is never embedded into or copied by the public runtime.
 static fs::path g_dvdRoot;
 static std::once_flag g_dvdRootOnce;
+
+// Read mode: dvd_root names the ISO or RVZ itself, and the game's files are read from it in place.
+// Their host paths are then <image>/files/... and <image>/sys/..., names only (ImageHostPath), kept
+// here with where each one's bytes are. Both are set once, before the game reads anything.
+struct ImageFile {
+    uint64_t offset = 0;
+    uint64_t size = 0;
+};
+static std::unique_ptr<disc::GameDisc> g_discImage;
+static std::unordered_map<fs::path::string_type, ImageFile> g_imageFiles;
+
+static fs::path ImageHostPath(const fs::path& image, const std::string& discPath) {
+    return image / fs::path(discPath).make_preferred();
+}
+
+static const ImageFile* FindImageFile(const fs::path& hostPath) {
+    if (!g_discImage) {
+        return nullptr;
+    }
+    const auto it = g_imageFiles.find(hostPath.native());
+    return it != g_imageFiles.end() ? &it->second : nullptr;
+}
 
 static uint32_t CurrentDiscGameCode() {
     return RuntimeHle::CurrentGameCode(0x534D4E45u); // SMNE (NSMBW) fallback
@@ -212,11 +235,35 @@ bool ReadWithOpenFile(const fs::path& path, uint64_t offset, uint32_t length, st
 }
 #endif
 
+// ReadExact's contract for a file of the disc image (Read mode).
+bool ReadImageFile(const ImageFile& file, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
+                   DvdReadContract::HostReadFailure& failure) {
+    failure = DvdReadContract::HostReadFailure::None;
+    if (offset >= file.size) {
+        failure = DvdReadContract::HostReadFailure::BadOffset;
+        return false;
+    }
+    if (length > file.size - offset) {
+        failure = DvdReadContract::HostReadFailure::ShortRead;
+        return false;
+    }
+    destination.resize(length);
+    std::string error;
+    if (!g_discImage->Read(file.offset + offset, destination.data(), length, &error)) {
+        RT_LOGF(RT_TAG_DVD, "ERROR: reading the game file: %s\n", error.c_str());
+        failure = DvdReadContract::HostReadFailure::ShortRead;
+        return false;
+    }
+    return true;
+}
+
 bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
                   DvdReadContract::HostReadFailure& failure) {
     const auto start = std::chrono::steady_clock::now();
     bool ok = false;
-    if (const FileBytes bytes = CachedFile(path)) {
+    if (const ImageFile* image = FindImageFile(path)) {
+        ok = ReadImageFile(*image, offset, length, destination, failure);
+    } else if (const FileBytes bytes = CachedFile(path)) {
         failure = DvdReadContract::HostReadFailure::None;
         if (offset >= bytes->size) {
             failure = DvdReadContract::HostReadFailure::BadOffset;
@@ -245,6 +292,12 @@ bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::v
 std::atomic<int64_t> g_preloadBytes{0};
 
 void StartReadCachePreload() {
+    if (g_discImage) {
+        // Nothing to map: the image is compressed or encrypted. Its decoded pieces are cached instead.
+        RT_LOGF(RT_TAG_DVD, "read cache: off (reading the game file in place)\n");
+        g_preloadBytes.store(-1, std::memory_order_relaxed);
+        return;
+    }
 #if defined(__ANDROID__)
     const uint64_t ram = static_cast<uint64_t>(sysconf(_SC_PHYS_PAGES)) * static_cast<uint64_t>(sysconf(_SC_PAGE_SIZE));
     // On the heap the preload held ~0.9 GiB for the whole session: on a 4 GB phone (3.8 GiB
@@ -350,6 +403,10 @@ void CheckDiscArchives() {
         int64_t size = -1;
         for (const DVDFileEntry& entry : g_fileEntries) {
             if (!entry.isDirectory && entry.dvdPath == archive.path) {
+                if (const ImageFile* image = FindImageFile(entry.hostPath)) {
+                    size = static_cast<int64_t>(image->size);
+                    break;
+                }
                 std::error_code ec;
                 const uint64_t bytes = fs::file_size(entry.hostPath, ec);
                 size = ec ? -1 : static_cast<int64_t>(bytes);
@@ -457,11 +514,50 @@ static bool IsDvdDataRoot(const fs::path& path) {
     FailDvd("dvd_root", "DVD data is unavailable", details);
 }
 
+// Read mode's failures: about the player's ISO or RVZ, not a folder to configure.
+[[noreturn]] static void FailGameFile(const std::string& reason, const fs::path& path) {
+    RT_LOGF(RT_TAG_DVD, "ERROR: %s: %s\n", reason.c_str(), HostPathText(path).c_str());
+    FailDvd("dvd_root", "The game file can't be read", reason + "\n\nChoose the game file again in the app.");
+}
+
+// Read mode: opens the image at `path` and lists its files.
+static void OpenDiscImage(const fs::path& path) {
+    disc::ReadAt read = disc::OpenFile(path);
+    if (!read) {
+        FailGameFile("Couldn't open the game file. It may have been moved, renamed or deleted.", path);
+    }
+    std::string message;
+    g_discImage = disc::GameDisc::Open(std::move(read), message);
+    if (!g_discImage) {
+        FailGameFile("Couldn't read the game file: " + message, path);
+    }
+    for (const disc::DiscFile& file : g_discImage->Files()) {
+        g_imageFiles[ImageHostPath(path, file.path).native()] = {file.offset, file.size};
+    }
+    RT_LOGF(RT_TAG_DVD, "reading the game in place from %s (%zu files)\n", HostPathText(path).c_str(),
+            g_discImage->Files().size());
+}
+
 static const fs::path& GetDvdRoot() {
     std::call_once(g_dvdRootOnce, []() {
-        const fs::path path = RuntimeConfigFile::ResolvedDvdRoot();
+        fs::path path = RuntimeConfigFile::ResolvedDvdRoot();
+        if (path.empty()) {
+            // Config.toml without [paths] (the app could not write it this start): the app's own
+            // unpacked game sits in "game" beside it.
+            const fs::path beside = RuntimeConfigFile::ResolveConfigPath().parent_path() / "game";
+            if (IsDvdDataRoot(beside)) {
+                RT_LOGF(RT_TAG_DVD, "no dvd_root configured; using %s\n", HostPathText(beside).c_str());
+                path = beside;
+            }
+        }
         if (path.empty()) {
             FailDvdRoot("No DVD root is configured");
+        }
+        std::error_code ec;
+        if (disc::IsOpenedFile(path) || fs::is_regular_file(path, ec)) {
+            OpenDiscImage(path);
+            g_dvdRoot = path;
+            return;
         }
         if (!IsDvdDataRoot(path)) {
             FailDvdRoot("Configured DVD root is not an extracted DATA directory", path);
@@ -542,23 +638,31 @@ static void LoadFstIndex() {
     }
     g_fstLoaded = true;
 
-    const fs::path fstPath = GetDvdRoot() / "sys" / "fst.bin";
-    std::ifstream fstFile(fstPath, std::ios::binary);
-    if (!fstFile.is_open()) {
-        return;
-    }
+    std::vector<uint8_t> data;
+    if (const ImageFile* image = FindImageFile(ImageHostPath(GetDvdRoot(), "sys/fst.bin"))) {
+        data.resize(static_cast<size_t>(image->size));
+        if (data.size() < 12 || !g_discImage->Read(image->offset, data.data(), data.size())) {
+            return;
+        }
+    } else {
+        const fs::path fstPath = GetDvdRoot() / "sys" / "fst.bin";
+        std::ifstream fstFile(fstPath, std::ios::binary);
+        if (!fstFile.is_open()) {
+            return;
+        }
 
-    fstFile.seekg(0, std::ios::end);
-    const std::streamsize size = fstFile.tellg();
-    fstFile.seekg(0, std::ios::beg);
-    if (size < 12) {
-        return;
-    }
+        fstFile.seekg(0, std::ios::end);
+        const std::streamsize size = fstFile.tellg();
+        fstFile.seekg(0, std::ios::beg);
+        if (size < 12) {
+            return;
+        }
 
-    std::vector<uint8_t> data(static_cast<size_t>(size));
-    fstFile.read(reinterpret_cast<char*>(data.data()), size);
-    if (!fstFile) {
-        return;
+        data.resize(static_cast<size_t>(size));
+        fstFile.read(reinterpret_cast<char*>(data.data()), size);
+        if (!fstFile) {
+            return;
+        }
     }
 
     const uint32_t entryCount = BigEndian::Read32(&data[8]);
@@ -1106,11 +1210,20 @@ extern "C" void DVDInit_8015EA1C()
     // 4. Scan Files
     const fs::path& rootPath = GetDvdRoot();
     
-    // Map "<dvd_root>/files" -> "/"
-    ScanDirectory(rootPath / "files", "/");
+    if (g_discImage) {
+        // The image's files/ and sys/, mapped as the folders are below.
+        for (const disc::DiscFile& file : g_discImage->Files()) {
+            const bool sys = file.path.rfind("sys/", 0) == 0;
+            const std::string dvdPath = sys ? "/" + file.path : file.path.substr(file.path.find('/'));
+            RegisterFileEntry(dvdPath, ImageHostPath(rootPath, file.path), static_cast<uint32_t>(file.size));
+        }
+    } else {
+        // Map "<dvd_root>/files" -> "/"
+        ScanDirectory(rootPath / "files", "/");
 
-    // Map "<dvd_root>/sys" -> "/sys/" (e.g. main.dol, bi2.bin)
-    ScanDirectory(rootPath / "sys", "/sys/");
+        // Map "<dvd_root>/sys" -> "/sys/" (e.g. main.dol, bi2.bin)
+        ScanDirectory(rootPath / "sys", "/sys/");
+    }
 
     const auto& overlays = RuntimeRiivolution::Overlays();
     if (overlays.empty() && RuntimeProduct::IsRetroRewind()) {

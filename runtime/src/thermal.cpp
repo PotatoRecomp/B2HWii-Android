@@ -105,7 +105,10 @@ void Poll(void* manager, HeadroomFn headroom, StatusFn status) {
                     RT_LOGF(RT_TAG_RUNTIME, "thermal: no valid headroom, using the battery temperature (%.1f C)\n", c);
                     usingBattery = true;
                 }
-                SetLevels(Level(g_warm.load(std::memory_order_relaxed), c, kWarmBatteryC, kWarmCoolBatteryC),
+                // The battery only steers the resolution step (Hot), never the 30 fps drawing (Warm):
+                // it stays above 40 C for as long as the game runs, so in 1.2 the lock it set held until
+                // the app was closed (SD 7s Gen 2 report). Losing the headroom also ends a Warm it set.
+                SetLevels(false,
                           Level(g_hot.load(std::memory_order_relaxed), c, kHotBatteryC, kCoolBatteryC),
                           "battery C", c);
             }

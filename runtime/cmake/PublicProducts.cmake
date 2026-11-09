@@ -74,7 +74,9 @@ function(mkw_configure_translated_target target)
     mkw_bound_translated_compiles(${target})
 endfunction()
 
-add_library(mkw_runtime_common OBJECT ${SOURCES})
+add_library(mkw_runtime_common OBJECT ${SOURCES}
+    # Read mode: the game's files straight from the player's ISO or RVZ (hle/storage/dvd.cpp).
+    "${MKW_RUNTIME_SOURCE_DIR}/disc/disc_extract.cpp")
 mkw_configure_object_target(mkw_runtime_common)
 target_compile_features(mkw_runtime_common PRIVATE cxx_std_20)
 target_compile_definitions(mkw_runtime_common PRIVATE
@@ -82,7 +84,8 @@ target_compile_definitions(mkw_runtime_common PRIVATE
     _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
 target_link_libraries(mkw_runtime_common PRIVATE
     aurora::gx aurora::pad aurora::si aurora::vi aurora::mtx)
-target_link_libraries(mkw_runtime_common PRIVATE mkw_platform mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls)
+target_link_libraries(mkw_runtime_common PRIVATE mkw_platform mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls
+    libzstd_static)
 if(MKW_PLATFORM_WINDOWS)
     # ole32/uuid: the first-start game folder picker (game_folder.cpp).
     target_link_libraries(mkw_runtime_common PRIVATE shell32 windowsapp ole32 uuid)

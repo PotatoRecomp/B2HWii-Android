@@ -1020,12 +1020,12 @@ void queue_load(const RuntimeTextureKey& key, const ReplacementIndexEntry& entry
 }
 
 /** Uploads files the loader finished, a few per call so a burst does not stall one frame. */
-void take_load_done() noexcept {
+void take_load_done(size_t maxUploads = kMaxUploadsPerLookup) noexcept {
   if (!s_loadHasDone.load()) return;
   std::vector<std::pair<RuntimeTextureKey, std::optional<ConvertedTexture>>> done;
   {
     std::lock_guard lock(s_loadMutex);
-    const size_t n = std::min(s_loadDone.size(), kMaxUploadsPerLookup);
+    const size_t n = std::min(s_loadDone.size(), maxUploads);
     std::move(s_loadDone.begin(), s_loadDone.begin() + static_cast<std::ptrdiff_t>(n), std::back_inserter(done));
     s_loadDone.erase(s_loadDone.begin(), s_loadDone.begin() + static_cast<std::ptrdiff_t>(n));
     s_loadHasDone = !s_loadDone.empty();
@@ -1475,6 +1475,17 @@ std::optional<TextureHandle> find_replacement_impl(const GXTexObj_& obj, const L
 
 std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   return find_replacement_impl(obj, nullptr);
+}
+
+bool take_finished_loads() noexcept {
+  if (!g_config.allowTextureReplacements || !s_loadHasDone.load(std::memory_order_relaxed)) return false;
+  // Once a frame: each true answer makes the caller look every bound texture up again.
+  static uint32_t s_lastFrame = UINT32_MAX;
+  const uint32_t frame = current_frame();
+  if (frame == s_lastFrame) return false;
+  s_lastFrame = frame;
+  take_load_done(kMaxUploadsPerLookup * 4);
+  return true;
 }
 
 std::optional<TextureHandle> find_replacement(const GXTexObj_& obj, const GXTlutObj_& tlut) noexcept {

@@ -1387,6 +1387,23 @@ void invalidate_static_texture_cache() noexcept {
   g_gxState.stateDirty = true;
 }
 
+// A texture pack's file finished loading after the game already drew that texture with its original
+// pixels (an itel P661N saw custom portraits only after leaving and re-entering Conquest). The source
+// caches re-prove entries by their bytes, which have not changed, so they go; the revision bump retires
+// the memos in front of them. The content caches sit behind the replacement lookup and stay, so a
+// texture without a replacement is not uploaded again.
+static void drop_static_texture_sources() noexcept {
+  s_staticTextureSourceCache.clear();
+  s_staticPaletteTextureSourceCache.clear();
+  s_texObjSourceKeys.clear();
+  s_texObjPaletteSourceKeys.clear();
+  s_texObjSourceKeyMemo.reset();
+  s_texObjPaletteSourceKeyMemo.reset();
+  clear_static_source_front_cache();
+  note_texture_cache_stamp();
+  invalidate_static_texture_cache();
+}
+
 void clear_copy_texture_cache() noexcept {
   g_gxState.copyTextures.clear();
   g_gxState.copyTextureCache.clear();
@@ -1567,6 +1584,10 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
 
 void resolve_sampled_textures(const ShaderInfo& info) noexcept {
   ZoneScoped;
+
+  if (gfx::texture_replacement::take_finished_loads()) {
+    drop_static_texture_sources();
+  }
 
   for (u32 i = 0; i < MaxTextures; ++i) {
     if (!info.sampledTextures.test(i)) {

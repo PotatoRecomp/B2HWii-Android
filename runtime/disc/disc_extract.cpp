@@ -7,10 +7,27 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <vector>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#if defined(__linux__)
+#include <sys/auxv.h>
+#endif
+#endif
 
 namespace disc {
 namespace {
@@ -49,6 +66,32 @@ void ReadExact(const ReadAt& read, u64 offset, void* out, size_t size) {
 
 // --- AES-128 CBC decryption, for ISOs ----------------------------------------------------------
 
+#if defined(__aarch64__) && defined(__linux__)
+// The ARMv8 AES instructions with the equivalent inverse cipher's round keys (as bytes): every
+// 64-bit phone has them, and they decrypt a block run about 20 times faster than the tables below,
+// which matters when the game reads an ISO in place.
+__attribute__((target("aes"))) void DecryptCbcArm(const u8 (*keys)[16], const u8* iv, const u8* in, u8* out, size_t size) {
+    uint8x16_t k[11];
+    for (int i = 0; i < 11; ++i) k[i] = vld1q_u8(keys[i]);
+    uint8x16_t previous = vld1q_u8(iv);
+    for (size_t i = 0; i < size; i += 16) {
+        const uint8x16_t cipher = vld1q_u8(in + i);
+        uint8x16_t s = cipher;
+        for (int r = 0; r < 9; ++r) s = vaesimcq_u8(vaesdq_u8(s, k[r]));
+        s = veorq_u8(vaesdq_u8(s, k[9]), k[10]);
+        vst1q_u8(out + i, veorq_u8(s, previous));
+        previous = cipher;
+    }
+}
+
+bool HasArmAes() {
+#ifndef HWCAP_AES
+    constexpr unsigned long HWCAP_AES = 1ul << 3;
+#endif
+    return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
+}
+#endif
+
 class Aes128 {
 public:
     explicit Aes128(const u8 key[16]) {
@@ -77,12 +120,38 @@ public:
                         Ror(t.td[t.sbox[k >> 8 & 255]], 16) ^ Ror(t.td[t.sbox[k & 255]], 24);
                 }
                 keys_[round * 4 + c] = k;
+                for (int b = 0; b < 4; ++b) keyBytes_[round][c * 4 + b] = static_cast<u8>(k >> (24 - 8 * b));
             }
         }
     }
 
     // `size` is a multiple of 16; `iv` is 16 bytes. Works in place.
     void DecryptCbc(const u8* iv, const u8* in, u8* out, size_t size) const {
+#if defined(__aarch64__) && defined(__linux__)
+        static const bool arm = ArmMatchesTables();
+        if (arm) {
+            DecryptCbcArm(keyBytes_, iv, in, out, size);
+            return;
+        }
+#endif
+        DecryptCbcTables(iv, in, out, size);
+    }
+
+private:
+#if defined(__aarch64__) && defined(__linux__)
+    // The instructions are used only once they decrypt FIPS-197's example like the tables do.
+    static bool ArmMatchesTables() {
+        if (!HasArmAes()) return false;
+        u8 key[16], iv[16] = {}, cipher[64], plain[64], arm[64];
+        for (int i = 0; i < 16; ++i) key[i] = static_cast<u8>(i);
+        for (int i = 0; i < 64; ++i) cipher[i] = static_cast<u8>(i * 37 + 11);
+        const Aes128 aes(key);
+        aes.DecryptCbcTables(iv, cipher, plain, sizeof(cipher));
+        DecryptCbcArm(aes.keyBytes_, iv, cipher, arm, sizeof(cipher));
+        return std::memcmp(plain, arm, sizeof(arm)) == 0;
+    }
+#endif
+    void DecryptCbcTables(const u8* iv, const u8* in, u8* out, size_t size) const {
         u8 previous[16], next[16];
         std::memcpy(previous, iv, 16);
         for (size_t i = 0; i < size; i += 16) {
@@ -167,9 +236,55 @@ private:
     }
 
     u32 keys_[44];
+    u8 keyBytes_[11][16];
 };
 
 // --- the two kinds of image --------------------------------------------------------------------
+
+// The last few decoded pieces of an image (ISO block runs, RVZ chunks) by their index. Extract reads
+// in disc order and keeps one; the game reading in place hops between files and keeps more.
+class PieceCache {
+public:
+    explicit PieceCache(size_t count) : pieces_(std::max<size_t>(count, 1)) {}
+
+    // The bytes of piece `key`, or null when it isn't kept.
+    const u8* Find(u64 key) {
+        for (Piece& piece : pieces_) {
+            if (piece.key == key) {
+                piece.use = ++clock_;
+                return piece.bytes.data();
+            }
+        }
+        return nullptr;
+    }
+    // The least recently used piece's buffer, emptied for `key`: Keep(key) once it is filled, so a
+    // failed fill leaves nothing behind.
+    std::vector<u8>& Reuse() {
+        Piece* oldest = &pieces_[0];
+        for (Piece& piece : pieces_) {
+            if (piece.use < oldest->use) oldest = &piece;
+        }
+        oldest->key = kNone;
+        filling_ = oldest;
+        return oldest->bytes;
+    }
+    const u8* Keep(u64 key) {
+        filling_->key = key;
+        filling_->use = ++clock_;
+        return filling_->bytes.data();
+    }
+
+private:
+    static constexpr u64 kNone = ~u64{0};
+    struct Piece {
+        u64 key = kNone;
+        u64 use = 0;
+        std::vector<u8> bytes;
+    };
+    std::vector<Piece> pieces_;
+    Piece* filling_ = nullptr;
+    u64 clock_ = 0;
+};
 
 class Image {
 public:
@@ -187,7 +302,8 @@ u64 PartitionDataOffset(const u8* header) { return static_cast<u64>(Be32(header 
 
 class IsoImage final : public Image {
 public:
-    explicit IsoImage(const ReadAt& read) : read_(read) {}
+    // `cached` block runs of kRunBlocks (256 KiB) each.
+    IsoImage(const ReadAt& read, size_t cached) : read_(read), runs_(cached) {}
 
     void ReadRaw(u64 offset, u8* out, size_t size) override { ReadExact(read_, offset, out, size); }
 
@@ -202,17 +318,15 @@ public:
         Aes128(kCommonKey).DecryptCbc(iv, header + 0x1BF, titleKey, 16);
         aes_ = std::make_unique<Aes128>(titleKey);
         dataStart_ = partition + PartitionDataOffset(header);
-        group_.resize(kBlocksPerGroup * kBlockTotal);
     }
 
     void ReadData(u64 offset, u8* out, size_t size) override {
         while (size != 0) {
             const u64 block = offset / kBlockData;
-            const u64 groupIndex = block / kBlocksPerGroup;
-            LoadGroup(groupIndex);
+            const u8* run = LoadRun(block / kRunBlocks);
             const u64 inBlock = offset % kBlockData;
             const size_t take = static_cast<size_t>(std::min<u64>(size, kBlockData - inBlock));
-            const u8* data = group_.data() + (block % kBlocksPerGroup) * kBlockTotal + kBlockHeader + inBlock;
+            const u8* data = run + (block % kRunBlocks) * kBlockTotal + kBlockHeader + inBlock;
             std::memcpy(out, data, take);
             offset += take;
             out += take;
@@ -221,23 +335,27 @@ public:
     }
 
 private:
-    void LoadGroup(u64 index) {
-        if (index == loaded_) return;
-        loaded_ = ~u64{0};
-        ReadExact(read_, dataStart_ + index * kBlocksPerGroup * kBlockTotal, group_.data(), group_.size());
-        for (u64 b = 0; b < kBlocksPerGroup; ++b) {
-            u8* block = group_.data() + b * kBlockTotal;
+    // Blocks are decrypted a run at a time: each has its own IV, so a run needn't be a whole group,
+    // and a small one keeps a read in place from decrypting far more than it asked for.
+    static constexpr u64 kRunBlocks = 8;
+
+    const u8* LoadRun(u64 index) {
+        if (const u8* run = runs_.Find(index)) return run;
+        std::vector<u8>& run = runs_.Reuse();
+        run.resize(kRunBlocks * kBlockTotal);
+        ReadExact(read_, dataStart_ + index * kRunBlocks * kBlockTotal, run.data(), run.size());
+        for (u64 b = 0; b < kRunBlocks; ++b) {
+            u8* block = run.data() + b * kBlockTotal;
             // Each block's data is chained from an IV kept in its still-encrypted hash area.
             aes_->DecryptCbc(block + 0x3D0, block + kBlockHeader, block + kBlockHeader, kBlockData);
         }
-        loaded_ = index;
+        return runs_.Keep(index);
     }
 
     const ReadAt& read_;
     std::unique_ptr<Aes128> aes_;
     u64 dataStart_ = 0;
-    u64 loaded_ = ~u64{0};
-    std::vector<u8> group_;
+    PieceCache runs_;
 };
 
 // The generator of the disc's padding, which RVZ stores as a seed instead of the data.
@@ -290,7 +408,8 @@ private:
 
 class RvzImage final : public Image {
 public:
-    explicit RvzImage(const ReadAt& read) : read_(read), zstd_(ZSTD_createDCtx()) {
+    // `cacheBytes` of decoded chunks are kept (one at least).
+    RvzImage(const ReadAt& read, u64 cacheBytes) : read_(read), zstd_(ZSTD_createDCtx()) {
         u8 head[0x48];
         ReadExact(read_, 0, head, sizeof(head));
         const u32 discSize = Be32(head + 0x0C);
@@ -326,6 +445,7 @@ public:
         partitionEntrySize_ = partitionEntrySize;
         rawEntries_ = ReadTable(rawOffset, rawSize, size_t{rawCount} * kRawEntrySize);
         groups_ = ReadTable(groupsOffset, groupsSize, size_t{groupCount} * kGroupEntrySize);
+        chunks_ = std::make_unique<PieceCache>(static_cast<size_t>(std::min<u64>(64, cacheBytes / chunkSize_)));
     }
     ~RvzImage() override { ZSTD_freeDCtx(zstd_); }
 
@@ -426,16 +546,16 @@ private:
     size_t ReadRegion(u64 offset, u8* out, u64 size, u64 chunk, u32 firstGroup, u32 groupCount, u32 lists) {
         const u64 index = offset / chunk;
         if (index >= groupCount) Fail(kDamaged);
-        LoadGroup(u64{firstGroup} + index, chunk, index * chunk, lists);
+        const u8* bytes = LoadGroup(u64{firstGroup} + index, chunk, index * chunk, lists);
         const u64 inChunk = offset % chunk;
         const size_t take = static_cast<size_t>(std::min(size, chunk - inChunk));
-        std::memcpy(out, chunk_.data() + inChunk, take);
+        std::memcpy(out, bytes + inChunk, take);
         return take;
     }
 
-    void LoadGroup(u64 group, u64 chunk, u64 dataOffset, u32 lists) {
-        if (group == loaded_) return;
-        loaded_ = ~u64{0};
+    // Group numbers are unique across the raw and partition regions, so they key the cache.
+    const u8* LoadGroup(u64 group, u64 chunk, u64 dataOffset, u32 lists) {
+        if (const u8* bytes = chunks_->Find(group)) return bytes;
         if ((group + 1) * kGroupEntrySize > groups_.size()) Fail(kDamaged);
         const u8* e = groups_.data() + group * kGroupEntrySize;
         const u64 fileOffset = u64{Be32(e)} << 2;
@@ -443,11 +563,9 @@ private:
         const bool compressed = (stored & 0x80000000) != 0 && compression_ == kCompressionZstd;
         const size_t storedSize = stored & 0x7FFFFFFF;
         const u32 packedSize = Be32(e + 8);
-        chunk_.assign(chunk, 0);
-        if (storedSize == 0) {  // all zeroes
-            loaded_ = group;
-            return;
-        }
+        std::vector<u8>& out = chunks_->Reuse();
+        out.assign(chunk, 0);
+        if (storedSize == 0) return chunks_->Keep(group);  // all zeroes
         const size_t maxPlain = lists * kMaxExceptionList + std::max<size_t>(chunk, packedSize) + 1;
         if (storedSize > maxPlain + (64 << 10)) Fail(kDamaged);
         stored_.resize(storedSize);
@@ -469,15 +587,15 @@ private:
         if (pos > plainSize) Fail(kDamaged);
         if (packedSize != 0) {
             if (packedSize > plainSize - pos) Fail(kDamaged);
-            Unpack(plain + pos, packedSize, chunk, dataOffset);
+            Unpack(plain + pos, packedSize, chunk, dataOffset, out.data());
         } else {
-            std::memcpy(chunk_.data(), plain + pos, static_cast<size_t>(std::min<u64>(chunk, plainSize - pos)));
+            std::memcpy(out.data(), plain + pos, static_cast<size_t>(std::min<u64>(chunk, plainSize - pos)));
         }
-        loaded_ = group;
+        return chunks_->Keep(group);
     }
 
     // RVZ packing: runs of stored bytes and of generated padding, each with a size in front.
-    void Unpack(const u8* in, size_t inSize, u64 chunk, u64 dataOffset) {
+    void Unpack(const u8* in, size_t inSize, u64 chunk, u64 dataOffset, u8* out) {
         size_t pos = 0;
         u64 written = 0;
         while (written < chunk && pos + 4 <= inSize) {
@@ -489,10 +607,10 @@ private:
                 junk_.SetSeed(in + pos);
                 pos += LaggedFibonacci::kSeedWords * 4;
                 junk_.Skip(static_cast<size_t>((dataOffset + written) % kBlockTotal));
-                junk_.Generate(chunk_.data() + written, take);
+                junk_.Generate(out + written, take);
             } else {
                 if (take > inSize - pos) Fail(kDamaged);
-                std::memcpy(chunk_.data() + written, in + pos, take);
+                std::memcpy(out + written, in + pos, take);
                 pos += take;
             }
             written += take;
@@ -509,19 +627,20 @@ private:
     std::vector<u8> rawEntries_;
     std::vector<u8> groups_;
     const u8* selected_ = nullptr;
-    u64 loaded_ = ~u64{0};
-    std::vector<u8> chunk_, stored_, inflated_;
+    std::unique_ptr<PieceCache> chunks_;
+    std::vector<u8> stored_, inflated_;
     LaggedFibonacci junk_;
 };
 
-std::unique_ptr<Image> OpenImage(const ReadAt& read) {
+// `cacheBytes`: how much decoded data to keep (one piece at least).
+std::unique_ptr<Image> OpenImage(const ReadAt& read, u64 cacheBytes = 0) {
     u8 start[0x20];
     ReadExact(read, 0, start, sizeof(start));
-    if (std::memcmp(start, "RVZ\x01", 4) == 0) return std::make_unique<RvzImage>(read);
+    if (std::memcmp(start, "RVZ\x01", 4) == 0) return std::make_unique<RvzImage>(read, cacheBytes);
     if (std::memcmp(start, "WIA\x01", 4) == 0 || std::memcmp(start, "WBFS", 4) == 0) {
         Fail("This app reads ISO and RVZ files. In Dolphin, convert the game to ISO or RVZ, then choose it again.");
     }
-    if (Be32(start + 0x18) == kWiiMagic) return std::make_unique<IsoImage>(read);
+    if (Be32(start + 0x18) == kWiiMagic) return std::make_unique<IsoImage>(read, static_cast<size_t>(cacheBytes >> 18));
     if (Be32(start + 0x1C) == kGameCubeMagic) Fail("That disc image isn't a Wii game.");
     Fail("That file isn't a Wii disc image. Choose an ISO or RVZ of the game.");
 }
@@ -545,12 +664,6 @@ u64 FindGamePartition(Image& image) {
 
 // --- writing the tree --------------------------------------------------------------------------
 
-struct OutputFile {
-    std::string path;  // relative to the output folder
-    u64 offset;
-    u64 size;
-};
-
 // One level of a path from the disc. Only this game's plain names are expected.
 bool SafeName(const std::string& name) {
     if (name.empty() || name == "." || name == "..") return false;
@@ -561,12 +674,12 @@ bool SafeName(const std::string& name) {
     return true;
 }
 
-std::vector<OutputFile> ReadFileList(const std::vector<u8>& fst) {
+std::vector<DiscFile> ReadFileList(const std::vector<u8>& fst) {
     if (fst.size() < 12) Fail(kDamaged);
     const u32 count = Be32(fst.data() + 8);
     if (count == 0 || count > fst.size() / 12) Fail(kDamaged);
     const size_t names = size_t{count} * 12;
-    std::vector<OutputFile> files;
+    std::vector<DiscFile> files;
     struct Folder {
         std::string path;
         u32 end;
@@ -611,7 +724,7 @@ public:
         : image_(image), root_(outDir), total_(total), progress_(progress), buffer_(1 << 20) {}
 
     // False when the player cancelled.
-    bool Write(const OutputFile& file) {
+    bool Write(const DiscFile& file) {
         namespace fs = std::filesystem;
         const fs::path target = root_ / fs::path(file.path);
         std::error_code ec;
@@ -663,39 +776,143 @@ bool ReadHeader(const ReadAt& read, uint8_t header[8], std::string& message) {
     }
 }
 
+namespace {
+
+// Selects the game partition of `image` and lists its files: sys/ first, then files/ in disc order.
+std::vector<DiscFile> OpenGamePartition(Image& image) {
+    const u64 partition = FindGamePartition(image);
+    u8 partitionHeader[kPartitionHeaderSize];
+    image.ReadRaw(partition, partitionHeader, sizeof(partitionHeader));
+    image.SelectPartition(partition, partitionHeader);
+
+    u8 boot[0x440];
+    image.ReadData(0, boot, sizeof(boot));
+    const u64 dol = u64{Be32(boot + 0x420)} << 2;
+    const u64 fstOffset = u64{Be32(boot + 0x424)} << 2;
+    const u64 fstSize = u64{Be32(boot + 0x428)} << 2;
+    if (fstSize == 0 || fstSize > (u64{64} << 20)) Fail(kDamaged);
+    std::vector<u8> fst(static_cast<size_t>(fstSize));
+    image.ReadData(fstOffset, fst.data(), fst.size());
+    u8 apploader[0x20];
+    image.ReadData(0x2440, apploader, sizeof(apploader));
+
+    std::vector<DiscFile> files = {
+        {"sys/boot.bin", 0, sizeof(boot)},
+        {"sys/bi2.bin", 0x440, 0x2000},
+        {"sys/apploader.img", 0x2440, u64{0x20} + Be32(apploader + 0x14) + Be32(apploader + 0x18)},
+        {"sys/fst.bin", fstOffset, fstSize},
+        {"sys/main.dol", dol, DolSize(image, dol)},
+    };
+    std::vector<DiscFile> game = ReadFileList(fst);
+    // In disc order, so groups are read once and the storage isn't seeking back and forth.
+    std::sort(game.begin(), game.end(), [](const DiscFile& a, const DiscFile& b) { return a.offset < b.offset; });
+    files.insert(files.end(), game.begin(), game.end());
+    return files;
+}
+
+class GameDiscImage final : public GameDisc {
+public:
+    explicit GameDiscImage(ReadAt read) : read_(std::move(read)) {}
+
+    // Throws Failure.
+    void Open() {
+        // 32 MiB of decoded pieces: a scene's archives and the music streaming beside them.
+        image_ = OpenImage(read_, u64{32} << 20);
+        files_ = OpenGamePartition(*image_);
+    }
+
+    const std::vector<DiscFile>& Files() const override { return files_; }
+
+    bool Read(uint64_t offset, void* out, size_t size, std::string* error) override {
+        std::lock_guard lock(mutex_);
+        try {
+            image_->ReadData(offset, static_cast<u8*>(out), size);
+            return true;
+        } catch (const Failure& failure) {
+            if (error != nullptr) *error = failure.message;
+        } catch (const std::exception& e) {
+            if (error != nullptr) *error = e.what();
+        }
+        return false;
+    }
+
+private:
+    ReadAt read_;  // before image_, which keeps a reference to it
+    std::unique_ptr<Image> image_;
+    std::vector<DiscFile> files_;
+    std::mutex mutex_;
+};
+
+}  // namespace
+
+std::unique_ptr<GameDisc> GameDisc::Open(ReadAt read, std::string& message) {
+    auto disc = std::make_unique<GameDiscImage>(std::move(read));
+    try {
+        disc->Open();
+        return disc;
+    } catch (const Failure& failure) {
+        message = failure.message;
+    } catch (const std::exception& e) {
+        message = e.what();
+    }
+    return nullptr;
+}
+
+bool IsOpenedFile(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    (void)path;
+    return false;
+#else
+    return path.native().rfind("/proc/self/fd/", 0) == 0;
+#endif
+}
+
+ReadAt OpenFile(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    struct File {
+        FILE* file;
+        std::mutex mutex;
+        ~File() { std::fclose(file); }
+    };
+    FILE* file = _wfopen(path.c_str(), L"rb");
+    if (file == nullptr) return {};
+    auto shared = std::make_shared<File>();
+    shared->file = file;
+    return [shared](uint64_t offset, void* out, size_t size) {
+        std::lock_guard lock(shared->mutex);
+        return _fseeki64(shared->file, static_cast<long long>(offset), SEEK_SET) == 0 &&
+               std::fread(out, 1, size, shared->file) == size;
+    };
+#else
+    const int fd = IsOpenedFile(path) ? ::fcntl(std::atoi(path.c_str() + 14), F_DUPFD_CLOEXEC, 0)
+                                      : ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return {};
+    const std::shared_ptr<int> shared(new int(fd), [](int* p) {
+        ::close(*p);
+        delete p;
+    });
+    return [shared](uint64_t offset, void* out, size_t size) {
+        auto* bytes = static_cast<char*>(out);
+        while (size != 0) {
+            const ssize_t got = ::pread(*shared, bytes, size, static_cast<off_t>(offset));
+            if (got < 0 && errno == EINTR) continue;
+            if (got <= 0) return false;
+            bytes += got;
+            offset += static_cast<uint64_t>(got);
+            size -= static_cast<size_t>(got);
+        }
+        return true;
+    };
+#endif
+}
+
 Result Extract(const ReadAt& read, const std::string& outDir, uint64_t freeBytes, const Progress& progress) {
     try {
         const std::unique_ptr<Image> image = OpenImage(read);
-        const u64 partition = FindGamePartition(*image);
-        u8 partitionHeader[kPartitionHeaderSize];
-        image->ReadRaw(partition, partitionHeader, sizeof(partitionHeader));
-        image->SelectPartition(partition, partitionHeader);
-
-        u8 boot[0x440];
-        image->ReadData(0, boot, sizeof(boot));
-        const u64 dol = u64{Be32(boot + 0x420)} << 2;
-        const u64 fstOffset = u64{Be32(boot + 0x424)} << 2;
-        const u64 fstSize = u64{Be32(boot + 0x428)} << 2;
-        if (fstSize == 0 || fstSize > (u64{64} << 20)) Fail(kDamaged);
-        std::vector<u8> fst(static_cast<size_t>(fstSize));
-        image->ReadData(fstOffset, fst.data(), fst.size());
-        u8 apploader[0x20];
-        image->ReadData(0x2440, apploader, sizeof(apploader));
-
-        std::vector<OutputFile> files = {
-            {"sys/boot.bin", 0, sizeof(boot)},
-            {"sys/bi2.bin", 0x440, 0x2000},
-            {"sys/apploader.img", 0x2440, u64{0x20} + Be32(apploader + 0x14) + Be32(apploader + 0x18)},
-            {"sys/fst.bin", fstOffset, fstSize},
-            {"sys/main.dol", dol, DolSize(*image, dol)},
-        };
-        std::vector<OutputFile> game = ReadFileList(fst);
-        // In disc order, so groups are read once and the storage isn't seeking back and forth.
-        std::sort(game.begin(), game.end(), [](const OutputFile& a, const OutputFile& b) { return a.offset < b.offset; });
-        files.insert(files.end(), game.begin(), game.end());
+        const std::vector<DiscFile> files = OpenGamePartition(*image);
 
         u64 total = 0;
-        for (const OutputFile& file : files) total += file.size;
+        for (const DiscFile& file : files) total += file.size;
         if (total > freeBytes) {
             char text[160];
             std::snprintf(text, sizeof(text), "The game needs %.1f GB of free space, and this phone has %.1f GB.",
@@ -704,7 +921,7 @@ Result Extract(const ReadAt& read, const std::string& outDir, uint64_t freeBytes
         }
 
         Writer writer(*image, outDir, total, progress);
-        for (const OutputFile& file : files) {
+        for (const DiscFile& file : files) {
             if (!writer.Write(file)) return {Result::Status::Cancelled, ""};
         }
         writer.Report();

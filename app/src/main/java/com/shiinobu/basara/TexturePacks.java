@@ -47,7 +47,7 @@ final class TexturePacks {
 
     /**
      * The saved order and ticks ("1|name" or "0|name" per line) with what is in `root` now: a mod no
-     * longer there is dropped, a new one is added at the bottom, ticked.
+     * longer there is dropped, a new one is added at the bottom, not ticked: the player turns it on.
      */
     static List<Pack> load(AppSettings settings, File root) {
         final List<String> found = new ArrayList<>();
@@ -67,7 +67,7 @@ final class TexturePacks {
             final String name = line.substring(2);
             if (found.remove(name)) packs.add(new Pack(name, line.charAt(0) == '1'));
         }
-        for (String name : found) packs.add(new Pack(name, true));
+        for (String name : found) packs.add(new Pack(name, false));
         return packs;
     }
 

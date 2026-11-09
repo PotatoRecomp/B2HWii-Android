@@ -136,23 +136,85 @@ public final class GameActivity extends SDLActivity
         setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
     }
 
+    private static void notePrepareError(StringBuilder errors, String step, Exception e) {
+        Log.e(TAG, "could not prepare the game's files (" + step + ")", e);
+        errors.append(step).append(": ").append(e).append('\n')
+                .append(Log.getStackTraceString(e)).append('\n');
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         CrashReport.installJavaHandler(this);
         CrashReport.testCrashIfAsked();
         settings = new AppSettings(this);
         Tr.init(this);  // the in-game menu speaks the launcher's language
+        // Each step on its own: one failing (a full disk while the runtime files are copied after an
+        // update) used to skip Config.toml and the env below, and the game then stopped at once with
+        // "No DVD root is configured". The failures go to the run's log folder for tester reports.
+        final StringBuilder prepareErrors = new StringBuilder();
+        java.io.File runLogs = null;
+        try {
+            runLogs = AppFiles.newRunLogDir();
+        } catch (Exception e) {
+            notePrepareError(prepareErrors, "newRunLogDir", e);
+        }
+        final java.io.File logs = runLogs;
         try {
             AppFiles.prepareRuntime(this);
+        } catch (Exception e) {
+            notePrepareError(prepareErrors, "prepareRuntime", e);
+        }
+        try {
             final String driverOff = GpuDrivers.checkLastStart(this, settings);
             if (driverOff != null) Toast.makeText(this, driverOff, Toast.LENGTH_LONG).show();
             GpuDrivers.applyToGame(this, settings);
+        } catch (Exception e) {
+            notePrepareError(prepareErrors, "gpu drivers", e);
+        }
+        try {
             AppFiles.writeConfig(this, settings);
+        } catch (Exception e) {
+            notePrepareError(prepareErrors, "writeConfig", e);
+        }
+        // Saves: back after a new install or Clear data (from Basara2Heroes/Saves/Auto), and the last
+        // session's save copied out, before the game opens its NAND.
+        if (SaveData.autoRestore(this)) {
+            Toast.makeText(this, Tr.t("Your save was restored from Basara2Heroes/Saves/Auto."), Toast.LENGTH_LONG).show();
+        }
+        SaveData.autoBackup(this);
+        try {
             DevTools.onGameStart(this);  // before the runtime reads env.txt
+        } catch (Exception e) {
+            notePrepareError(prepareErrors, "DevTools", e);
+        }
+        if (prepareErrors.length() > 0) {
+            Toast.makeText(this, "Could not prepare the game's files: " + prepareErrors.toString().split("\n", 2)[0],
+                    Toast.LENGTH_LONG).show();
+            if (logs != null) {
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(logs, "prepare_errors.txt"))) {
+                    out.write(prepareErrors.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        try {
             // Read by runtime/src/platform/host_platform.cpp before anything else starts.
             Os.setenv("WIICOMPILED_RUNTIME_DIR", AppFiles.runtimeDir(this).getAbsolutePath(), true);
             Os.setenv("WIICOMPILED_DATA_DIR", AppFiles.dataDir(this).getAbsolutePath(), true);
-            final java.io.File logs = AppFiles.newRunLogDir();
+            // Read mode: the game file, opened here (the system picker's grant is the app's, not a path
+            // the game could open) and kept open while the game runs; the runtime reads it in place.
+            final android.net.Uri source = AppFiles.gameSource(this);
+            if (source != null) {
+                try {
+                    gameFile = getContentResolver().openFileDescriptor(source, "r");
+                } catch (Exception e) {
+                    Log.e(TAG, "could not open the game file " + source, e);
+                }
+                // Not opened: fd -1, so the game says the file can't be opened rather than that no folder is set.
+                Os.setenv("BASARA_DVD_IMAGE", "/proc/self/fd/" + (gameFile != null ? gameFile.getFd() : -1), true);
+            }
+            // Written by the Vulkan renderer when the GPU stops responding (GpuDrivers.checkGpuLost).
+            Os.setenv("AURORA_GPU_LOST_FILE", GpuDrivers.gpuLostFile(this).getAbsolutePath(), true);
             if (logs != null) Os.setenv("BASARA_LOG_DIR", logs.getAbsolutePath(), true);
             // HD Textures keeps its own cache folder; without Custom Textures it is the only one indexed.
             final java.io.File hdCache = settings.hdTextures() != 0 ? AppFiles.hdCacheDir() : null;
@@ -345,6 +407,9 @@ public final class GameActivity extends SDLActivity
                 }
             }
         }
+        // The save the game has written so far, copied out of app storage (an uninstall deletes it).
+        final android.content.Context app = getApplicationContext();
+        new Thread(() -> SaveData.autoBackup(app), "save-copy").start();
         menuPoll.removeCallbacks(pollMenu);
         if (motion != null) motion.stop();
         if (touch != null) touch.release();
@@ -353,6 +418,8 @@ public final class GameActivity extends SDLActivity
 
     /** Sustained Performance as the CPU boost has it now (set at start by BASARA_CPU_BOOST). */
     private boolean appliedSustained;
+    /** Read mode's game file, open for as long as this process (the game) lives. */
+    private static android.os.ParcelFileDescriptor gameFile;
 
     private boolean sustainedMode() {
         return settings.sustainedPerformance() && AppSettings.sustainedSupported(this);
@@ -397,8 +464,16 @@ public final class GameActivity extends SDLActivity
 
     /** "Restart": the game starts again in a fresh process, so settings read at start apply. */
     private void confirmRestart(Runnable cancelled) {
-        new Sheet(this, Tr.t("Restart"), Tr.t("Restart the game? Progress since your last save is lost. "
-                + "Settings marked * apply."))
+        // What Restart will change: the restart-only settings set since the game started.
+        final StringBuilder text = new StringBuilder(Tr.t("Restart the game? Progress since your last save is lost."));
+        final java.util.Map<String, String> pending = SettingsMenu.pendingRestarts();
+        if (!pending.isEmpty()) {
+            text.append("\n\n").append(Tr.t("Will change:"));
+            for (java.util.Map.Entry<String, String> e : pending.entrySet()) {
+                text.append("\n• ").append(e.getKey()).append(": ").append(e.getValue());
+            }
+        }
+        new Sheet(this, Tr.t("Restart"), text.toString())
                 .action(Tr.t("Restart"), null, true, false, this::restartGame)
                 .action(Tr.t("Cancel"), null, false, false, cancelled)
                 .onCancel(cancelled)
@@ -420,7 +495,7 @@ public final class GameActivity extends SDLActivity
 
     /** Settings > System in the game: the game file, updates and the report tools. */
     private void systemRows(SettingsMenu rows) {
-        final boolean changed = AppFiles.discDifferences(AppFiles.gameDir(this)) != null;
+        final boolean changed = AppFiles.discDifferences(this) != null;
         rows.valueRow(Tr.t("Game File"), changed ? Tr.t("RBSJ08, changed") : "RBSJ08", Tr.t("Change"), () ->
                 new Sheet(this, Tr.t("Choose another game file?"), Tr.t("The game closes without saving; it "
                         + "starts again from the new file."))
@@ -660,6 +735,32 @@ public final class GameActivity extends SDLActivity
         private final android.widget.ScrollView rowsScroll;
         private final SettingsMenu menu;
         private final int[] sections = SettingsMenu.gameSections();
+        private android.widget.TextView note;
+        private android.widget.TextView restartButton;
+        private android.graphics.drawable.Drawable restartLook;
+        private android.content.res.ColorStateList restartText;
+
+        /** The footer note, or the settings waiting for Restart, with Restart lit in amber. */
+        private void showPending() {
+            if (note == null || restartButton == null) return;
+            final java.util.Map<String, String> pending = SettingsMenu.pendingRestarts();
+            if (pending.isEmpty()) {
+                note.setText(Tr.t("Changes are saved as you make them. ⟳ Restart = applies after Restart."));
+                note.setTextColor(Ui.MUTED);
+                note.setBackground(null);
+                note.setPadding(0, 0, 0, 0);
+                restartButton.setBackground(restartLook);
+                restartButton.setTextColor(restartText);
+                return;
+            }
+            note.setText("⟳ " + (pending.size() == 1 ? Tr.t("1 change waiting for Restart")
+                    : pending.size() + Tr.t(" changes waiting for Restart")));
+            note.setTextColor(Ui.PENDING);
+            note.setBackground(Ui.box(GameActivity.this, Ui.PENDING_BG, Ui.PENDING, 0));
+            note.setPadding(dp(6), dp(2), dp(6), dp(2));
+            restartButton.setBackground(Ui.box(GameActivity.this, Ui.PENDING, Ui.PENDING, 0));
+            restartButton.setTextColor(0xFF1B1300);
+        }
 
         PauseMenu(boolean inSession) {
             final GameActivity a = GameActivity.this;
@@ -692,19 +793,23 @@ public final class GameActivity extends SDLActivity
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
             root.addView(Ui.line(a));
 
-            // The footer: what the "*" means, then the actions with Resume last (the bright one).
+            // The footer: what the "⟳ Restart" tag means, or (once one changed) the settings that wait
+            // for Restart in amber; then the actions with Resume last (the bright one).
             final android.widget.LinearLayout footer = new android.widget.LinearLayout(a);
             footer.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            final android.widget.TextView note = Ui.text(a, Tr.t("Changes are saved as you make them. * after Restart."),
-                    11, Ui.MUTED);
+            note = Ui.text(a, "", 11, Ui.MUTED);
             note.setMaxLines(2);
+            note.setEllipsize(android.text.TextUtils.TruncateAt.END);
             footer.addView(note, new android.widget.LinearLayout.LayoutParams(0,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             footer.addView(action(Tr.t("Layout"), false, v -> {
                 close();
                 startLayoutEdit();
             }), actionParams());
-            footer.addView(action(Tr.t("Restart"), false, v -> confirmRestart(null)), actionParams());
+            restartButton = action(Tr.t("Restart"), false, v -> confirmRestart(null));
+            restartLook = restartButton.getBackground();
+            restartText = restartButton.getTextColors();
+            footer.addView(restartButton, actionParams());
             if (inSession) {
                 footer.addView(action(Tr.t("Leave LAN"), false, v -> {
                     close();
@@ -716,6 +821,8 @@ public final class GameActivity extends SDLActivity
             root.addView(footer, Ui.matchWidth(dp(2)));
 
             menu = new SettingsMenu(a, rows, true, GameActivity.this::applyLiveSettings);
+            menu.pendingChanged = this::showPending;
+            showPending();
             menu.systemRows = GameActivity.this::systemRows;
             // A new language: the window is made again around the same tab (the game stays paused).
             menu.languageChanged = () -> tabs.post(() -> {
